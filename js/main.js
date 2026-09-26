@@ -7,6 +7,8 @@ import { useRoute, navigate, parseHash } from './router.js';
 import { useStore, keyStore, profiles, activeProfileId, settings } from './core/store.js';
 import { initFocus } from './ui/focus.js';
 import { newEps, badgeCount, checkNewEpisodes, notifyNewEpisodes } from './lib/newEpisodes.js';
+import { isIOS } from './player/engine.js';
+import { isNative } from './player/native.js';
 
 installSketch();
 initFocus();
@@ -194,11 +196,24 @@ function App() {
   const chromeless = ['/watch', '/welcome'].some(p => route.path.startsWith(p)) || (route.path === '/profiles' && !profile);
   return html`
     ${!chromeless && html`<${TopNav} route=${route} profile=${profile} onMore=${() => setMore(true)} moreOpen=${more} badge=${badge} />`}
+    ${!chromeless && html`<${AppBanner} />`}
     <${PageHost} route=${route} />
     ${!chromeless && html`<${TabBar} route=${route} onMore=${() => setMore(true)} moreOpen=${more} badge=${badge} />`}
     ${!chromeless && html`<${MoreDrawer} open=${more} onClose=${() => setMore(false)} badge=${badge} />`}
     <${Toasts} />
   `;
+}
+
+// iPhone/iPad Safari can't play mkv, so point those users at the app (plays original files). Dismissed for good.
+function AppBanner() {
+  const [gone, setGone] = useState(() => { try { return !!localStorage.getItem('streamora:app-banner-off'); } catch { return false; } });
+  const show = !gone && isIOS && !isNative();
+  useEffect(() => { document.documentElement.classList.toggle('has-appbar', show); }, [show]);
+  if (!show) return null;
+  return html`<div class="appbar" role="status">
+    <span>Better on iPhone & iPad: <a href="https://github.com/KNIGHTABDO/streamora/releases/latest" target="_blank" rel="noopener">install the Streamora app (.ipa)</a></span>
+    <button type="button" aria-label="Dismiss" onClick=${() => { try { localStorage.setItem('streamora:app-banner-off', '1'); } catch {} setGone(true); }}><${Icon} name="close" size=${16} /></button>
+  </div>`;
 }
 
 render(html`<${App} />`, document.getElementById('app'));

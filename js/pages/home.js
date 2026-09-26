@@ -10,8 +10,6 @@ import { navigate } from '../router.js';
 import { playAction, inWatchlist, toggleWatchlist } from '../lib/play.js';
 import { newEps } from '../lib/newEpisodes.js';
 import { rdRecent } from '../lib/rdRecent.js';
-import { isIOS } from '../player/engine.js';
-import { isNative } from '../player/native.js';
 
 loadCSS('css/pages/home.css');
 
@@ -122,20 +120,6 @@ function RecentRow({ p }) {
     render=${it => html`<${PosterCard} key=${it.id} item=${it} wide href=${it.href || hrefTitle(it)} label=${it.episode != null ? `${it.season != null ? `S${it.season} ` : ''}E${it.episode}` : ''} />`} />`;
 }
 
-// ---------------------------------------------------------------- iPhone/iPad app notice (dismissed for good)
-// Safari can't play mkv, so the web version leans on RD's live transcode; the app plays the original file with VLC.
-export const APP_URL = 'https://github.com/KNIGHTABDO/streamora/releases/latest';
-function AppNotice() {
-  const [gone, setGone] = useState(() => !!ls.get('app-notice-dismissed', ''));
-  if (gone || !isIOS || isNative()) return null;
-  return html`<div class="home-premium panel" role="status">
-    <${Icon} name="play" />
-    <p><b>Get the Streamora app for iPhone & iPad.</b> It plays the original files, so there's no buffering on mkv releases.</p>
-    <${Btn} size="sm" variant="primary" href=${APP_URL} target="_blank" rel="noopener">Get it<//>
-    <${IconBtn} icon="close" label="Dismiss" onClick=${() => { ls.set('app-notice-dismissed', '1'); setGone(true); }} />
-  </div>`;
-}
-
 // ---------------------------------------------------------------- premium expiry notice (dismissible per day)
 function PremiumNotice() {
   const key = useStore(keyStore);
@@ -239,7 +223,6 @@ export default function Home() {
         </nav>
       </section>
 
-      <${AppNotice} />
       <${PremiumNotice} />
       <${ContinueRow} items=${cw} />
       ${!kids && html`<${RecentRow} p=${p} />`}

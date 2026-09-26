@@ -115,3 +115,13 @@
   background: var(--a1); color: var(--on-accent); font: 14px/1 var(--font-type); transform: rotate(6deg);
 }
 .tabbar-item .nav-badge { top: 2px; right: calc(50% - 26px); }
+
+/* iPhone/iPad "get the app" strip, just under the fixed top nav */
+.has-appbar { --appbar-h: 38px; }
+.appbar {
+  position: fixed; left: 0; right: 0; top: calc(var(--nav-h) + var(--safe-t)); z-index: 49; height: var(--appbar-h);
+  display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 44px 0 var(--gutter);
+  background: var(--paper-2); border-bottom: 1.5px solid var(--line); font-size: 14px; text-align: center;
+}
+.appbar a { color: var(--a1); font-weight: 600; }
+.appbar button { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: none; border: 0; color: var(--ink-2); padding: 8px; cursor: pointer; }

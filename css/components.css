@@ -188,7 +188,7 @@ h1 .st-underline { bottom: -4px; height: 14px; }
 .kicker::before { content: '✎ '; color: var(--a1); }
 
 /* ---------------------------------------------------------- page */
-.page { padding: calc(var(--nav-h) + var(--safe-t) + 18px) var(--gutter) calc(60px + var(--safe-b)); max-width: 1800px; margin: 0 auto; }
+.page { padding: calc(var(--nav-h) + var(--safe-t) + var(--appbar-h, 0px) + 18px) var(--gutter) calc(60px + var(--safe-b)); max-width: 1800px; margin: 0 auto; }
 .page.bleed { padding-top: 0; max-width: none; }
 .page-head { margin: 10px 0 22px; }
 @media (max-width: 760px) { .page { padding-bottom: calc(var(--tab-h) + var(--safe-b) + 30px); } }
@@ -196,7 +196,7 @@ h1 .st-underline { bottom: -4px; height: 14px; }
 /* ---------------------------------------------------------- hero */
 .hero {
   position: relative; min-height: min(78dvh, 760px); display: flex; align-items: flex-end;
-  margin: 0 calc(var(--gutter) * -1) 10px; padding: calc(var(--nav-h) + 40px) var(--gutter) 46px;
+  margin: 0 calc(var(--gutter) * -1) 10px; padding: calc(var(--nav-h) + var(--appbar-h, 0px) + 40px) var(--gutter) 46px;
   overflow: hidden; isolation: isolate;
 }
 .hero.tall { min-height: min(88dvh, 900px); }
