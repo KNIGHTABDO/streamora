@@ -1,0 +1,7 @@
+name = "streamora"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-09-01"
+
+[[kv_namespaces]]
+binding = "SYNC"
+id = "b24265cc972349c0bb8d334832454226"
