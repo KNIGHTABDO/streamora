@@ -1,7 +1,7 @@
 // #/myrd : your own Real-Debrid library, grouped by title and matched to posters.
 import { html, useState, useEffect, useMemo } from '../../vendor/preact-htm.js';
 import { Page, Grid, Tabs, Chip, Btn, IconBtn, Modal, Empty, ErrorNote, Spinner, Underline, PosterCard, Icon, loadCSS, useAsync, toast, hrefTitle, plural, cx } from '../ui/components.js';
-import { user, allTorrents, downloads, torrentInfo, deleteTorrent, deleteDownload, VIDEO_RE } from '../core/rd.js';
+import { user, trafficToday, allTorrents, downloads, torrentInfo, deleteTorrent, deleteDownload, VIDEO_RE } from '../core/rd.js';
 import { resolveTitle } from '../core/meta.js';
 import { fmtSize } from '../core/sources.js';
 import { parse } from '../core/parse.js';
@@ -50,7 +50,8 @@ function Account({ u }) {
   if (!u) return null;
   const d = daysLeft(u);
   return html`<div class="myrd-account">
-    <div><div class="kicker type">signed in as</div><b class="myrd-user display">${u.username}</b><div class="type faint">${u.points} fidelity points</div></div>
+    <div><div class="kicker type">signed in as</div><b class="myrd-user display">${u.username}</b><div class="type faint">${u.points} fidelity points</div>
+      <div class="type faint">premium until ${new Date(u.expiration).toLocaleDateString()}${u.traffic != null ? ` · ${fmtSize(u.traffic)} used today` : ''}</div></div>
     <div class=${cx('myrd-stamp', d < 7 && 'low')} title=${`Premium until ${new Date(u.expiration).toLocaleDateString()}`}>
       <span class="type">${u.type}</span><b>${d}</b><span class="type">days left</span>
     </div>
@@ -178,7 +179,7 @@ function Hosters({ list, onDeleted }) {
 
 export default function MyRD() {
   const [tab, setTab] = useState('library');
-  const acct = useAsync(() => user(), []);
+  const acct = useAsync(() => Promise.all([user(), trafficToday().catch(() => null)]).then(([u, traffic]) => ({ ...u, traffic })), []);
   const data = useAsync(() => Promise.all([allTorrents(), downloads(1, 100)]).then(([t, d]) => ({ t: t || [], d: d || [] })), []);
   const [gone, setGone] = useState(new Set());
   const t = ((data.data && data.data.t) || []).filter(x => !gone.has(x.id));

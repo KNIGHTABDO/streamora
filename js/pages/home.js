@@ -1,14 +1,15 @@
 // Home: rotating riso hero, greeting, Continue Watching, and the shelves.
 import { html, useState, useEffect, useMemo, useRef } from '../../vendor/preact-htm.js';
 import { Page, Hero, Row, PosterCard, Btn, IconBtn, Icon, Reel, toast, useAsync, loadCSS, cx, hrefTitle, shuffle } from '../ui/components.js';
-import { useStore, progress, hidden, history, watchlist, profiles, activeProfileId } from '../core/store.js';
+import { useStore, progress, hidden, history, watchlist, profiles, activeProfileId, keyStore, ls } from '../core/store.js';
 import { continueWatching, hideFromContinue } from '../core/progress.js';
 import { catalog, meta as getMeta, resolveTitle } from '../core/meta.js';
-import { torrents } from '../core/rd.js';
+import { torrents, user } from '../core/rd.js';
 import { parse } from '../core/parse.js';
 import { navigate } from '../router.js';
 import { playAction, inWatchlist, toggleWatchlist } from '../lib/play.js';
 import { newEps } from '../lib/newEpisodes.js';
+import { rdRecent } from '../lib/rdRecent.js';
 
 loadCSS('css/pages/home.css');
 
@@ -110,6 +111,35 @@ function BecauseRow({ kids }) {
   return html`<${Row} title=${`Because you watched ${q.data.name}`} kicker=${`more ${q.data.genre.toLowerCase()}`} icon="sparkle" items=${q.data.items} />`;
 }
 
+// ---------------------------------------------------------------- played on your other devices (RD downloads)
+function RecentRow({ p }) {
+  const key = useStore(keyStore);
+  const q = useAsync(() => (key.set ? rdRecent(p) : Promise.resolve([])), [key.set, p]);
+  if (q.error || !q.data || !q.data.length) return null;
+  return html`<${Row} title="Played on your other devices" kicker="from your Real-Debrid history" icon="cloud" wide items=${q.data}
+    render=${it => html`<${PosterCard} key=${it.id} item=${it} wide href=${it.href || hrefTitle(it)} label=${it.episode != null ? `${it.season != null ? `S${it.season} ` : ''}E${it.episode}` : ''} />`} />`;
+}
+
+// ---------------------------------------------------------------- premium expiry notice (dismissible per day)
+function PremiumNotice() {
+  const key = useStore(keyStore);
+  const today = new Date().toDateString();
+  const [gone, setGone] = useState(() => ls.get('premium-dismissed', '') === today);
+  const q = useAsync(() => (key.set && !gone ? user() : Promise.resolve(null)), [key.set]);
+  const u = q.data;
+  if (gone || !u || !u.expiration) return null;
+  const days = Math.ceil((new Date(u.expiration) - Date.now()) / 864e5);
+  const expired = u.type !== 'premium' || days <= 0;
+  if (!expired && days > 7) return null;
+  return html`<div class=${cx('home-premium panel', expired && 'expired')} role="status">
+    <${Icon} name="clock" />
+    <p>${expired ? html`<b>Your Real-Debrid premium has expired.</b> Playback won't work until you renew.`
+      : html`<b>Real-Debrid premium ends in ${days} ${days === 1 ? 'day' : 'days'}.</b> Renew to keep streaming.`}</p>
+    <${Btn} size="sm" variant="primary" href="https://real-debrid.com/premium" target="_blank" rel="noopener">Renew<//>
+    <${IconBtn} icon="close" label="Dismiss for today" onClick=${() => { ls.set('premium-dismissed', today); setGone(true); }} />
+  </div>`;
+}
+
 // ---------------------------------------------------------------- your real-debrid (lightweight)
 function RDRow() {
   const q = useAsync(async () => {
@@ -193,7 +223,9 @@ export default function Home() {
         </nav>
       </section>
 
+      <${PremiumNotice} />
       <${ContinueRow} items=${cw} />
+      ${!kids && html`<${RecentRow} p=${p} />`}
       <${NewEpisodesRow} />
       ${kids ? html`
         <${CatRow} title="Cartoons & animation" kicker="for small humans" icon="sparkle" type="movie" id="top" opts=${{ genre: 'Animation' }} href="#/genre/movie/Animation" eager=${eagerFirst} />

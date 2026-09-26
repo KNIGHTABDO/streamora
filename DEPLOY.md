@@ -34,10 +34,11 @@ All of these are off until you set them up. The app works fine without them.
 ### Sync between devices (Cloudflare KV)
 1. Dashboard → Storage & Databases → **KV** → Create namespace, e.g. `streamora-sync`.
 2. Your Pages project → Settings → **Bindings** → Add → KV namespace. Variable name **`SYNC`**, pick the namespace. Redeploy.
-3. In the app: Settings → Connect → Sync, then enter the same passphrase on each device.
+3. Recommended: Settings → **Variables and Secrets** → add a secret **`SYNC_SECRET`** (any long random string). Blobs are then AES-GCM encrypted at rest with a per-user key derived from it. Without it, blobs are stored as plain JSON (still only readable with that account's RD key). Optional `SYNC_SALT` changes how KV keys are derived from RD user ids. Don't change either later, or existing blobs can't be found or read.
+4. That's it: every device with a Real-Debrid key set syncs automatically (Settings → Connect shows the status).
 
-The server only stores one encrypted blob per passphrase (512 KB max) and can't read it. The Real-Debrid key is never synced.
-Check: `https://<your-site>/api/sync/` + 64 zeros returns `{"error":"not_found"}` (and `sync_not_configured` if the binding is missing).
+The server checks each request's RD key against Real-Debrid `/user` and stores one blob per RD account (512 KB max). The RD key itself is never stored or synced.
+Check: `https://<your-site>/api/sync` returns `{"error":"unauthorized"}` (and `sync_not_configured` if the binding is missing).
 
 ### Trakt (scrobbling + history import)
 1. Go to https://trakt.tv/oauth/applications → **New application**. Name: Streamora. Redirect URI: `urn:ietf:wg:oauth:2.0:oob`. Save.

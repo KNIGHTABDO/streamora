@@ -48,6 +48,7 @@ export const torrents = (page = 1, limit = 100) => rd(`torrents?page=${page}&lim
 export const torrentInfo = id => rd(`torrents/info/${id}`);
 export const deleteTorrent = id => rd(`torrents/delete/${id}`, { method: 'DELETE' });
 export const downloads = (page = 1, limit = 100) => rd(`downloads?page=${page}&limit=${limit}`);
+export const trafficToday = async () => { const d = new Date().toISOString().slice(0, 10); const j = await rd(`traffic/details?start=${d}&end=${d}`); return Object.values(j || {}).reduce((n, x) => n + ((x && x.bytes) || 0), 0); };
 export const deleteDownload = id => rd(`downloads/delete/${id}`, { method: 'DELETE' });
 export const unrestrict = link => rd('unrestrict/link', { method: 'POST', body: { link } });
 export const transcode = id => rd(`streaming/transcode/${id}`);

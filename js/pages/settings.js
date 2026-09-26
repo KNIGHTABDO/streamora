@@ -9,7 +9,7 @@ import {
 import { user } from '../core/rd.js';
 import { navigate, setQuery } from '../router.js';
 import { THEMES, ThemeSwatch } from './profiles.js';
-import { syncState, setPassphrase, syncNow, forgetSync } from '../core/sync.js';
+import { syncState, syncNow } from '../core/sync.js';
 import { traktRev, traktAvailable, traktAccount, startConnect, finishConnect, disconnect as traktDisconnect, importHistory, importWatchlist } from '../core/trakt.js';
 import { addons, addAddon, removeAddon } from '../core/addons.js';
 
@@ -231,33 +231,13 @@ const ago = t => { const m = Math.round((Date.now() - t) / 6e4); return m < 1 ? 
 
 function SyncCard() {
   const st = useStore(syncState);
-  const [pass, setPass] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(null);
-  const [confirm, setConfirm] = useState(false);
-  const save = async e => {
-    e.preventDefault(); setBusy(true); setErr(null);
-    try { await setPassphrase(pass); setPass(''); } catch (x) { setErr(x); } finally { setBusy(false); }
-  };
   return html`<div class="panel stack">
     <h3><${Icon} name="cloud" /> Sync between devices</h3>
-    ${st.on ? html`
-      <p class="muted">Encrypted with your passphrase before it leaves this device. Your Real-Debrid key never syncs.</p>
-      <p class="type st-sync-status">${st.busy ? 'syncing…' : st.last ? `last synced ${ago(st.last)}` : 'not synced yet'}</p>
-      ${st.error && html`<${ErrorNote} error=${st.error} compact />`}
-      <div class="cluster">
-        <${Btn} icon="refresh" disabled=${st.busy} onClick=${() => syncNow()}>Sync now<//>
-        <${Btn} variant="ghost" icon="logout" onClick=${() => setConfirm(true)}>Forget on this device<//>
-      </div>
-      <${Modal} open=${confirm} onClose=${() => setConfirm(false)} title="Stop syncing here?">
-        <p>This device keeps its data and stops syncing. Your other devices aren't affected.</p>
-        <div class="cluster"><${Btn} variant="danger" icon="logout" onClick=${() => { forgetSync(); setConfirm(false); }}>Stop syncing<//><${Btn} variant="ghost" onClick=${() => setConfirm(false)}>Keep<//></div>
-      <//>` : html`<form class="stack" onSubmit=${save}>
-      <p class="muted">Pick a passphrase and type the same one on each device. It's never stored or sent anywhere. Forgot it? Just pick a new one.</p>
-      <${Field} label="Passphrase" hint="12+ characters · a few random words work well"><${Input} type="password" value=${pass} onInput=${e => setPass(e.currentTarget.value)} autocomplete="new-password" spellcheck="false" /><//>
-      ${err && html`<${ErrorNote} error=${err} compact />`}
-      <div><${Btn} variant="primary" icon="cloud" type="submit" disabled=${busy || pass.length < 12}>${busy ? 'Deriving keys…' : 'Start syncing'}<//></div>
-    </form>`}
+    <p class="muted">Your watch data is stored on this app's server, tied to your Real-Debrid account.</p>
+    <p class="type st-sync-status">${!st.on ? 'off · turns on by itself when a Real-Debrid key is set and the server supports it'
+      : st.busy ? 'syncing…' : st.last ? `on · last synced ${ago(st.last)}` : 'on · not synced yet'}</p>
+    ${st.error && html`<${ErrorNote} error=${st.error} compact />`}
+    ${st.on && html`<div class="cluster"><${Btn} icon="refresh" disabled=${st.busy} onClick=${() => syncNow()}>Sync now<//></div>`}
   </div>`;
 }
 
@@ -403,7 +383,7 @@ function Privacy() {
         <li><b>This browser only:</b> profiles, watchlists, progress, diary and settings (localStorage).</li>
         <li><b>Your Real-Debrid key:</b> AES-encrypted in localStorage, and the encryption key can't be exported from the browser (IndexedDB).</li>
         <li><b>The relay</b> (/api/rd) forwards requests to Real-Debrid and stores nothing.</li>
-        <li><b>Sync</b> (optional) keeps one blob encrypted with your passphrase; the server can't read it. <b>Trakt</b> (optional, per profile) sees what you watch.</li>
+        <li><b>Sync</b> (automatic when the server supports it) keeps your watch data on this app's server, tied to your Real-Debrid account. Your key is only used to check who you are, never stored. <b>Trakt</b> (optional, per profile) sees what you watch.</li>
         <li><b>Catalog and sources</b> come from Cinemeta, Kitsu and Torrentio. Torrentio receives your key to mark cached sources.</li>
         <li>No analytics, no accounts, no cookies.</li>
       </ul>

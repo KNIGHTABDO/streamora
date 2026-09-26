@@ -1,16 +1,14 @@
-// Passphrase sync: every device that knows the passphrase shares one encrypted blob in /api/sync.
-// passphrase -> PBKDF2 (310k, SHA-256) -> 512 bits: first half hashed = blob id, second half = AES-GCM key.
-// Only the derived id + non-extractable AES key are kept (IndexedDB); the passphrase is never stored.
-// The server only ever sees ciphertext. The RD key, Trakt tokens and this device's active profile never sync.
+// Zero-setup sync: whenever a Real-Debrid key is set, this device shares one blob in /api/sync with every
+// other device signed in to the same RD account. The server checks the key with RD and keys the blob by the RD user id
+// (encrypted at rest when the server has SYNC_SECRET). No KV on the server (501) -> sync quietly stays off.
+// The RD key, Trakt tokens and this device's active profile never sync.
 import {
-  store, ls, exportAll, importAll, profiles, watchlist, progress, history, diary, follows, hidden, settings,
+  store, ls, exportAll, importAll, profiles, watchlist, progress, history, diary, follows, hidden, settings, getRdKey, keyStore,
 } from './store.js';
 import { addons } from './addons.js';
 
 export const syncState = store('sync-status', { on: false, ver: 0, last: 0, error: null, busy: false });
 const PUSH_DELAY = 30e3;
-const SALT = 'streamora-sync-v1';
-const ITER = 310000;
 
 // ------------------------------------------------------------ tiny IndexedDB (also used by trakt.js)
 const DB = 'streamora-integrations';
@@ -30,32 +28,6 @@ function idb(mode, fn) {
 export const idbGet = k => idb('readonly', s => s.get(k)).catch(() => null);
 export const idbSet = (k, v) => idb('readwrite', s => s.put(v, k));
 export const idbDel = k => idb('readwrite', s => s.delete(k)).catch(() => {});
-
-// ------------------------------------------------------------ crypto
-const enc = s => new TextEncoder().encode(s);
-const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
-const b64 = buf => { let s = ''; new Uint8Array(buf).forEach(b => (s += String.fromCharCode(b))); return btoa(s); };
-const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-const through = async (bytes, stream) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
-
-export async function deriveKeys(pass, iterations = ITER) {
-  const km = await crypto.subtle.importKey('raw', enc(pass.normalize('NFKC')), 'PBKDF2', false, ['deriveBits']);
-  const bits = new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: enc(SALT), iterations }, km, 512));
-  const id = hex(await crypto.subtle.digest('SHA-256', bits.slice(0, 32)));
-  const aes = await crypto.subtle.importKey('raw', bits.slice(32), 'AES-GCM', false, ['encrypt', 'decrypt']);
-  return { id, aes };
-}
-export async function seal(aes, obj) {
-  let raw = enc(JSON.stringify(obj)), tag = 'p';
-  if (typeof CompressionStream !== 'undefined') { raw = await through(raw, new CompressionStream('gzip')); tag = 'z'; }
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  return { iv: b64(iv), ct: tag + '.' + b64(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aes, raw)) };
-}
-export async function open(aes, { iv, ct }) {
-  let raw = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(iv) }, aes, unb64(ct.slice(2))));
-  if (ct[0] === 'z') raw = await through(raw, new DecompressionStream('gzip'));
-  return JSON.parse(new TextDecoder().decode(raw));
-}
 
 // ------------------------------------------------------------ merge (pure, tested in tests/integrations.test.mjs)
 export const syncable = k => !(k === 'activeProfile' || k.startsWith('rdkey') || k.startsWith('sync') || k.startsWith('trakt'));
@@ -118,9 +90,8 @@ const baseOf = data => Object.fromEntries(Object.entries(data).map(([k, v]) => [
 const canon = d => JSON.stringify(Object.keys(d).sort().map(k => [k, d[k]]));
 
 // ------------------------------------------------------------ push / pull
-const url = id => `/api/sync/${id}`;
-let cred = null;
-async function getCred() { return cred || (cred = await idbGet('sync')); }
+const URL_ = '/api/sync';
+let off = false; // server has no KV: stop trying until reload
 const localBundle = () => ({ at: ls.get('sync-changed', 0), data: Object.fromEntries(Object.entries(exportAll().data).filter(([k]) => syncable(k))) });
 
 let applying = false;
@@ -128,26 +99,29 @@ function apply(data) {
   applying = true;
   try { importAll({ app: 'streamora', data }, { merge: true }); addons._refresh(); settings._refresh(); } finally { applying = false; }
 }
-async function explain(r) {
-  if (r.status === 501) return new Error("Sync isn't set up on this server yet (see DEPLOY.md).");
+class Off extends Error {}
+function explain(r) {
+  if (r.status === 501) return new Off();
+  if (r.status === 401) return new Error('Real-Debrid did not accept your key, so sync is paused.');
   if (r.status === 413) return new Error('Too much data to sync (512 KB max).');
   return new Error(`Sync server said ${r.status}`);
 }
-async function pull(c) {
-  const r = await fetch(url(c.id), { cache: 'no-store' });
+const auth = key => ({ Authorization: `Bearer ${key}` });
+async function pull(key) {
+  const r = await fetch(URL_, { cache: 'no-store', headers: auth(key) });
   if (r.status === 404) return null;
-  if (!r.ok) throw await explain(r);
-  const blob = await r.json();
-  try { return { ver: blob.ver, ...(await open(c.aes, blob)) }; } catch { throw new Error("Couldn't decrypt the synced data. Wrong passphrase?"); }
+  if (!r.ok) throw explain(r);
+  const j = await r.json();
+  return { ver: j.ver, ...j.data };
 }
-async function put(c, ver, bundle, keepalive = false) {
-  const body = JSON.stringify(await seal(c.aes, bundle));
-  return fetch(url(c.id), { method: 'PUT', headers: { 'Content-Type': 'application/json', 'If-Match': String(ver) }, body, keepalive: keepalive && body.length < 60e3 });
+function put(key, ver, bundle, keepalive = false) {
+  const body = JSON.stringify({ data: bundle });
+  return fetch(URL_, { method: 'PUT', headers: { ...auth(key), 'Content-Type': 'application/json', 'If-Match': String(ver) }, body, keepalive: keepalive && body.length < 60e3 });
 }
 
 async function run() {
-  const c = await getCred();
-  if (!c) return syncState.set({ ...syncState.get(), on: false });
+  const c = !off && await getRdKey();
+  if (!c) return syncState.set({ ...syncState.get(), on: false, busy: false });
   syncState.set({ ...syncState.get(), on: true, busy: true });
   try {
     for (let tries = 0; ; tries++) {
@@ -171,39 +145,26 @@ async function run() {
       return;
     }
   } catch (e) {
+    if (e instanceof Off) { off = true; return syncState.set({ on: false, ver: 0, last: 0, error: null, busy: false }); }
     syncState.set({ ...syncState.get(), busy: false, error: e.message || String(e) });
   }
 }
 let running = null;
 export const syncNow = () => running || (running = run().finally(() => { running = null; }));
 
-// ------------------------------------------------------------ public API + listeners
-export async function setPassphrase(pass) {
-  if (!pass || pass.length < 12) throw new Error('Use at least 12 characters. Longer is better; a few random words work well.');
-  const k = await deriveKeys(pass);
-  await idbSet('sync', k);
-  cred = k;
-  ls.del('sync-base');
-  return syncNow();
-}
-export async function forgetSync() {
-  cred = null; clearTimeout(timer); timer = null;
-  await idbDel('sync');
-  ls.del('sync-base');
-  syncState.set({ on: false, ver: 0, last: 0, error: null, busy: false });
-}
-
+// ------------------------------------------------------------ listeners
+const enabled = () => !off && keyStore.get().set;
 let timer = null;
 function changed() {
   if (applying) return;
   ls.set('sync-changed', Date.now());
-  if (cred && !timer) timer = setTimeout(() => { timer = null; syncNow(); }, PUSH_DELAY);
+  if (enabled() && !timer) timer = setTimeout(() => { timer = null; syncNow(); }, PUSH_DELAY);
 }
 async function flush() {
-  if (!timer || !cred) return;
+  if (!timer || !enabled()) return;
   clearTimeout(timer); timer = null;
   // best effort while the page goes away; a 409 here is fine, the next start pulls + merges + pushes
-  try { await put(cred, syncState.get().ver, localBundle(), true); } catch {}
+  try { const k = await getRdKey(); if (k) await put(k, syncState.get().ver, localBundle(), true); } catch {}
 }
 
 let started = false;
@@ -212,7 +173,9 @@ export async function initSync() {
   started = true;
   for (const s of [profiles, watchlist, progress, history, diary, follows, hidden, settings, addons]) s.subscribe(changed);
   addEventListener('pagehide', flush);
-  document.addEventListener('visibilitychange', () => (document.visibilityState === 'visible' ? cred && syncNow() : flush()));
-  if (await getCred()) syncNow();
+  document.addEventListener('visibilitychange', () => (document.visibilityState === 'visible' ? enabled() && syncNow() : flush()));
+  // key added -> sync (a new account starts from a fresh base); key removed -> off
+  keyStore.subscribe(k => { ls.del('sync-base'); if (k.set) { off = false; syncNow(); } else syncState.set({ on: false, ver: 0, last: 0, error: null, busy: false }); });
+  if (enabled()) syncNow();
   else if (syncState.get().on) syncState.set({ ...syncState.get(), on: false });
 }

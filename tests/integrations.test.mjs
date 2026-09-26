@@ -1,9 +1,9 @@
-// node tests/integrations.test.mjs  — merge logic, crypto round trip, sync function on a Map KV, trakt/addon helpers.
+// node tests/integrations.test.mjs  — merge logic, RD-keyed sync function on a Map KV, trakt/addon helpers.
 import assert from 'node:assert/strict';
-import { merge, deriveKeys, seal, open } from '../js/core/sync.js';
+import { merge } from '../js/core/sync.js';
 import { foldWatched, scrobbleBody } from '../js/core/trakt.js';
 import { normalizeStream, checkManifest, manifestUrl } from '../js/core/addons.js';
-import { onRequest as syncFn } from '../functions/api/sync/[id].js';
+import { onRequest as syncFn } from '../functions/api/sync.js';
 import { allowedUrl } from '../functions/api/addon.js';
 
 // ---- merge
@@ -33,31 +33,42 @@ assert.deepEqual(m2[P + 'watchlist'].map(x => x.id).sort(), ['tt1', 'tt2', 'tt4'
 const h = merge({ at: 1, data: { [P + 'history']: [{ id: 'a', at: 1 }, { id: 'b', at: 3 }] } }, { at: 2, data: { [P + 'history']: [{ id: 'a', at: 1 }, { id: 'c', at: 2 }] } });
 assert.deepEqual(h[P + 'history'].map(x => x.id), ['b', 'c', 'a'], 'history union sorted newest first');
 
-// ---- crypto
-const k1 = await deriveKeys('correct horse battery', 1000), k2 = await deriveKeys('correct horse battery', 1000);
-assert.equal(k1.id, k2.id); assert.match(k1.id, /^[0-9a-f]{64}$/);
-assert.notEqual((await deriveKeys('other passphrase!!', 1000)).id, k1.id);
-const box = await seal(k1.aes, { hi: 'there', n: [1, 2] });
-assert.deepEqual(await open(k2.aes, box), { hi: 'there', n: [1, 2] });
-
-// ---- sync function on a Map-backed KV
-const kv = new Map();
-const env = { SYNC: { get: async k => kv.get(k) ?? null, put: async (k, v) => void kv.set(k, v) } };
-const call = (method, id, { body, ifMatch, origin } = {}) => syncFn({ env, params: { id },
-  request: new Request('https://s.test/api/sync/' + id, { method, body, headers: { ...(ifMatch != null && { 'If-Match': String(ifMatch) }), ...(origin && { Origin: origin }) } }) });
-const id = k1.id, blob = JSON.stringify(box);
-assert.equal((await call('GET', 'nothex')).status, 400);
-assert.equal((await call('GET', id)).status, 404);
-assert.equal((await call('GET', id, { origin: 'https://evil.test' })).status, 403);
-assert.equal((await call('PUT', id, { body: blob })).status, 428);
-let r = await call('PUT', id, { body: blob, ifMatch: 0 });
-assert.equal(r.status, 200); assert.equal((await r.json()).ver, 1);
-r = await call('PUT', id, { body: blob, ifMatch: 0 });
-assert.equal(r.status, 409); assert.equal((await r.json()).ver, 1, '409 returns current');
-assert.equal((await call('PUT', id, { body: blob, ifMatch: 1 })).status, 200);
-assert.equal((await (await call('GET', id)).json()).ver, 2);
-assert.equal((await call('PUT', id, { body: 'x'.repeat(600 * 1024), ifMatch: 2 })).status, 413);
-assert.equal((await syncFn({ env: {}, params: { id }, request: new Request('https://s.test/') })).status, 501);
+// ---- sync function on a Map-backed KV, RD /user mocked
+let rdCalls = 0;
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (u, init) => {
+  if (String(u) !== 'https://api.real-debrid.com/rest/1.0/user') return realFetch(u, init);
+  rdCalls++;
+  const tok = init.headers.Authorization.slice(7);
+  return tok.startsWith('good') ? new Response(JSON.stringify({ id: tok === 'good2' ? 2 : 1 })) : new Response('{"error":"bad_token"}', { status: 401 });
+};
+for (const secret of [undefined, 's3cret']) {
+  const kv = new Map();
+  const env = { SYNC: { get: async k => kv.get(k) ?? null, put: async (k, v) => void kv.set(k, v) }, SYNC_SECRET: secret };
+  const call = (method, { body, ifMatch, origin, tok = 'good1' } = {}) => syncFn({ env,
+    request: new Request('https://s.test/api/sync', { method, body, headers: { ...(tok && { Authorization: 'Bearer ' + tok }), ...(ifMatch != null && { 'If-Match': String(ifMatch) }), ...(origin && { Origin: origin }) } }) });
+  const blob = JSON.stringify({ data: { at: 5, data: { k: 'hello' } } });
+  assert.equal((await call('GET', { tok: null })).status, 401);
+  assert.equal((await call('GET', { tok: 'bad' })).status, 401);
+  assert.equal((await call('GET')).status, 404);
+  assert.equal((await call('GET', { origin: 'https://evil.test' })).status, 403);
+  assert.equal((await call('PUT', { body: blob })).status, 428);
+  let r = await call('PUT', { body: blob, ifMatch: 0 });
+  assert.equal(r.status, 200); assert.equal((await r.json()).ver, 1);
+  r = await call('PUT', { body: blob, ifMatch: 0 });
+  assert.equal(r.status, 409); assert.deepEqual(await r.json(), { ver: 1, data: { at: 5, data: { k: 'hello' } } }, '409 returns current');
+  assert.equal((await call('PUT', { body: blob, ifMatch: 1 })).status, 200);
+  const g = await (await call('GET')).json();
+  assert.equal(g.ver, 2); assert.equal(g.data.data.k, 'hello');
+  assert.equal((await call('GET', { tok: 'good2' })).status, 404, 'other account sees nothing');
+  assert.equal((await call('PUT', { body: 'x'.repeat(600 * 1024), ifMatch: 2 })).status, 413);
+  const [key] = kv.keys();
+  assert.match(key, /^u:[0-9a-f]{64}$/);
+  assert.equal(kv.get(key).includes('hello'), !secret, secret ? 'encrypted at rest' : 'plaintext without secret');
+}
+assert.ok(rdCalls <= 4, 'token -> id cached (' + rdCalls + ' RD calls)');
+globalThis.fetch = realFetch;
+assert.equal((await syncFn({ env: {}, request: new Request('https://s.test/') })).status, 501);
 
 // ---- trakt
 const fw = foldWatched({ tt5: { id: 'tt5', eps: { 'tt5:1:1': { done: true, at: 1 } }, last: 'tt5:1:1', updated: 1 } },

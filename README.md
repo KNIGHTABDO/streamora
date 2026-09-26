@@ -43,7 +43,9 @@ tools/    shot.mjs (screenshots / smoke tests), build.mjs (dist for deploy), ico
 Conventions for contributors are in [CONVENTIONS.md](CONVENTIONS.md). Open `#/kit` (localhost only) to see the living style guide.
 
 ## Integrations (all optional)
-- **Sync:** pick a passphrase in Settings → Connect and use it on each device. Data is encrypted in the browser (PBKDF2 + AES-GCM) and stored as one opaque blob in Cloudflare KV (`functions/api/sync`). Merges item by item, newest wins. The RD key never syncs.
+- **Sync:** automatic, no setup: every device with the same Real-Debrid key shares one blob in Cloudflare KV (`functions/api/sync.js`), keyed by the RD account id and encrypted at rest when `SYNC_SECRET` is set. Merges item by item, newest wins. The RD key never syncs or gets stored.
+- **Played on your other devices:** a Home shelf built from your RD downloads history (last 30 days); works without KV.
+- **Premium expiry notice** on Home when Real-Debrid premium is about to run out.
 - **Trakt:** scrobbles what you watch and imports watched history and your watchlist. Tokens are kept per profile in IndexedDB. `functions/api/trakt` relays only the OAuth calls.
 - **Stremio addons:** add extra source addons by manifest link. Only their JSON is read (torrent streams); `functions/api/addon` relays addons that don't send CORS headers.
 - **New-episode notifications** for shows you follow.

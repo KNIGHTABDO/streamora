@@ -59,3 +59,8 @@
   .home-sticker { flex: none; font-size: 16px; padding: 8px 12px; }
   .home-heart { width: 48px; height: 48px; }
 }
+
+/* premium expiry notice */
+.home-premium { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 18px; padding: 12px 16px; border-left: 4px solid var(--a2); }
+.home-premium.expired { border-left-color: var(--a1); }
+.home-premium p { flex: 1 1 220px; margin: 0; }
