@@ -1,0 +1,10 @@
+{
+  "name": "streamora-player",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Native VLC player for the Streamora app (plays RD's original files: mkv, HEVC, Dolby, DTS)",
+  "capacitor": {
+    "ios": { "src": "ios" }
+  },
+  "peerDependencies": { "@capacitor/core": "^6.0.0" }
+}

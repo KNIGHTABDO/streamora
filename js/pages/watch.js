@@ -9,6 +9,7 @@ import { resumeAt } from '../core/progress.js';
 import { settings, progress } from '../core/store.js';
 import { navigate } from '../router.js';
 import { Player } from '../player/player.js';
+import { NativePlayer, isNative } from '../player/native.js';
 
 loadCSS('css/player.css');
 
@@ -134,7 +135,7 @@ function Session({ params, query }) {
 
   return html`<div class="watch" data-no-paper>
     ${showPlayer
-      ? html`<${Player} meta=${meta} video=${video} stream=${ready.stream} info=${ready.info} start=${startAt} source=${ready.source}
+      ? html`<${isNative() ? NativePlayer : Player} meta=${meta} video=${video} stream=${ready.stream} info=${ready.info} start=${startAt} source=${ready.source}
           onFatal=${onFatal} onPickSource=${() => setPicker(true)} onBack=${onBack} />`
       : html`<${Loading} bg=${bg} meta=${meta} video=${video} step=${step} attempt=${attempt} err=${err}
           onBack=${onBack} onPick=${allCands ? () => setPicker(true) : null}
@@ -231,7 +232,7 @@ function RdWatch({ link, name }) {
   const onBack = () => (history.length > 1 ? history.back() : navigate('#/myrd'));
   const pseudo = st.ready && { id: 'rd:' + st.ready.stream.downloadId, type: 'movie', name: name || st.ready.stream.filename, background: st.ready.info && st.ready.info.backdrop_path };
   return html`<div class="watch" data-no-paper>
-    ${st.ready ? html`<${Player} meta=${pseudo} video=${null} stream=${st.ready.stream} info=${st.ready.info} start=${0} noProgress onFatal=${e => setSt({ err: e })} onBack=${onBack} />`
+    ${st.ready ? html`<${isNative() ? NativePlayer : Player} meta=${pseudo} video=${null} stream=${st.ready.stream} info=${st.ready.info} start=${0} noProgress onFatal=${e => setSt({ err: e })} onBack=${onBack} />`
       : html`<${Loading} step="Unlocking your file…" attempt=${0} err=${st.err} onBack=${onBack} onRetry=${() => location.reload()} />`}
   </div>`;
 }

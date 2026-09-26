@@ -1,0 +1,11 @@
+{
+  "name": "streamora-app",
+  "private": true,
+  "description": "iOS app shell for Streamora: loads the live site and adds a native VLC player (see README)",
+  "dependencies": {
+    "@capacitor/cli": "^6.2.0",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/ios": "^6.2.0",
+    "streamora-player": "file:./plugin"
+  }
+}

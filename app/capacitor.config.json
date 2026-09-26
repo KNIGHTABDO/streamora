@@ -1,0 +1,15 @@
+{
+  "appId": "app.streamora.player",
+  "appName": "Streamora",
+  "webDir": "www",
+  "server": {
+    "url": "https://streamora-5w5.pages.dev",
+    "cleartext": false
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#141210",
+    "allowsLinkPreview": false,
+    "limitsNavigationsToAppBoundDomains": false
+  }
+}

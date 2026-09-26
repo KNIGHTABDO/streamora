@@ -99,5 +99,6 @@ export const isPhone = () => matchMedia('(max-width: 700px)').matches || /iPhone
 
 export const fmtSize = b => !b ? '' : b >= 1e9 ? `${(b / 1e9).toFixed(b >= 1e10 ? 0 : 1)} GB` : `${Math.round(b / 1e6)} MB`;
 
-// true where the browser can't play mkv itself (Safari/iOS), so mp4 releases skip the transcoder
-export const noMkv = () => typeof document !== 'undefined' && !document.createElement('video').canPlayType('video/x-matroska');
+// true where the browser can't play mkv itself (Safari/iOS), so mp4 releases skip the transcoder (the app's VLC player plays mkv)
+export const noMkv = () => typeof document !== 'undefined' && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())
+  && !document.createElement('video').canPlayType('video/x-matroska');

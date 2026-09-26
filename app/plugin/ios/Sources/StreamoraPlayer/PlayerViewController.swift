@@ -1,0 +1,393 @@
+import UIKit
+import AVFoundation
+import MobileVLCKit
+
+struct PlayerOptions {
+    let url: URL
+    let title: String
+    let subtitle: String
+    let start: Double
+    let hasNext: Bool
+}
+
+// Full-screen VLC player. VLC reads RD's original file over HTTP range requests and decodes it on the device
+// (VideoToolbox for H.264/HEVC), so nothing waits on RD's live transcode.
+final class PlayerViewController: UIViewController {
+    private let opts: PlayerOptions
+    private let send: (String, [String: Any]) -> Void
+    private let player = VLCMediaPlayer()
+
+    private let videoView = UIView()
+    private let overlay = UIView()
+    private let spinner = UIActivityIndicatorView(style: .large)
+    private let titleLabel = UILabel()
+    private let subLabel = UILabel()
+    private let playBtn = UIButton(type: .system)
+    private let slider = UISlider()
+    private let curLabel = UILabel()
+    private let durLabel = UILabel()
+    private let audioBtn = UIButton(type: .system)
+    private let subsBtn = UIButton(type: .system)
+    private let fillBtn = UIButton(type: .system)
+
+    private var timer: Timer?
+    private var hideWork: DispatchWorkItem?
+    private var scrubbing = false
+    private var finished = false
+    private var fill = false
+    private var everPlayed = false
+    private var lastTime: Int32 = -1
+    private var sameTicks = 0
+    private var lastReport = Date.distantPast
+    private var knownDuration: Double = 0
+
+    init(options: PlayerOptions, send: @escaping (String, [String: Any]) -> Void) {
+        self.opts = options
+        self.send = send
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override var prefersStatusBarHidden: Bool { true }
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        UIDevice.current.userInterfaceIdiom == .pad ? .all : .allButUpsideDown
+    }
+
+    // MARK: - lifecycle
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        view.clipsToBounds = true
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+
+        videoView.frame = view.bounds
+        videoView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        videoView.backgroundColor = .black
+        videoView.isUserInteractionEnabled = false
+        view.addSubview(videoView)
+
+        spinner.color = .white
+        spinner.hidesWhenStopped = true
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(spinner)
+        NSLayoutConstraint.activate([
+            spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: view.centerYAnchor)
+        ])
+        spinner.startAnimating()
+
+        buildOverlay()
+        buildGestures()
+
+        let media = VLCMedia(url: opts.url)
+        // a big network cache is what keeps playback smooth on a shaky connection
+        media.addOption(":network-caching=10000")
+        media.addOption(":http-reconnect")
+        if opts.start > 1 { media.addOption(":start-time=\(Int(opts.start))") }
+        player.drawable = videoView
+        player.media = media
+        player.play()
+
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.tick() }
+        UIApplication.shared.isIdleTimerDisabled = true
+        NotificationCenter.default.addObserver(self, selector: #selector(appBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        scheduleHide()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        applyFill()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        timer?.invalidate()
+    }
+
+    // MARK: - state
+
+    private var position: Double { Double(player.time.intValue) / 1000 }
+    private var duration: Double {
+        let d = Double(player.media?.length.intValue ?? 0) / 1000
+        if d > 0 { knownDuration = d }
+        return knownDuration
+    }
+
+    private func tick() {
+        guard !finished else { return }
+        let t = player.time.intValue
+        let playing = player.isPlaying
+        if t != lastTime {
+            lastTime = t; sameTicks = 0
+            if t > 0 && !everPlayed { everPlayed = true; scheduleHide() }
+        } else { sameTicks += 1 }
+        // spinner only when we mean to play and the picture hasn't moved for a second
+        let stuck = player.state != .paused && sameTicks >= 2
+        if stuck || !everPlayed { spinner.startAnimating() } else { spinner.stopAnimating() }
+
+        let d = duration
+        if !scrubbing && d > 0 { slider.value = Float(position / d) }
+        if !scrubbing { curLabel.text = fmt(position) }
+        durLabel.text = d > 0 ? fmt(d) : "--:--"
+        playBtn.setImage(UIImage(systemName: playing ? "pause.fill" : "play.fill", withConfiguration: big), for: .normal)
+
+        switch player.state {
+        case .ended:
+            finish(ended: true)
+            return
+        case .error:
+            finish(error: everPlayed ? "The stream stopped." : "This file couldn't be played.")
+            return
+        case .stopped where everPlayed && d > 0 && d - position < 5:
+            finish(ended: true)
+            return
+        default: break
+        }
+        if Date().timeIntervalSince(lastReport) >= 5 { report() }
+    }
+
+    private func report() {
+        lastReport = Date()
+        guard everPlayed else { return }
+        send("progress", ["position": position, "duration": duration, "paused": !player.isPlaying])
+    }
+
+    @objc private func appBackground() { report() }
+
+    func finish(ended: Bool = false, error: String? = nil, notify: Bool = true) {
+        guard !finished else { return }
+        finished = true
+        let d = duration
+        let t = ended ? d : (everPlayed ? position : opts.start)
+        timer?.invalidate()
+        hideWork?.cancel()
+        player.stop()
+        UIApplication.shared.isIdleTimerDisabled = false
+        if notify {
+            var data: [String: Any] = ["position": t, "duration": d, "ended": ended]
+            if let e = error { data["error"] = e }
+            send("closed", data)
+        }
+        dismiss(animated: true)
+    }
+
+    // MARK: - UI
+
+    private let big = UIImage.SymbolConfiguration(pointSize: 34, weight: .semibold)
+    private let small = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
+
+    @discardableResult
+    private func button(_ b: UIButton = UIButton(type: .system), _ symbol: String, _ cfg: UIImage.SymbolConfiguration, _ action: Selector, _ label: String) -> UIButton {
+        b.setImage(UIImage(systemName: symbol, withConfiguration: cfg), for: .normal)
+        b.tintColor = .white
+        b.accessibilityLabel = label
+        b.addTarget(self, action: action, for: .touchUpInside)
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        b.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        return b
+    }
+
+    private func buildOverlay() {
+        overlay.frame = view.bounds
+        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        overlay.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        view.addSubview(overlay)
+        let g = overlay.safeAreaLayoutGuide
+
+        // top: close + titles
+        let close = button(UIButton(type: .system), "xmark", small, #selector(tapClose), "Close")
+        titleLabel.text = opts.title
+        titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+        titleLabel.textColor = .white
+        subLabel.text = opts.subtitle
+        subLabel.font = .systemFont(ofSize: 14)
+        subLabel.textColor = UIColor.white.withAlphaComponent(0.75)
+        let titles = UIStackView(arrangedSubviews: [titleLabel, subLabel])
+        titles.axis = .vertical
+        let top = UIStackView(arrangedSubviews: [close, titles])
+        top.spacing = 8
+        top.alignment = .center
+        top.translatesAutoresizingMaskIntoConstraints = false
+        overlay.addSubview(top)
+
+        // center: -10, play, +10
+        let back = button(UIButton(type: .system), "gobackward.10", big, #selector(tapBack), "Back 10 seconds")
+        button(playBtn, "pause.fill", big, #selector(tapPlay), "Play or pause")
+        let fwd = button(UIButton(type: .system), "goforward.10", big, #selector(tapFwd), "Forward 10 seconds")
+        let mid = UIStackView(arrangedSubviews: [back, playBtn, fwd])
+        mid.spacing = 48
+        mid.alignment = .center
+        mid.translatesAutoresizingMaskIntoConstraints = false
+        overlay.addSubview(mid)
+
+        // bottom: time, slider, time, then track buttons
+        for l in [curLabel, durLabel] {
+            l.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+            l.textColor = .white
+            l.text = "--:--"
+            l.setContentHuggingPriority(.required, for: .horizontal)
+        }
+        slider.minimumTrackTintColor = .white
+        slider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.3)
+        slider.addTarget(self, action: #selector(scrubStart), for: .touchDown)
+        slider.addTarget(self, action: #selector(scrubMove), for: .valueChanged)
+        slider.addTarget(self, action: #selector(scrubEnd), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        let bar = UIStackView(arrangedSubviews: [curLabel, slider, durLabel])
+        bar.spacing = 10
+        bar.alignment = .center
+
+        button(audioBtn, "speaker.wave.2", small, #selector(tapAudio), "Audio track")
+        button(subsBtn, "captions.bubble", small, #selector(tapSubs), "Subtitles")
+        button(fillBtn, "arrow.up.left.and.arrow.down.right", small, #selector(tapFill), "Fill screen")
+        var tools: [UIView] = [audioBtn, subsBtn, fillBtn, UIView()]
+        if opts.hasNext {
+            let next = UIButton(type: .system)
+            next.setTitle("Next episode", for: .normal)
+            next.setImage(UIImage(systemName: "forward.end.fill", withConfiguration: small), for: .normal)
+            next.tintColor = .white
+            next.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+            next.addTarget(self, action: #selector(tapNext), for: .touchUpInside)
+            tools.append(next)
+        }
+        let toolRow = UIStackView(arrangedSubviews: tools)
+        toolRow.spacing = 16
+        toolRow.alignment = .center
+        let bottom = UIStackView(arrangedSubviews: [bar, toolRow])
+        bottom.axis = .vertical
+        bottom.spacing = 6
+        bottom.translatesAutoresizingMaskIntoConstraints = false
+        overlay.addSubview(bottom)
+
+        NSLayoutConstraint.activate([
+            top.leadingAnchor.constraint(equalTo: g.leadingAnchor, constant: 12),
+            top.trailingAnchor.constraint(lessThanOrEqualTo: g.trailingAnchor, constant: -12),
+            top.topAnchor.constraint(equalTo: g.topAnchor, constant: 8),
+            mid.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+            mid.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
+            bottom.leadingAnchor.constraint(equalTo: g.leadingAnchor, constant: 16),
+            bottom.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -16),
+            bottom.bottomAnchor.constraint(equalTo: g.bottomAnchor, constant: -8)
+        ])
+    }
+
+    private func buildGestures() {
+        let dbl = UITapGestureRecognizer(target: self, action: #selector(doubleTap(_:)))
+        dbl.numberOfTapsRequired = 2
+        let single = UITapGestureRecognizer(target: self, action: #selector(toggleOverlay))
+        single.require(toFail: dbl)
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
+        for r in [dbl, single, pinch] as [UIGestureRecognizer] {
+            r.cancelsTouchesInView = false
+            view.addGestureRecognizer(r)
+        }
+    }
+
+    private func showOverlay(_ on: Bool) {
+        UIView.animate(withDuration: 0.2) { self.overlay.alpha = on ? 1 : 0 }
+        if on { scheduleHide() }
+    }
+
+    private func scheduleHide() {
+        hideWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self = self, self.player.isPlaying, !self.scrubbing, self.presentedViewController == nil else { return }
+            self.showOverlay(false)
+        }
+        hideWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: w)
+    }
+
+    @objc private func toggleOverlay(_ r: UITapGestureRecognizer) {
+        // taps on the controls themselves shouldn't hide them
+        if overlay.alpha > 0, let hit = overlay.hitTest(r.location(in: overlay), with: nil), hit is UIControl { return }
+        showOverlay(overlay.alpha < 0.5)
+    }
+
+    @objc private func doubleTap(_ r: UITapGestureRecognizer) {
+        if overlay.alpha > 0, overlay.hitTest(r.location(in: overlay), with: nil) is UIControl { return }
+        if r.location(in: view).x < view.bounds.width / 2 { player.jumpBackward(10) } else { player.jumpForward(10) }
+    }
+
+    @objc private func pinched(_ r: UIPinchGestureRecognizer) {
+        guard r.state == .ended else { return }
+        if (r.scale > 1) != fill { tapFill() }
+    }
+
+    // MARK: - actions
+
+    @objc private func tapClose() { finish() }
+    @objc private func tapPlay() {
+        if player.isPlaying { player.pause() } else { player.play() }
+        scheduleHide()
+    }
+    @objc private func tapBack() { player.jumpBackward(10); scheduleHide() }
+    @objc private func tapFwd() { player.jumpForward(10); scheduleHide() }
+    @objc private func tapNext() {
+        report()
+        send("next", [:])
+        finish(notify: false)
+    }
+
+    @objc private func scrubStart() { scrubbing = true; hideWork?.cancel() }
+    @objc private func scrubMove() { curLabel.text = fmt(Double(slider.value) * duration) }
+    @objc private func scrubEnd() {
+        if duration > 0 { player.time = VLCTime(int: Int32(Double(slider.value) * duration * 1000)) }
+        scrubbing = false
+        sameTicks = 0
+        scheduleHide()
+    }
+
+    @objc private func tapFill() {
+        fill.toggle()
+        fillBtn.setImage(UIImage(systemName: fill ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", withConfiguration: small), for: .normal)
+        UIView.animate(withDuration: 0.25) { self.applyFill() }
+    }
+
+    // zoom the fitted picture until it covers the screen (crops the edges)
+    private func applyFill() {
+        let vs = player.videoSize
+        let W = view.bounds.width, H = view.bounds.height
+        guard fill, vs.width > 0, vs.height > 0, W > 0, H > 0 else { videoView.transform = .identity; return }
+        let fit = min(W / vs.width, H / vs.height)
+        let k = max(W / (vs.width * fit), H / (vs.height * fit))
+        videoView.transform = CGAffineTransform(scaleX: k, y: k)
+    }
+
+    @objc private func tapAudio() {
+        let names = (player.audioTrackNames as? [String]) ?? []
+        let ids = (player.audioTrackIndexes as? [NSNumber]) ?? []
+        menu("Audio", names, ids, player.currentAudioTrackIndex, audioBtn) { [weak self] i in self?.player.currentAudioTrackIndex = i }
+    }
+
+    @objc private func tapSubs() {
+        let names = (player.videoSubTitlesNames as? [String]) ?? []
+        let ids = (player.videoSubTitlesIndexes as? [NSNumber]) ?? []
+        menu("Subtitles", names, ids, player.currentVideoSubTitleIndex, subsBtn) { [weak self] i in self?.player.currentVideoSubTitleIndex = i }
+    }
+
+    private func menu(_ title: String, _ names: [String], _ ids: [NSNumber], _ current: Int32, _ from: UIView, _ pick: @escaping (Int32) -> Void) {
+        hideWork?.cancel()
+        let sheet = UIAlertController(title: title, message: names.isEmpty ? "No tracks in this file" : nil, preferredStyle: .actionSheet)
+        for (name, id) in zip(names, ids) {
+            let on = id.int32Value == current
+            sheet.addAction(UIAlertAction(title: (on ? "✓ " : "") + name, style: .default) { [weak self] _ in pick(id.int32Value); self?.scheduleHide() })
+        }
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in self?.scheduleHide() })
+        if let pop = sheet.popoverPresentationController {
+            pop.sourceView = from
+            pop.sourceRect = from.bounds
+        }
+        present(sheet, animated: true)
+    }
+
+    private func fmt(_ s: Double) -> String {
+        guard s.isFinite, s >= 0 else { return "--:--" }
+        let t = Int(s), h = t / 3600, m = (t % 3600) / 60, sec = t % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
+    }
+}

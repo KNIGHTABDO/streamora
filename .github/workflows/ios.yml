@@ -1,0 +1,75 @@
+# Builds an unsigned Streamora.ipa (sign it with Sideloadly / AltStore). Runs on pushes that touch app/,
+# by hand (Actions → iOS app → Run workflow), and on tags like v1.0.0, which also publish a GitHub release.
+name: iOS app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['app/**', '.github/workflows/ios.yml']
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Capacitor
+        working-directory: app
+        run: npm install --no-audit --no-fund
+
+      - name: Create the iOS project
+        working-directory: app
+        run: |
+          npx cap add ios
+          # MobileVLCKit needs iOS 14+
+          sed -i '' "s/platform :ios, '13.0'/platform :ios, '14.0'/" ios/App/Podfile
+          PLIST=ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Streamora" $PLIST
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" $PLIST
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" $PLIST
+          /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" $PLIST
+          /usr/libexec/PlistBuddy -c "Add :UIRequiresFullScreen bool false" $PLIST
+          # app icon: the store-size slot is the only one in Capacitor's asset catalog
+          sips -z 1024 1024 ../art/icon-maskable-512.png --out ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png
+          npx cap sync ios
+
+      - name: Build
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF_TYPE" == "tag" ]] || VERSION="1.0.${GITHUB_RUN_NUMBER}"
+          xcodebuild -workspace app/ios/App/App.xcworkspace -scheme App -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -archivePath build/App.xcarchive \
+            IPHONEOS_DEPLOYMENT_TARGET=14.0 MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            archive | tail -40
+          test -d build/App.xcarchive/Products/Applications/App.app
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/App.xcarchive/Products/Applications/App.app Payload/
+          zip -qry Streamora.ipa Payload
+          ls -lh Streamora.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Streamora-ipa
+          path: Streamora.ipa
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" Streamora.ipa --title "Streamora $GITHUB_REF_NAME" \
+            --notes "Unsigned iPhone/iPad app. Install it with Sideloadly or AltStore (see the README's \"iPhone & iPad app\" section)."

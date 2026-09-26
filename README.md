@@ -51,3 +51,13 @@ Conventions for contributors are in [CONVENTIONS.md](CONVENTIONS.md). Open `#/ki
 - **New-episode notifications** for shows you follow.
 
 Setup for the server side (KV binding, Trakt app) is in [DEPLOY.md](DEPLOY.md#optional-extras). Tests: `node tests/integrations.test.mjs`.
+
+## iPhone & iPad app
+Safari can't play mkv files, so on the web Streamora has to use Real-Debrid's live transcode, which can fall behind and buffer. The app version plays **the original file** with a built-in VLC player (mkv, HEVC, Dolby, DTS, embedded subtitles), the same way Infuse does. Everything else (profiles, sync, Trakt) is the same Streamora.
+
+**Install:**
+1. Download `Streamora.ipa` from the [latest release](https://github.com/KNIGHTABDO/streamora/releases/latest).
+2. Install it with [Sideloadly](https://sideloadly.io) (or AltStore) using your Apple ID. With a free Apple ID the app has to be re-signed every 7 days.
+3. On the device: Settings → General → VPN & Device Management → trust your Apple ID.
+
+The app loads the live site, so web updates reach it automatically; only player changes need a new .ipa. It's built by GitHub Actions (`.github/workflows/ios.yml`) from `app/`: a Capacitor shell plus the `streamora-player` plugin (`app/plugin`, Swift + MobileVLCKit). Push a tag like `v1.0.0` to publish a release.
