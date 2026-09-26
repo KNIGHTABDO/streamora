@@ -169,18 +169,18 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       posAt = now;
       try { ms.setPositionState({ duration: dur, position: Math.min(dur, Math.max(0, realNow(v))), playbackRate: v.playbackRate || 1 }); } catch {}
     };
-    // stall watchdog: stuck buffering for 25s while meant to be playing → let the parent try another source
-    // RD's single-quality playlist has no ABR: if the transcode can't keep up (3 mid-play stalls in 2 min, or one
-    // 25s stall) step down a quality before giving up on the source.
-    let stallT, stalls = [];
-    const down = () => { const d = downRef.current; if (!d) return false; d(); stalls = []; return true; };
+    // stall watchdog: only a real freeze (still buffering, playhead not moving for 25s) counts. 'stalled' just means
+    // the download paused (often because the buffer is full), so it's ignored. Step down a quality once before
+    // giving up on the source.
+    let stallT;
     const stall = () => {
       clearTimeout(stallT);
-      if (startedRef.current && !v.seeking && !v.paused) {
-        const now = Date.now(); stalls = stalls.filter(x => now - x < 120000).concat(now);
-        if (stalls.length >= 3 && down()) return;
-      }
-      stallT = setTimeout(() => { if (!v.paused && v.readyState < 3 && !down()) fatal(new Error('The stream stalled.'), realNow(v)); }, 25000);
+      const at = v.currentTime;
+      stallT = setTimeout(() => {
+        if (v.paused || v.seeking || v.readyState >= 3 || v.currentTime !== at) return;
+        const d = downRef.current;
+        if (d) d(); else fatal(new Error('The stream stalled.'), realNow(v));
+      }, 25000);
     };
     const unstall = () => clearTimeout(stallT);
     const ev = {
@@ -188,7 +188,6 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       play: () => { setBlocked(false); setSt(x => ({ ...x, playing: true, ended: false })); poke(); ms && (ms.playbackState = 'playing'); emit('start'); },
       pause: () => { setSt(x => ({ ...x, playing: false })); setUi(true); save(); unstall(); ms && (ms.playbackState = 'paused'); if (!v.ended) emit('pause'); },
       waiting: () => { setSt(x => ({ ...x, waiting: true })); stall(); },
-      stalled: stall,
       playing: () => { setStarted(true); setSt(x => ({ ...x, waiting: false })); unstall(); },
       canplay: () => { setSt(x => ({ ...x, waiting: false })); unstall(); },
       seeked: up,
