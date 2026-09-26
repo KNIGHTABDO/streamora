@@ -3,7 +3,7 @@
 import { html, useState, useEffect, useRef } from '../../vendor/preact-htm.js';
 import { Btn, Icon, Reel, Img, Modal, Chip, cx, fmtTime, loadCSS } from '../ui/components.js';
 import { meta as getMeta, backdropOf } from '../core/meta.js';
-import { streams, rankStreams, fmtSize, isPhone } from '../core/sources.js';
+import { streams, rankStreams, fmtSize, isPhone, noMkv } from '../core/sources.js';
 import { resolveStream, resolveLink, mediaInfos, torrents } from '../core/rd.js';
 import { resumeAt } from '../core/progress.js';
 import { settings, progress } from '../core/store.js';
@@ -67,7 +67,7 @@ function Session({ params, query }) {
     const id = video ? video.id : meta.id;
     const binge = (progress.get()[meta.id] || {}).source?.binge;
     // transcodes top out at 1080p unless "original" is chosen, so 4K files only cost start-up time
-    const prefs = { cachedOnly: s.cachedOnly !== false, preferSmall: isPhone(), preferBinge: binge, audioLang: s.audioLang, maxQuality: s.quality === 'original' ? '2160p' : '1080p' };
+    const prefs = { cachedOnly: s.cachedOnly !== false, preferSmall: isPhone(), preferMp4: noMkv(), preferBinge: binge, audioLang: s.audioLang, maxQuality: s.quality === 'original' ? '2160p' : '1080p' };
     Promise.all([streams(meta.type, id), torrents(1, 100).catch(() => [])]).then(([list, mine]) => {
       // sources already in the account start instantly (no new torrent added), so they go first
       const have = new Set((mine || []).filter(t => t.status === 'downloaded').map(t => t.hash.toLowerCase()));

@@ -4,7 +4,7 @@ import { Page, Hero, Row, Btn, IconBtn, Chip, Tabs, Stars, Spinner, ErrorNote, E
 import { hash, tiltOf } from '../ui/sketch.js';
 import { useStore, progress, watchlist, follows, diary, settings } from '../core/store.js';
 import { meta as getMeta, castPhotos, catalog, seasonsOf, isReleased } from '../core/meta.js';
-import { streams, rankStreams, fmtSize, isPhone } from '../core/sources.js';
+import { streams, rankStreams, fmtSize, isPhone, noMkv } from '../core/sources.js';
 import { epState, markWatched, resumeAt } from '../core/progress.js';
 import { navigate } from '../router.js';
 import { watchHref, nextUp, playAction, inWatchlist, toggleWatchlist } from '../lib/play.js';
@@ -23,7 +23,7 @@ function SourcesModal({ meta, video, onClose }) {
   const res = useAsync(() => streams(type, id), [type, id]);
   const list = useMemo(() => {
     if (!res.data) return [];
-    return rankStreams(res.data, { cachedOnly, preferSmall: isPhone(), audioLang: s.audioLang }).filter(x => q === 'all' || x.quality === q);
+    return rankStreams(res.data, { cachedOnly, preferSmall: isPhone(), preferMp4: noMkv(), audioLang: s.audioLang }).filter(x => q === 'all' || x.quality === q);
   }, [res.data, cachedOnly, q]);
   const qualities = useMemo(() => ['all', ...new Set((res.data || []).map(x => x.quality).filter(x => x !== '?'))].slice(0, 6), [res.data]);
   const pick = src => navigate(watchHref(meta, video, resumeAt(meta.id, video && video.id), src));
