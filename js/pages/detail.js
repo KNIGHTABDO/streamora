@@ -23,7 +23,7 @@ function SourcesModal({ meta, video, onClose }) {
   const res = useAsync(() => streams(type, id), [type, id]);
   const list = useMemo(() => {
     if (!res.data) return [];
-    return rankStreams(res.data, { cachedOnly, preferSmall: isPhone() }).filter(x => q === 'all' || x.quality === q);
+    return rankStreams(res.data, { cachedOnly, preferSmall: isPhone(), audioLang: s.audioLang }).filter(x => q === 'all' || x.quality === q);
   }, [res.data, cachedOnly, q]);
   const qualities = useMemo(() => ['all', ...new Set((res.data || []).map(x => x.quality).filter(x => x !== '?'))].slice(0, 6), [res.data]);
   const pick = src => navigate(watchHref(meta, video, resumeAt(meta.id, video && video.id), src));
@@ -138,6 +138,7 @@ export default function Detail({ params }) {
   const q = useAsync(() => getMeta(type, id), [type, id]);
   const wl = useStore(watchlist);
   const fl = useStore(follows);
+  const s = useStore(settings);
   useStore(progress);
   const [modal, setModal] = useState(null); // {kind:'src', video} | {kind:'rate'} | {kind:'trailer', id}
 
@@ -159,6 +160,7 @@ export default function Detail({ params }) {
   const loved = inWatchlist(wl, m.id);
   const followed = fl.some(f => f.id === m.id);
   const trailer = (m.trailers || []).find(t => t.source) || null;
+  const chooseSource = () => setModal({ kind: 'src', video: series ? nextUp(m) : null });
 
   const follow = () => {
     follows.update(l => followed ? l.filter(f => f.id !== m.id) : [{ id: m.id, type: m.type, name: m.name, poster: m.poster }, ...l]);
@@ -175,8 +177,10 @@ export default function Detail({ params }) {
 
   return html`<${Page} bleed class="detail">
     <${Hero} item=${m} tall kicker=${m.anime ? 'anime' : series ? 'series' : 'movie'} actions=${html`
-      <${Btn} variant="primary" size="lg" icon="play" href=${play.href}>${play.label}<//>
-      <${Btn} size="lg" icon="list" onClick=${() => setModal({ kind: 'src', video: series ? nextUp(m) : null })}>Choose source<//>
+      ${s.autoPlay !== false
+        ? html`<${Btn} variant="primary" size="lg" icon="play" href=${play.href}>${play.label}<//>`
+        : html`<${Btn} variant="primary" size="lg" icon="play" onClick=${chooseSource}>${play.label}<//>`}
+      <${Btn} size="lg" variant=${s.autoPlay !== false ? undefined : 'ghost'} icon="list" onClick=${chooseSource}>Choose source<//>
       <${IconBtn} class="det-round love" icon=${loved ? 'heartFill' : 'heart'} label=${loved ? 'Remove from watchlist' : 'Add to watchlist'}
         onClick=${() => toast(toggleWatchlist(m) ? 'Pinned to your watchlist' : 'Removed from watchlist', { icon: 'heart' })} />
       ${series && html`<${IconBtn} class=${cx('det-round', followed && 'on')} icon="bell" label=${followed ? 'Unfollow' : 'Follow new episodes'} onClick=${follow} />`}

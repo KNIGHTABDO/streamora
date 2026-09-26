@@ -5,7 +5,8 @@
 //               last: videoId|null,                       // last episode touched (null for movies)
 //               eps: { [videoId|'_']: { t, dur, done, at, season, episode, title } },
 //               next: { id, season, episode, title } | null,   // up next once `last` is done
-//               source: { infoHash, fileIdx, binge } }    // reuse the same release for the next episode
+//               source: { infoHash, fileIdx, binge, filename },  // reuse the same release for the next episode
+//               prefs: { audioLang, subLang|'off', rate } }     // per-show player choices, applied on the next episode
 // }
 import { progress, history, hidden } from './store.js';
 import { nextVideo } from './meta.js';
@@ -13,15 +14,18 @@ import { nextVideo } from './meta.js';
 export const DONE_AT = 0.92;
 const keyOf = video => (video ? video.id : '_');
 
-/** Called by the player every ~5s, on pause and on close. meta = full meta (with videos for series). */
-export function saveProgress(meta, video, t, dur, source) {
+/** Called by the player every ~5s, on pause and on close. meta = full meta (with videos for series).
+ *  done is sticky (seeking back in a finished episode keeps it watched) unless opts.restart. opts.prefs merges into the per-show prefs. */
+export function saveProgress(meta, video, t, dur, source, opts = {}) {
   if (!meta || !dur || !isFinite(dur) || t < 5) return;
-  const done = t / dur >= DONE_AT;
+  let done = t / dur >= DONE_AT;
   let justFinished = false;
   progress.update(p => {
     const cur = p[meta.id] || { eps: {} };
     const k = keyOf(video);
-    justFinished = done && !(cur.eps[k] && cur.eps[k].done);
+    const prev = cur.eps[k];
+    if (prev && prev.done && !opts.restart) done = true;
+    justFinished = done && !(prev && prev.done);
     cur.eps[k] = { t: Math.floor(t), dur: Math.floor(dur), done, at: Date.now(), season: video && video.season, episode: video && video.episode, title: video && (video.name || video.title) };
     const nv = video ? nextVideo(meta, video.id) : null;
     Object.assign(cur, {
@@ -29,6 +33,7 @@ export function saveProgress(meta, video, t, dur, source) {
       updated: Date.now(), last: video ? video.id : null,
       next: nv ? { id: nv.id, season: nv.season, episode: nv.episode, title: nv.name || nv.title, released: nv.released } : null,
       source: source || cur.source || null,
+      prefs: opts.prefs ? { ...(cur.prefs || {}), ...opts.prefs } : cur.prefs,
     });
     p[meta.id] = cur;
     return p;
@@ -37,7 +42,7 @@ export function saveProgress(meta, video, t, dur, source) {
     history.update(h => [{ id: meta.id, type: meta.type, name: meta.name, poster: meta.poster, videoId: video && video.id, season: video && video.season, episode: video && video.episode, at: Date.now() }, ...h].slice(0, 2000));
   }
   // any activity brings it back to the row
-  hidden.update(h => h.filter(x => x !== meta.id));
+  if (hidden.get().includes(meta.id)) hidden.update(h => h.filter(x => x !== meta.id));
 }
 
 /** Seconds to resume at, or 0. */
@@ -46,6 +51,8 @@ export function resumeAt(metaId, videoId) {
   return e && !e.done && e.t > 30 ? e.t : 0;
 }
 
+/** Per-show player choices ({ audioLang, subLang, rate }) or {}. */
+export const showPrefs = metaId => (progress.get()[metaId] || {}).prefs || {};
 export const epState = (metaId, videoId) => ((progress.get()[metaId] || { eps: {} }).eps[videoId || '_']) || null;
 
 /**

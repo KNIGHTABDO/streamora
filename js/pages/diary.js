@@ -3,8 +3,10 @@ import { html, useState, useMemo } from '../../vendor/preact-htm.js';
 import { Page, Btn, IconBtn, Tabs, Stars, Empty, Modal, Img, DoodlePoster, Field, Spinner, useAsync, loadCSS, cx, hrefTitle, plural, Icon, Reel } from '../ui/components.js';
 import { diary, history, progress, useStore, uid } from '../core/store.js';
 import { posterOf } from '../core/meta.js';
-import { summary, loadGenres, dayKey, years } from '../lib/stats.js';
+import { summary, yearSummary, dayKey, years } from '../lib/stats.js';
 import { hatch, hash, taper, rng } from '../ui/sketch.js';
+import { setQuery } from '../router.js';
+import Wrapped from './diary/wrapped.js';
 
 loadCSS('css/pages/diary.css');
 
@@ -128,8 +130,9 @@ function Stats({ prog, hist, dia }) {
   const ys = years(prog, hist, dia);
   const [year, setYear] = useState('all');
   const y = year === 'all' ? null : +year;
-  const g = useAsync(() => loadGenres(hist.filter(h => y == null || new Date(h.at).getFullYear() === y)), [hist.length, year]);
-  const s = useMemo(() => summary({ progress: prog, history: hist, diary: dia }, y, g.data || {}), [prog, hist, dia, y, g.data]);
+  const data = { progress: prog, history: hist, diary: dia };
+  const g = useAsync(() => yearSummary(data, y), [prog, hist, dia, y]);
+  const s = useMemo(() => g.data || summary(data, y), [prog, hist, dia, y, g.data]);
   const hours = s.seconds / 3600;
   return html`<div class="dy-stats">
     <div class="chips" style="margin-bottom:18px">
@@ -182,7 +185,10 @@ export default function Diary({ query }) {
   const entries = useMemo(() => timeline(hist, dia), [hist, dia]);
 
   return html`<${Page} title="Diary" kicker="everything you finished" icon="book"
-      actions=${entries.length ? html`<${Btn} icon="download" variant="ghost" onClick=${() => exportCSV(entries)}>Export CSV<//>` : null}>
+      actions=${html`<div class="cluster">
+        <${Btn} icon="trophy" variant="primary" onClick=${() => setQuery({ wrapped: 1 })}>Wrapped<//>
+        ${entries.length > 0 && html`<${Btn} icon="download" variant="ghost" onClick=${() => exportCSV(entries)}>Export CSV<//>`}
+      </div>`}>
     <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ id: 'log', label: 'Journal', icon: 'book', count: entries.length }, { id: 'stats', label: 'Stats', icon: 'trophy' }]} />
     <div class="dy-page">
       ${!entries.length ? html`<${Empty} mood="sleep" title="The diary is still blank" text="Finish a movie or an episode and it gets written in here. You can rate it and add a note."
@@ -190,6 +196,7 @@ export default function Diary({ query }) {
         : tab === 'log' ? html`<${Journal} entries=${entries} onEdit=${setEditing} />`
         : html`<${Stats} prog=${prog} hist=${hist} dia=${dia} />`}
     </div>
+    ${query.wrapped && html`<${Wrapped} year=${+query.year || null} demo=${!!query.demo} onClose=${() => setQuery({ wrapped: '', year: '', demo: '' })} />`}
     ${editing && html`<${EntryEditor} entry=${editing} onClose=${() => setEditing(null)} />`}
   <//>`;
 }

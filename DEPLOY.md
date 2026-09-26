@@ -27,3 +27,25 @@ Open the URL in Safari → Share → **Add to Home Screen**. Streamora then laun
 ## Checks
 - `https://<your-site>/api/rd/time` should return the Real-Debrid server time. That means the relay works.
 - If playback fails for one title, open the source picker in the player and try another `[RD+]` source.
+
+## Optional extras
+All of these are off until you set them up. The app works fine without them.
+
+### Sync between devices (Cloudflare KV)
+1. Dashboard → Storage & Databases → **KV** → Create namespace, e.g. `streamora-sync`.
+2. Your Pages project → Settings → **Bindings** → Add → KV namespace. Variable name **`SYNC`**, pick the namespace. Redeploy.
+3. In the app: Settings → Connect → Sync, then enter the same passphrase on each device.
+
+The server only stores one encrypted blob per passphrase (512 KB max) and can't read it. The Real-Debrid key is never synced.
+Check: `https://<your-site>/api/sync/` + 64 zeros returns `{"error":"not_found"}` (and `sync_not_configured` if the binding is missing).
+
+### Trakt (scrobbling + history import)
+1. Go to https://trakt.tv/oauth/applications → **New application**. Name: Streamora. Redirect URI: `urn:ietf:wg:oauth:2.0:oob`. Save.
+2. Pages project → Settings → **Variables and secrets** → add `TRAKT_CLIENT_ID` and `TRAKT_CLIENT_SECRET` (as a secret). Redeploy.
+3. In the app: Settings → Connect → Trakt → Connect, then enter the code shown on trakt.tv/activate.
+
+Only the sign-in calls go through `/api/trakt` (they need the secret). Check: `https://<your-site>/api/trakt/config` returns your client id.
+For local dev: `TRAKT_CLIENT_ID=… TRAKT_CLIENT_SECRET=… node dev-server.mjs`.
+
+### Stremio addons
+Nothing to set up. Add addon links in Settings → Connect. Addons without CORS go through `/api/addon` (read-only JSON relay, https and public hosts only).

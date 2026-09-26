@@ -49,9 +49,9 @@
   color: var(--a4); transform: rotate(-7deg); font-family: var(--font-type);
   animation: w-stamp .35s var(--ease-pop) both;
 }
-.welcome-stamp span { text-transform: uppercase; letter-spacing: .1em; font-size: 13px; }
+.welcome-stamp span { text-transform: uppercase; letter-spacing: .1em; font-size: 14px; }
 .welcome-stamp b { font: 26px var(--font-display); color: var(--ink); }
-.welcome-stamp small { font-size: 12px; }
+.welcome-stamp small { font-size: 14px; }
 @keyframes w-stamp { from { opacity: 0; transform: rotate(-20deg) scale(2); } }
 
 @media (max-width: 520px) {

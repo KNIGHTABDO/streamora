@@ -43,34 +43,43 @@ const nativeHls = v => isSafari || isIOS ? !!v.canPlayType('application/vnd.appl
 
 /**
  * attach(video, url, { start, onFatal }) -> detach()
- * start = seconds to begin at. onFatal(err) when the stream can't be played.
+ * start = seconds to begin at. onFatal(err, pos) when the stream can't be played; pos = video.currentTime then.
  */
 export async function attach(video, url, { start = 0, onFatal = () => {} } = {}) {
   const isHls = /\.m3u8(\?|$)/.test(url);
   const seek = () => { if (start > 0) try { video.currentTime = start; } catch {} };
-  if (!isHls || nativeHls(video)) {
+  const fatal = e => onFatal(e, video.currentTime || start);
+  const plain = () => {
+    // native HLS / direct files: the first error gets one reload at the current position, the second is fatal
+    let retried = false;
+    const onErr = () => {
+      if (retried) return fatal(new Error('This stream could not be played on this device.'));
+      retried = true;
+      start = video.currentTime || start;
+      video.src = url; video.load();
+      video.addEventListener('loadedmetadata', seek, { once: true });
+      video.play && video.play().catch(() => {});
+    };
     video.src = url;
     video.addEventListener('loadedmetadata', seek, { once: true });
-    const onErr = () => onFatal(new Error('This stream could not be played on this device.'));
-    video.addEventListener('error', onErr, { once: true });
-    return () => { video.removeEventListener('error', onErr); video.removeAttribute('src'); video.load(); };
-  }
+    video.addEventListener('error', onErr);
+    return () => { video.removeEventListener('error', onErr); video.removeEventListener('loadedmetadata', seek); video.removeAttribute('src'); video.load(); };
+  };
+  if (!isHls || nativeHls(video)) return plain();
   const Hls = await loadHls();
-  if (!Hls.isSupported()) {
-    video.src = url; video.addEventListener('loadedmetadata', seek, { once: true });
-    return () => { video.removeAttribute('src'); video.load(); };
-  }
+  if (!Hls.isSupported()) return plain();
   // RD transcodes on the fly: a cold segment can take 20s+ to appear, so be patient before calling it dead.
   const slow = { maxTimeToFirstByteMs: 60000, maxLoadTimeMs: 90000, timeoutRetry: { maxNumRetry: 4, retryDelayMs: 1000, maxRetryDelayMs: 4000 }, errorRetry: { maxNumRetry: 6, retryDelayMs: 1000, maxRetryDelayMs: 8000 } };
   const hls = new Hls({ startPosition: start > 0 ? start : -1, maxBufferLength: 120, maxMaxBufferLength: 300, maxBufferSize: 150e6, backBufferLength: 90, maxBufferHole: 1, startFragPrefetch: true, enableWorker: true,
     fragLoadPolicy: { default: slow }, playlistLoadPolicy: { default: slow }, manifestLoadPolicy: { default: slow } });
   let recovered = 0;
 
+  hls.on(Hls.Events.FRAG_BUFFERED, () => { recovered = 0; });   // healthy again: allow fresh recoveries later
   hls.on(Hls.Events.ERROR, (_, d) => {
     if (!d.fatal) return;
     if (d.type === Hls.ErrorTypes.NETWORK_ERROR && recovered < 3) { recovered++; hls.startLoad(); return; }
     if (d.type === Hls.ErrorTypes.MEDIA_ERROR && recovered < 3) { recovered++; hls.recoverMediaError(); return; }
-    onFatal(new Error(d.details || 'Stream error'));
+    fatal(new Error(d.details || 'Stream error'));
   });
   hls.loadSource(url);
   hls.attachMedia(video);

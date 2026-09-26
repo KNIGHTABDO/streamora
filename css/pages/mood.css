@@ -39,3 +39,20 @@
 .mood-rx-mood::after { content: ''; position: absolute; left: -4px; right: -4px; bottom: 2px; height: 11px; z-index: -1; background: var(--mc); opacity: .55; transform: rotate(-1.5deg); }
 .mood-rx-sign { width: 150px; margin: 6px 0 0 auto; display: block; }
 .mood-rx-sign path { stroke-dasharray: 400; stroke-dashoffset: 400; animation: draw 1.2s .3s ease-out forwards; }
+
+/* Just pick for me: scratch-off card */
+.mood-sc { display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; min-height: 300px; justify-content: center; }
+.mood-sc-actions { justify-content: center; }
+.mood-sc-result { display: flex; flex-direction: column; align-items: center; gap: 6px; animation: fade-up .4s both; }
+.mood-sc-card {
+  position: relative; width: min(240px, 62vw); padding: 12px 12px 40px; background: var(--paper-3);
+  box-shadow: var(--shadow-lift); transform: rotate(-2deg); animation: mood-sc-deal .5s var(--ease-pop) both;
+}
+@keyframes mood-sc-deal { from { opacity: 0; transform: translateY(-40px) rotate(-14deg) scale(.9); } }
+.mood-sc-photo { position: relative; aspect-ratio: 2 / 3; overflow: hidden; background: var(--paper-2); }
+.mood-sc-photo > img { width: 100%; height: 100%; object-fit: cover; }
+.mood-sc-foil {
+  position: absolute; left: 12px; top: 12px; width: calc(100% - 24px); aspect-ratio: 2 / 3;
+  touch-action: none; cursor: crosshair; transition: opacity .6s;
+}
+.mood-sc-foil.gone { opacity: 0; pointer-events: none; }

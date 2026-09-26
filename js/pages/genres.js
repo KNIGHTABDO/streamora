@@ -1,6 +1,6 @@
-// #/genres: a wall of die-cut genre stickers.  #/genre/{type}/{genre}: that shelf as a grid.
+// #/genres: a wall of die-cut genre stickers, plus a decade dial (?decade=1990&t=series, the old Time Machine).  #/genre/{type}/{genre}: that shelf as a grid.
 import { html, useRef } from '../../vendor/preact-htm.js';
-import { Page, Grid, usePaged, Tabs, Empty, Btn, ErrorNote, loadCSS, Icon, cx } from '../ui/components.js';
+import { Page, Grid, usePaged, useAsync, Tabs, Chip, Empty, Btn, ErrorNote, SectionTitle, loadCSS, Icon, cx } from '../ui/components.js';
 import { registerIcons } from '../ui/icons.js';
 import { tiltOf, hash } from '../ui/sketch.js';
 import { catalog, search, MOVIE_GENRES, SERIES_GENRES, ANIME_GENRES } from '../core/meta.js';
@@ -64,8 +64,42 @@ function Sticker({ type, item }) {
   </a>`;
 }
 
-function Wall() {
+// ---- decades (was the Time Machine)
+const NOW = new Date().getFullYear();
+const DECADES = Array.from({ length: (Math.floor(NOW / 10) * 10 - 1920) / 10 + 1 }, (_, i) => 1920 + i * 10);
+const BLURBS = {
+  1920: 'silent stars', 1930: 'talkies', 1940: 'noir shadows', 1950: 'technicolor', 1960: 'new waves',
+  1970: 'new hollywood', 1980: 'neon & synths', 1990: 'indie boom', 2000: 'franchise dawn', 2010: 'streaming era', 2020: 'right now',
+};
+async function decadeTop(type, decade) {
+  const ys = Array.from({ length: 10 }, (_, i) => decade + i).filter(y => y <= NOW);
+  const res = await Promise.allSettled(ys.map(y => catalog(type, 'year', { genre: y })));
+  return res.flatMap(r => (r.status === 'fulfilled' ? r.value.slice(0, 14) : []))
+    .filter(m => m.poster).sort((a, b) => (parseFloat(b.imdbRating) || 0) - (parseFloat(a.imdbRating) || 0));
+}
+
+function Decades({ decade, type }) {
+  const list = useAsync(() => (decade ? decadeTop(type, decade) : Promise.resolve([])), [type, decade]);
+  return html`<section class="genres-group genres-decades">
+    <div class="genres-group-head"><h2>Decades</h2><span class="kicker type">set the dial, hold on tight</span></div>
+    <div class="chips scroll" role="group" aria-label="Pick a decade">
+      ${DECADES.map(d => html`<${Chip} active=${d === decade} onClick=${() => setQuery({ decade: d === decade ? '' : d })} title=${BLURBS[d]}>${d}s<//>`)}
+    </div>
+    ${decade && html`<div class="genres-decade">
+      <${SectionTitle} kicker=${BLURBS[decade] || 'now arriving'} icon="hourglass"
+        action=${html`<${Tabs} tabs=${[{ id: 'movie', label: 'Movies', icon: 'film' }, { id: 'series', label: 'Shows', icon: 'tv' }]} value=${type} onChange=${t => setQuery({ t })} />`}>Best of the ${decade}s<//>
+      ${list.error ? html`<${ErrorNote} error=${list.error} retry=${list.reload} />`
+        : html`<${Grid} items=${list.data || []} loading=${list.loading}
+            empty=${html`<${Empty} mood="sleep" title="The archive is quiet" text=${`No ${type === 'series' ? 'shows' : 'movies'} from the ${decade}s on the shelf.`} />`} />`}
+    </div>`}
+  </section>`;
+}
+
+function Wall({ query }) {
+  const decade = DECADES.includes(+query.decade) ? +query.decade : null;
+  const type = query.t === 'series' ? 'series' : 'movie';
   return html`<${Page} title="Genres" kicker="every shelf in the house" icon="tag" class="genres">
+    <${Decades} decade=${decade} type=${type} />
     ${GROUPS.map(g => html`<section class="genres-group">
       <div class="genres-group-head"><h2>${g.title}</h2><span class="kicker type">${g.kicker}</span></div>
       <div class="genres-wall">${g.items.map(it => html`<${Sticker} key=${it.id} type=${g.type} item=${it} />`)}</div>
@@ -98,5 +132,5 @@ function Shelf({ type, genre, query }) {
 }
 
 export default function Genres({ params, query }) {
-  return params.genre ? html`<${Shelf} type=${params.type} genre=${params.genre} query=${query} />` : html`<${Wall} />`;
+  return params.genre ? html`<${Shelf} type=${params.type} genre=${params.genre} query=${query} />` : html`<${Wall} query=${query} />`;
 }

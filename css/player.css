@@ -169,6 +169,14 @@
 .pl-sleep { position: absolute; inset: 0; z-index: 8; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 6px; background: rgba(11, 13, 31, .92); color: #e8ecff; animation: fade-up .6s both; cursor: pointer; }
 .pl-sleep .reel { --line: #e8ecff; --paper-3: #1b2150; }
 .pl-sleep .muted { color: #b9c2f0; }
+.pl-still { cursor: default; }
+.pl-still .pl-next-actions { display: flex; gap: 10px; margin-top: 10px; }
+
+.pl-subfile { position: relative; margin: 4px 0 6px; cursor: pointer; }
+.pl-subfile input { position: absolute; inset: 0; opacity: 0; cursor: pointer; font-size: 0; }
+.pl-subfile:focus-within { background: rgba(255,255,255,.12); outline: 2px solid var(--pl-accent); }
+.pl-subfilter { width: 100%; min-height: 40px; margin: 4px 0 8px; padding: 6px 12px; border: 2px solid rgba(244, 237, 224, .5); border-radius: 12px 10px 13px 9px; background: rgba(0,0,0,.25); color: #f4ede0; font: inherit; font-size: 16px; }
+.pl-subfilter:focus { outline: none; border-color: var(--pl-accent); }
 
 @media (max-width: 700px) {
   .hide-phone { display: none !important; }

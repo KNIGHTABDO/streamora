@@ -4,6 +4,7 @@ import { Page, Btn, IconBtn, Chip, Tabs, Empty, Modal, Img, DoodlePoster, Icon, 
 import { watchlist, useStore } from '../core/store.js';
 import { meta, posterOf } from '../core/meta.js';
 import { tiltOf, hash } from '../ui/sketch.js';
+import { pool } from '../lib/pool.js';
 
 loadCSS('css/pages/watchlist.css');
 
@@ -15,13 +16,10 @@ function useEnriched(list) {
   useEffect(() => {
     let alive = true;
     const todo = list.filter(x => !extra[x.id] && (x.year == null || x.imdbRating == null));
-    (async () => {
-      for (let i = 0; i < todo.length; i += 6) {
-        const got = await Promise.all(todo.slice(i, i + 6).map(x => meta(x.type === 'movie' ? 'movie' : 'series', x.id).catch(() => null)));
-        if (!alive) return;
-        setExtra(e => { const n = { ...e }; got.forEach((m, j) => { n[todo[i + j].id] = m ? { year: m.year, imdbRating: m.imdbRating, anime: m.anime } : {}; }); return n; });
-      }
-    })();
+    pool(todo, 6, async x => {
+      const m = await meta(x.type === 'movie' ? 'movie' : 'series', x.id).catch(() => null);
+      if (alive) setExtra(e => ({ ...e, [x.id]: m ? { year: m.year, imdbRating: m.imdbRating, anime: m.anime } : {} }));
+    });
     return () => { alive = false; };
   }, [list.map(x => x.id).join()]);
   return list.map(x => ({ ...(extra[x.id] || {}), ...x, year: x.year ?? (extra[x.id] || {}).year, imdbRating: x.imdbRating ?? (extra[x.id] || {}).imdbRating }));
@@ -32,7 +30,7 @@ function Pin({ seed }) {
   return html`<svg class="wl-pin" viewBox="0 0 30 34" aria-hidden="true">
     <path d="M15 20 L14 33" stroke="var(--ink-2)" stroke-width="2" stroke-linecap="round"/>
     <ellipse cx="15" cy="12" rx="10" ry="9.5" fill=${colors[seed % 4]} stroke="var(--line)" stroke-width="2.2"/>
-    <ellipse cx="11.5" cy="9" rx="3" ry="2.2" fill="#fff" opacity=".6"/>
+    <ellipse cx="11.5" cy="9" rx="3" ry="2.2" fill="var(--paper-3)" opacity=".6"/>
   </svg>`;
 }
 
@@ -62,6 +60,9 @@ export default function Watchlist() {
   const [picking, setPicking] = useState(null); // id currently lit during the shuffle
   const [pick, setPick] = useState(null);
   const boardRef = useRef();
+  const dragCleanup = useRef(null);  // window listeners + long-press timer of the drag in progress
+  const pickTimer = useRef();
+  useEffect(() => () => { dragCleanup.current && dragCleanup.current(); clearTimeout(pickTimer.current); }, []);
 
   const counts = { all: list.length, movie: 0, series: 0, anime: 0 };
   list.forEach(x => counts[kind(x)]++);
@@ -106,6 +107,7 @@ export default function Watchlist() {
         }
       };
       const cleanup = () => {
+        dragCleanup.current = null;
         clearTimeout(timer);
         el.style.translate = '';
         removeEventListener('pointermove', onMoveP);
@@ -114,6 +116,8 @@ export default function Watchlist() {
         if (started) { setDrag(null); const swallow = ev => { ev.preventDefault(); ev.stopPropagation(); }; el.addEventListener('click', swallow, { capture: true, once: true }); setTimeout(() => el.removeEventListener('click', swallow, { capture: true }), 50); }
       };
       const onUp = () => cleanup();
+      dragCleanup.current && dragCleanup.current();
+      dragCleanup.current = cleanup;
       addEventListener('pointermove', onMoveP, { passive: false });
       addEventListener('pointerup', onUp);
       addEventListener('pointercancel', onUp);
@@ -128,8 +132,8 @@ export default function Watchlist() {
     const tick = () => {
       n++;
       setPicking(n >= steps ? winner.id : order[n % order.length].id);
-      if (n < steps) setTimeout(tick, 60 + n * n * 3.2);
-      else setTimeout(() => { setPick(winner); setPicking(null); }, 600);
+      if (n < steps) pickTimer.current = setTimeout(tick, 60 + n * n * 3.2);
+      else pickTimer.current = setTimeout(() => { setPick(winner); setPicking(null); }, 600);
     };
     tick();
   };
@@ -166,7 +170,7 @@ export default function Watchlist() {
         <div class="cluster" style="justify-content:center">
           ${pick.type === 'movie' && html`<${Btn} variant="primary" icon="play" href=${`#/watch/movie/${encodeURIComponent(pick.id)}`}>Play<//>`}
           <${Btn} icon="info" href=${hrefTitle(pick)}>Details<//>
-          <${Btn} variant="ghost" icon="dice" onClick=${() => { setPick(null); setTimeout(pickOne, 250); }}>Again<//>
+          <${Btn} variant="ghost" icon="dice" onClick=${() => { setPick(null); pickTimer.current = setTimeout(pickOne, 250); }}>Again<//>
         </div>
       </div>`}
     <//>

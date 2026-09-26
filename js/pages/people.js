@@ -5,6 +5,7 @@ import { hash, hatch, scribbleLoop } from '../ui/sketch.js';
 import { search, meta } from '../core/meta.js';
 import { navigate } from '../router.js';
 import { PEOPLE } from '../lib/discover-lists.js';
+import { pool } from '../lib/pool.js';
 
 loadCSS('css/pages/people.css');
 
@@ -21,13 +22,6 @@ export function Portrait({ name, size = 96 }) {
     <path d=${scribbleLoop(100, 100, h, { sw: 3.2, turns: 1.08 })} fill="var(--line)"/>
     <text x="50" y="63" text-anchor="middle" font-family="var(--font-display)" font-size="38" fill="var(--ink)">${initials(name)}</text>
   </svg>`;
-}
-
-// limited-concurrency map
-async function pool(items, n, fn) {
-  const out = new Array(items.length); let i = 0;
-  await Promise.all(Array.from({ length: n }, async () => { while (i < items.length) { const k = i++; try { out[k] = await fn(items[k]); } catch { out[k] = null; } } }));
-  return out;
 }
 
 async function filmography(name) {

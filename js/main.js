@@ -1,11 +1,12 @@
 // Streamora app shell: theme, gates (key → profile), navigation chrome, lazy pages.
-import { html, render, useState, useEffect, useErrorBoundary } from '../vendor/preact-htm.js';
+import { html, render, useState, useEffect, useRef, useErrorBoundary } from '../vendor/preact-htm.js';
 import { installSketch } from './ui/sketch.js';
-import { Icon, Spinner, Toasts, ErrorNote, Btn, cx } from './ui/components.js';
+import { Icon, Spinner, Toasts, ErrorNote, Btn, cx, toast } from './ui/components.js';
 import { Avatar } from './ui/avatars.js';
 import { useRoute, navigate, parseHash } from './router.js';
 import { useStore, keyStore, profiles, activeProfileId, settings } from './core/store.js';
 import { initFocus } from './ui/focus.js';
+import { newEps, badgeCount, checkNewEpisodes, notifyNewEpisodes } from './lib/newEpisodes.js';
 
 installSketch();
 initFocus();
@@ -24,11 +25,21 @@ export function applyTheme() {
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = getComputedStyle(el).getPropertyValue('--paper').trim() || '#f3e6cf';
 }
-profiles.subscribe(applyTheme);
-activeProfileId.subscribe(applyTheme);
-settings.subscribe(applyTheme);
-setInterval(applyTheme, 5 * 60e3);
-applyTheme();
+// the night-mode clock only ticks while night mode is on
+let themeTimer = null;
+function syncTheme() {
+  applyTheme();
+  const on = !!settings.get().nightAuto;
+  if (on && !themeTimer) themeTimer = setInterval(applyTheme, 5 * 60e3);
+  if (!on && themeTimer) { clearInterval(themeTimer); themeTimer = null; }
+}
+profiles.subscribe(syncTheme);
+activeProfileId.subscribe(syncTheme);
+settings.subscribe(syncTheme);
+syncTheme();
+
+// store.js fires this when localStorage is full
+addEventListener('streamora:quota', () => toast('Storage is full, so that last change was not saved. Try clearing old history in Settings.', { kind: 'error', ms: 6000 }));
 
 // ------------------------------------------------------------ nav model
 export const MAIN_NAV = [
@@ -40,19 +51,14 @@ export const MAIN_NAV = [
 ];
 export const MORE_NAV = [
   { group: 'Discover', items: [
-    { href: '#/mood', label: 'Mood Wheel', icon: 'wheel', note: 'spin for a feeling' },
-    { href: '#/surprise', label: 'Surprise Me', icon: 'dice', note: 'scratch a random pick' },
-    { href: '#/calendar', label: 'Calendar', icon: 'calendar', note: 'new episodes' },
-    { href: '#/world', label: 'Around the World', icon: 'globe', note: 'cinema by country' },
-    { href: '#/time', label: 'Time Machine', icon: 'hourglass', note: '1920s → now' },
-    { href: '#/collections', label: 'Collections', icon: 'layers', note: 'franchises in order' },
-    { href: '#/genres', label: 'Genres', icon: 'tag', note: 'every shelf' },
-    { href: '#/people', label: 'People', icon: 'person', note: 'actors & directors' },
+    { href: '#/mood', label: 'Mood Wheel', icon: 'wheel', note: 'spin a feeling, or let it pick' },
+    { href: '#/calendar', label: 'Calendar', icon: 'calendar', note: 'new episodes', badge: 'newEps' },
+    { href: '#/collections', label: 'Collections', icon: 'layers', note: 'franchises & world cinema' },
+    { href: '#/genres', label: 'Genres', icon: 'tag', note: 'every shelf, every decade' },
   ] },
   { group: 'You', items: [
     { href: '#/watchlist', label: 'Watchlist', icon: 'heart', note: 'your pinboard' },
-    { href: '#/diary', label: 'Diary', icon: 'book', note: 'log, stars, stats' },
-    { href: '#/wrapped', label: 'Year in Review', icon: 'trophy', note: 'your year, drawn' },
+    { href: '#/diary', label: 'Diary', icon: 'book', note: 'log, stats, your year wrapped' },
   ] },
   { group: 'Tools', items: [
     { href: '#/add', label: 'Add magnet / link', icon: 'magnet', note: 'paste & play' },
@@ -72,7 +78,7 @@ function Logo() {
   </a>`;
 }
 
-function TopNav({ route, onMore, profile }) {
+function TopNav({ route, onMore, profile, moreOpen, badge }) {
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
     const on = () => setScrolled(scrollY > 30);
@@ -86,41 +92,46 @@ function TopNav({ route, onMore, profile }) {
     </nav>
     <div class="topnav-tools">
       <a class="icon-btn" href="#/search" aria-label="Search" title="Search"><${Icon} name="search" /></a>
-      <button type="button" class="icon-btn" onClick=${onMore} aria-label="More sections" title="More"><${Icon} name="menu" /></button>
+      <button type="button" class="icon-btn nav-more" onClick=${onMore} aria-label=${badge ? `More sections, ${badge} new episodes` : 'More sections'} aria-expanded=${moreOpen} aria-controls="more-drawer" title="More"><${Icon} name="menu" />${badge > 0 && html`<span class="nav-badge" aria-hidden="true">${badge}</span>`}</button>
       ${profile && html`<a class="nav-avatar" href="#/profiles" aria-label=${`Profile: ${profile.name}`} title=${profile.name}><${Avatar} id=${profile.avatar} ink=${profile.ink} size=${38} /></a>`}
     </div>
   </header>`;
 }
 
-function TabBar({ route, onMore }) {
+function TabBar({ route, onMore, moreOpen, badge }) {
   const items = [MAIN_NAV[0], MAIN_NAV[1], MAIN_NAV[2], MAIN_NAV[3], { href: '#/search', path: '/search', label: 'Search', icon: 'search' }];
   return html`<nav class="tabbar" aria-label="Main">
     ${items.map(n => html`<a href=${n.href} class=${cx('tabbar-item', route.path === n.path && 'active')} aria-current=${route.path === n.path ? 'page' : null}>
       <${Icon} name=${n.icon} size=${24} /><span>${n.label}</span>
     </a>`)}
-    <button type="button" class="tabbar-item" onClick=${onMore}><${Icon} name="more" size=${24} /><span>More</span></button>
+    <button type="button" class="tabbar-item" onClick=${onMore} aria-expanded=${moreOpen} aria-controls="more-drawer"><${Icon} name="more" size=${24} /><span>More</span>${badge > 0 && html`<span class="nav-badge" aria-hidden="true">${badge}</span>`}</button>
   </nav>`;
 }
 
-function MoreDrawer({ open, onClose }) {
+function MoreDrawer({ open, onClose, badge }) {
+  const ref = useRef();
   useEffect(() => {
     if (!open) return;
+    const prev = document.activeElement;
     const on = e => e.key === 'Escape' && onClose();
     addEventListener('keydown', on);
-    return () => removeEventListener('keydown', on);
+    const f = ref.current && ref.current.querySelector('a[href], button');
+    f && f.focus({ preventScroll: true });
+    return () => { removeEventListener('keydown', on); prev && prev.isConnected && prev.focus && prev.focus({ preventScroll: true }); };
   }, [open]);
-  return html`<div class=${cx('drawer-scrim', open && 'open')} onClick=${e => e.target === e.currentTarget && onClose()} aria-hidden=${!open}>
-    <aside class="drawer" aria-label="All sections">
-      <div class="spread"><h2>Everything</h2><button type="button" class="icon-btn" onClick=${onClose} aria-label="Close"><${Icon} name="close" /></button></div>
+  // closed: inert keeps every link out of the tab order and away from screen readers
+  return html`<div class=${cx('drawer-scrim', open && 'open')} onClick=${e => e.target === e.currentTarget && onClose()} aria-hidden=${!open} inert=${!open}>
+    <aside class="drawer" id="more-drawer" aria-label="All sections" ref=${ref}>
+      <div class="spread"><h2>Everything</h2><button type="button" class="icon-btn" onClick=${onClose} aria-label="Close" tabindex=${open ? 0 : -1}><${Icon} name="close" /></button></div>
       <div class="drawer-main">
-        ${MAIN_NAV.map(n => html`<a href=${n.href} onClick=${onClose} class="drawer-pill"><${Icon} name=${n.icon} size=${20} />${n.label}</a>`)}
+        ${MAIN_NAV.map(n => html`<a href=${n.href} onClick=${onClose} class="drawer-pill" tabindex=${open ? 0 : -1}><${Icon} name=${n.icon} size=${20} />${n.label}</a>`)}
       </div>
       ${MORE_NAV.map(g => html`<section class="drawer-group">
         <div class="kicker type">${g.group}</div>
-        ${g.items.map(i => html`<a href=${i.href} onClick=${onClose} class="drawer-item has-scribble" tabindex=${open ? 0 : -1}>
-          <span class="drawer-icon"><${Icon} name=${i.icon} size=${24} /></span>
+        ${g.items.map(i => { const n = i.badge === 'newEps' ? badge : 0; return html`<a href=${i.href} onClick=${onClose} class="drawer-item has-scribble" tabindex=${open ? 0 : -1}>
+          <span class="drawer-icon"><${Icon} name=${i.icon} size=${24} />${n > 0 && html`<span class="nav-badge" aria-label=${`${n} new`}>${n}</span>`}</span>
           <span><b>${i.label}</b><small class="faint">${i.note}</small></span>
-        </a>`)}
+        </a>`; })}
       </section>`)}
     </aside>
   </div>`;
@@ -140,7 +151,17 @@ function PageHost({ route }) {
     route.load().then(m => { e.status = 'ok'; e.Comp = m.default; force(x => x + 1); },
       error => { e.status = 'error'; e.error = error; force(x => x + 1); });
   }, [key]);
-  useEffect(() => { if (err) resetErr(); }, [route.path]);
+  const full = route.path + '?' + new URLSearchParams(route.query);
+  useEffect(() => { if (err) resetErr(); }, [full]);
+  // after a path change, move focus to the new page (screen readers + TV remotes start at the top)
+  const first = useRef(true);
+  const ready = entry && entry.status;
+  useEffect(() => {
+    if (ready !== 'ok') return;
+    if (first.current) { first.current = false; return; }
+    const main = document.getElementById('main') || document.querySelector('main');
+    if (main && !main.contains(document.activeElement)) { if (!main.hasAttribute('tabindex')) main.tabIndex = -1; main.focus({ preventScroll: true }); }
+  }, [route.path, ready]);
   if (err) return html`<main class="page"><${ErrorNote} error=${err} retry=${() => { resetErr(); }} /></main>`;
   if (!route.load) return html`<main class="page center-fill"><div class="empty"><h2>This page fell out of the sketchbook.</h2><${Btn} href="#/" icon="home">Go home<//></div></main>`;
   if (!entry || entry.status === 'loading') return html`<main class="page center-fill"><${Spinner} /></main>`;
@@ -158,26 +179,39 @@ function App() {
   const [more, setMore] = useState(false);
   const profile = list.find(p => p.id === activeId);
 
-  useEffect(() => { scrollTo(0, 0); setMore(false); }, [route.path]);
+  const q = new URLSearchParams(route.query).toString();
+  const badge = badgeCount(useStore(newEps));
+  useEffect(() => { scrollTo(0, 0); }, [route.path, q]);
+  useEffect(() => { setMore(false); }, [route.path]);
 
   // gates: no key → welcome; no profile → profile picker
   const open = ['/welcome', '/import'].includes(route.path);
   // redirect by rewriting the URL quietly and rendering the target now (navigating mid-render got lost on fresh loads)
   const gate = !key.set && !open ? '#/welcome' : key.set && !profile && !open && route.path !== '/profiles' ? '#/profiles' : null;
   if (gate) { history.replaceState(null, '', gate); route = parseHash(gate); }
+  else if (route.redirect) history.replaceState(null, '', route.redirect);
 
   const chromeless = ['/watch', '/welcome'].some(p => route.path.startsWith(p)) || (route.path === '/profiles' && !profile);
   return html`
-    ${!chromeless && html`<${TopNav} route=${route} profile=${profile} onMore=${() => setMore(true)} />`}
+    ${!chromeless && html`<${TopNav} route=${route} profile=${profile} onMore=${() => setMore(true)} moreOpen=${more} badge=${badge} />`}
     <${PageHost} route=${route} />
-    ${!chromeless && html`<${TabBar} route=${route} onMore=${() => setMore(true)} />`}
-    ${!chromeless && html`<${MoreDrawer} open=${more} onClose=${() => setMore(false)} />`}
+    ${!chromeless && html`<${TabBar} route=${route} onMore=${() => setMore(true)} moreOpen=${more} badge=${badge} />`}
+    ${!chromeless && html`<${MoreDrawer} open=${more} onClose=${() => setMore(false)} badge=${badge} />`}
     <${Toasts} />
   `;
 }
 
 render(html`<${App} />`, document.getElementById('app'));
 
-if ('serviceWorker' in navigator && location.hostname !== 'localhost') {
+if ('serviceWorker' in navigator && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
+
+// after first paint: sync/Trakt bootstrapping, then the daily new-episode check (+ one notification if allowed)
+setTimeout(() => {
+  import('./core/integrations.js').catch(() => {});
+  const episodes = () => { if (keyStore.get().set && activeProfileId.get()) checkNewEpisodes().then(notifyNewEpisodes).catch(() => {}); };
+  episodes();
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && episodes());
+  activeProfileId.subscribe(episodes);
+}, 1500);

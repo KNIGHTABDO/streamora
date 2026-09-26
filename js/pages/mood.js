@@ -1,9 +1,10 @@
 // Mood Wheel: spin a hand-drawn wheel (or tap a chip) and get a "prescription" of titles.
+// "Just pick for me" deals one random title (from the current mood) under a scratch-off card.
 import { html, useState, useMemo, useRef, useEffect } from '../../vendor/preact-htm.js';
-import { Page, Grid, Chip, Icon, useAsync, loadCSS, ErrorNote, SectionTitle, cx } from '../ui/components.js';
+import { Page, Grid, Chip, Icon, Btn, Modal, Img, DoodlePoster, Reel, useAsync, loadCSS, ErrorNote, SectionTitle, cx, hrefTitle } from '../ui/components.js';
 import { rng, taper, hash, scribbleStroke } from '../ui/sketch.js';
 import { pstore, useStore, activeProfile } from '../core/store.js';
-import { catalog } from '../core/meta.js';
+import { catalog, posterOf } from '../core/meta.js';
 import { MOODS, resolveList } from '../lib/discover-lists.js';
 
 loadCSS('css/pages/mood.css');
@@ -95,6 +96,100 @@ function MoodResults({ mood }) {
   `;
 }
 
+// ---------------------------------------------------------------- the scratch card
+function ScratchCard({ item, onReveal, revealed }) {
+  const canvas = useRef();
+  useEffect(() => {
+    const cv = canvas.current;
+    if (!cv) return;
+    const box = cv.getBoundingClientRect();
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    cv.width = box.width * dpr; cv.height = box.height * dpr;
+    const c = cv.getContext('2d');
+    c.scale(dpr, dpr);
+    const css = getComputedStyle(document.documentElement);
+    const v = n => css.getPropertyValue(n).trim();
+    const W = box.width, H = box.height;
+    // foil: accent base + pencil hatching + stars + label
+    c.fillStyle = v('--a3'); c.fillRect(0, 0, W, H);
+    c.strokeStyle = v('--line'); c.globalAlpha = .18; c.lineWidth = 1.4;
+    for (let s = -H; s < W; s += 9) { c.beginPath(); c.moveTo(s, H); c.lineTo(s + H * .7, 0); c.stroke(); }
+    c.globalAlpha = 1; c.fillStyle = v('--a1');
+    for (let i = 0; i < 14; i++) { c.font = `${16 + (i % 3) * 8}px ${v('--font-display')}`; c.fillText('★', (i * 67) % W, 30 + ((i * 97) % (H - 40))); }
+    c.fillStyle = v('--ink'); c.textAlign = 'center';
+    c.font = `${Math.round(W / 6)}px ${v('--font-display')}`; c.fillText('scratch', W / 2, H / 2 - 6);
+    c.font = `${Math.round(W / 10)}px ${v('--font-hand')}`; c.fillText('me! ✎', W / 2, H / 2 + W / 9);
+    c.globalCompositeOperation = 'destination-out';
+
+    let down = false, last = null, moves = 0;
+    const at = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    const scratch = (x, y) => {
+      c.lineWidth = 42; c.lineCap = 'round';
+      c.beginPath(); c.moveTo(...(last || [x, y])); c.lineTo(x, y); c.stroke();
+      last = [x, y];
+      if (++moves % 12 === 0 && cleared() > .5) onReveal();
+    };
+    const cleared = () => {
+      const d = c.getImageData(0, 0, cv.width, cv.height).data;
+      let clear = 0, n = 0;
+      for (let i = 3; i < d.length; i += 4 * 97) { n++; if (d[i] < 40) clear++; }
+      return clear / n;
+    };
+    const pd = e => { down = true; last = null; cv.setPointerCapture(e.pointerId); scratch(...at(e)); };
+    const pm = e => down && scratch(...at(e));
+    const pu = () => { down = false; last = null; };
+    cv.addEventListener('pointerdown', pd); cv.addEventListener('pointermove', pm);
+    cv.addEventListener('pointerup', pu); cv.addEventListener('pointercancel', pu);
+    return () => { cv.removeEventListener('pointerdown', pd); cv.removeEventListener('pointermove', pm); cv.removeEventListener('pointerup', pu); cv.removeEventListener('pointercancel', pu); };
+  }, [item && item.id]);
+
+  return html`<div class="mood-sc-card">
+    <span class="tape tl"></span><span class="tape tr alt"></span>
+    <div class="mood-sc-photo">
+      ${item ? html`<${Img} src=${posterOf(item)} alt=${revealed ? item.name : 'hidden pick'} fallback=${html`<${DoodlePoster} title=${item.name} />`} />` : null}
+    </div>
+    ${item && html`<canvas ref=${canvas} class=${cx('mood-sc-foil', revealed && 'gone')} aria-hidden="true"></canvas>`}
+  </div>`;
+}
+
+const any = a => a[Math.floor(Math.random() * a.length)];
+async function deal(mood) {
+  const genre = mood ? any(mood.genres) : undefined;
+  const pool = (await catalog('movie', any(['top', 'imdbRating']), { genre, skip: any([0, 0, 100]) }))
+    .filter(m => m.poster && (parseFloat(m.imdbRating) || 7) >= 6);
+  if (!pool.length) throw new Error('The deck came up empty. Try again.');
+  return any(pool);
+}
+
+function PickForMe({ mood, onClose }) {
+  const [item, setItem] = useState(null);
+  const [revealed, setRevealed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const roll = async () => {
+    setBusy(true); setErr(null); setRevealed(false);
+    try { setItem(await deal(mood)); } catch (e) { setErr(e); setItem(null); } finally { setBusy(false); }
+  };
+  useEffect(() => { roll(); }, []);
+  return html`<${Modal} open onClose=${onClose} title=${mood ? `Something ${mood.label.toLowerCase()}…` : 'Tonight you get…'}>
+    <div class="mood-sc" aria-live="polite">
+      ${err ? html`<${ErrorNote} error=${err} retry=${roll} />`
+        : !item ? html`<${Reel} mood="think" size=${120} /><p class="muted">shuffling the deck…</p>`
+        : html`<${ScratchCard} item=${item} revealed=${revealed} onReveal=${() => setRevealed(true)} />
+          ${!revealed ? html`<div class="cluster mood-sc-actions"><span class="muted">Scratch the card, or</span><${Btn} icon="eye" onClick=${() => setRevealed(true)}>Reveal<//></div>`
+            : html`<div class="mood-sc-result">
+              <h3>${item.name}</h3>
+              <div class="type muted">${[item.year || item.releaseInfo, item.imdbRating && `★ ${item.imdbRating}`].filter(Boolean).join('  ·  ')}</div>
+              <div class="cluster mood-sc-actions">
+                <${Btn} variant="primary" icon="play" href=${`#/watch/movie/${encodeURIComponent(item.id)}`}>Play<//>
+                <${Btn} icon="info" href=${hrefTitle(item)}>Details<//>
+                <${Btn} variant="ghost" icon="refresh" onClick=${roll} disabled=${busy}>Again<//>
+              </div>
+            </div>`}`}
+    </div>
+  <//>`;
+}
+
 export default function Mood() {
   const saved = useStore(lastMood);
   const [rot, setRot] = useState(0);
@@ -102,6 +197,7 @@ export default function Mood() {
   const [pick, setPick] = useState(saved);
   const mood = MOODS.find(m => m.id === pick);
   const timer = useRef();
+  const [dealing, setDealing] = useState(false);
   useEffect(() => () => clearTimeout(timer.current), []);
 
   const choose = id => { setPick(id); lastMood.set(id); };
@@ -115,7 +211,8 @@ export default function Mood() {
   };
   const who = (activeProfile() || {}).name || 'you';
 
-  return html`<${Page} title="Mood Wheel" kicker="how are we feeling?" icon="wheel" class="mood-page">
+  return html`<${Page} title="Mood Wheel" kicker="how are we feeling?" icon="wheel" class="mood-page"
+      actions=${html`<${Btn} variant="primary" icon="dice" onClick=${() => setDealing(true)}>Just pick for me<//>`}>
     <div class="mood-top">
       <${Wheel} rot=${rot} spinning=${spinning} onSpin=${spin} />
       <div class="mood-side">
@@ -127,5 +224,6 @@ export default function Mood() {
       </div>
     </div>
     ${mood && html`<${MoodResults} key=${mood.id} mood=${mood} />`}
+    ${dealing && html`<${PickForMe} mood=${mood} onClose=${() => setDealing(false)} />`}
   <//>`;
 }

@@ -32,16 +32,24 @@ export function nextUp(meta) {
   return vids.find(isReleased) || vids[0];
 }
 
-/** { href, label, t } for the main Play button */
+/** The release last played for this title, tried first. Other episodes only keep the hash (file index differs). */
+export function rememberedSource(metaId, sameFile) {
+  const src = (progress.get()[metaId] || {}).source;
+  if (!src || !src.infoHash) return null;
+  return sameFile ? src : { infoHash: src.infoHash };
+}
+
+/** { href, label, t } for the main Play button: straight to the player (remembered release first, else the top-ranked cached one). */
 export function playAction(meta) {
   if (meta.type === 'series' || (meta.videos && meta.videos.length > 1)) {
     const v = nextUp(meta);
     if (!v) return { href: watchHref(meta, null), label: 'Play', t: 0 };
     const t = resumeAt(meta.id, v.id);
-    return { href: watchHref(meta, v, t), label: `${t ? 'Resume' : 'Play'} S${v.season} · E${v.episode}`, t };
+    const p = progress.get()[meta.id];
+    return { href: watchHref(meta, v, t, rememberedSource(meta.id, p && p.last === v.id)), label: `${t ? 'Resume' : 'Play'} S${v.season} · E${v.episode}`, t };
   }
   const t = resumeAt(meta.id, null);
-  return { href: watchHref(meta, null, t), label: t ? 'Resume' : 'Play', t };
+  return { href: watchHref(meta, null, t, rememberedSource(meta.id, true)), label: t ? 'Resume' : 'Play', t };
 }
 
 export const inWatchlist = (list, id) => list.some(w => w.id === id);

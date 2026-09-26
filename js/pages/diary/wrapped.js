@@ -1,11 +1,10 @@
-// Year in Review: a full-screen story of cards, each printed in a different look, ending with a shareable PNG.
-import { html, useState, useEffect, useMemo, useRef } from '../../vendor/preact-htm.js';
-import { Btn, IconBtn, Icon, Img, DoodlePoster, Stars, Spinner, Reel, Select, useAsync, loadCSS, cx, toast, plural } from '../ui/components.js';
-import { diary, history, progress, useStore } from '../core/store.js';
-import { posterOf } from '../core/meta.js';
-import { summary, loadGenres, years, demoData } from '../lib/stats.js';
-import { roughRect, underlinePath, hash } from '../ui/sketch.js';
-import { back } from '../router.js';
+// Year in Review (opened from the Diary): a full-screen story of cards, each printed in a different look, ending with a shareable PNG.
+import { html, useState, useEffect, useMemo, useRef } from '../../../vendor/preact-htm.js';
+import { Btn, IconBtn, Icon, Img, DoodlePoster, Stars, Spinner, Reel, Select, useAsync, loadCSS, cx, toast, plural } from '../../ui/components.js';
+import { diary, history, progress, useStore } from '../../core/store.js';
+import { posterOf } from '../../core/meta.js';
+import { yearSummary, summary, years, demoData } from '../../lib/stats.js';
+import { roughRect, underlinePath, hash } from '../../ui/sketch.js';
 
 loadCSS('css/pages/wrapped.css');
 
@@ -148,19 +147,19 @@ function Story({ s, onClose, onYear, yearsList }) {
   const [paused, setPaused] = useState(false);
   const down = useRef(null);
   const go = d => setI(v => Math.max(0, Math.min(list.length - 1, v + d)));
+  const root = useRef();
+  const close = useRef(onClose); close.current = onClose;
   useEffect(() => setI(0), [s.year, s.demo]);
-  useEffect(() => {
-    const on = e => {
-      if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); go(1); }
-      else if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1); }
-      else if (e.key === 'Escape') onClose();
-    };
-    addEventListener('keydown', on);
-    return () => removeEventListener('keydown', on);
-  }, [list.length]);
+  useEffect(() => { root.current && root.current.focus({ preventScroll: true }); }, []);
+  // keys only while focus is inside the story; Space on a focused control keeps its normal meaning
+  const onKey = e => {
+    if (e.key === 'ArrowRight' || (e.key === ' ' && !e.target.closest('button, a, input, select, textarea'))) { e.preventDefault(); go(1); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1); }
+    else if (e.key === 'Escape') { e.preventDefault(); close.current(); }
+  };
   const card = list[i];
   const last = i === list.length - 1;
-  return html`<div class="wr-stage" data-own-arrows data-focus-scope>
+  return html`<div class="wr-stage" data-own-arrows data-focus-scope ref=${root} tabindex="-1" onKeyDown=${onKey} role="dialog" aria-modal="true" aria-label="Year in review">
     <div class="wr-top">
       <div class="wr-bars-prog" aria-hidden="true">
         ${list.map((c, k) => html`<span class=${cx('wr-seg', k < i && 'done', k === i && 'now', paused && 'paused')} key=${k === i ? `now${i}` : k}>
@@ -196,20 +195,21 @@ function Story({ s, onClose, onYear, yearsList }) {
   </div>`;
 }
 
-export default function Wrapped({ query }) {
+/** <Wrapped year? demo? onClose /> */
+export default function Wrapped({ year: startYear, demo: startDemo, onClose }) {
   const prog = useStore(progress), hist = useStore(history), dia = useStore(diary);
   const yearsList = years(prog, hist, dia);
-  const [pick, setPick] = useState(query.demo ? 'demo' : String(query.year || yearsList[0]));
+  const [pick, setPick] = useState(startDemo ? 'demo' : String(startYear || yearsList[0]));
   const demo = pick === 'demo';
   const year = demo ? new Date().getFullYear() : +pick;
   const data = useMemo(() => (demo ? demoData(year) : { progress: prog, history: hist, diary: dia }), [demo, year, prog, hist, dia]);
-  const genres = useAsync(() => (demo ? data.genreMap : loadGenres(data.history.filter(h => new Date(h.at).getFullYear() === year))), [demo, year, hist.length]);
-  const s = useMemo(() => ({ ...summary(data, year, genres.data || {}), demo }), [data, year, genres.data]);
-  const close = () => back('#/diary');
+  const sq = useAsync(() => yearSummary(data, year, demo ? data.genreMap : null), [data, year]);
+  const s = useMemo(() => ({ ...(sq.data || summary(data, year)), demo }), [data, year, sq.data]);
+  const close = onClose;
 
   useEffect(() => { document.documentElement.classList.add('wr-open'); return () => document.documentElement.classList.remove('wr-open'); }, []);
 
-  if (genres.loading) return html`<div class="wr-stage wr-center"><${Spinner} label="gathering your year…" /></div>`;
+  if (sq.loading && !sq.data) return html`<div class="wr-stage wr-center"><${Spinner} label="gathering your year…" /></div>`;
   if (s.active < 3 && !demo) return html`<div class="wr-stage wr-center" data-theme="pencil">
     <div class="wr-empty panel">
       <span class="tape top"></span>

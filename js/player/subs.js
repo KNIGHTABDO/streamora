@@ -29,8 +29,27 @@ const ts = s => {
   return m ? (+(m[1] || 0)) * 3600 + (+m[2]) * 60 + (+m[3]) + (+m[4].padEnd(3, '0')) / 1000 : 0;
 };
 
-/** SRT or WebVTT text -> [{ start, end, text }] (text keeps <i>/<b>, drops other tags) */
+/** ASS/SSA text -> cues. Only Dialogue lines; override tags dropped, \N / \n become line breaks. */
+function parseAss(text) {
+  const out = [];
+  let fmt = ['layer', 'start', 'end', 'style', 'name', 'marginl', 'marginr', 'marginv', 'effect', 'text'];
+  for (const l of text.split(/\r?\n/)) {
+    const f = /^Format:\s*(.*)$/i.exec(l);
+    if (f && /text/i.test(f[1])) { fmt = f[1].split(',').map(x => x.trim().toLowerCase()); continue; }
+    const m = /^Dialogue:\s*(.*)$/i.exec(l);
+    if (!m) continue;
+    const parts = m[1].split(',');
+    const cols = [...parts.slice(0, fmt.length - 1), parts.slice(fmt.length - 1).join(',')];
+    const get = k => cols[fmt.indexOf(k)] || '';
+    const body = get('text').replace(/\{[^}]*\}/g, '').replace(/\\[Nn]/g, '\n').replace(/\\h/g, ' ').trim();
+    if (body) out.push({ start: ts(get('start')), end: ts(get('end')), text: body });
+  }
+  return out.sort((x, y) => x.start - y.start);
+}
+
+/** SRT, WebVTT or ASS/SSA text -> [{ start, end, text }] (text keeps <i>/<b>, drops other tags) */
 export function parseSubs(text) {
+  if (/^\s*\[Script Info\]|^Dialogue:/im.test(text)) return parseAss(text);
   const out = [];
   const blocks = text.replace(/\r/g, '').replace(/^﻿/, '').split(/\n{2,}/);
   for (const b of blocks) {
@@ -62,13 +81,19 @@ export function cuesAt(cues, t) {
   return out;
 }
 
-export async function loadSubFile(url) {
+// Legacy code page per subtitle language (ISO 639-1/2), tried when the file isn't valid UTF-8.
+const CODEPAGE = [[/^(ar|ara|per|fas|urd)$/, 'windows-1256'], [/^(ru|rus|uk|ukr|bg|bul|sr|srp|mk|mac|mkd|be|bel)$/, 'windows-1251'],
+  [/^(el|ell|gre)$/, 'windows-1253'], [/^(tr|tur)$/, 'windows-1254'], [/^(he|heb)$/, 'windows-1255']];
+export function decodeSubs(buf, lang) {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch {}
+  const cp = (CODEPAGE.find(([re]) => re.test(String(lang || '').toLowerCase())) || [, 'windows-1252'])[1];
+  return new TextDecoder(cp).decode(buf);
+}
+
+export async function loadSubFile(url, lang) {
   const r = await fetch(url);
   if (!r.ok) throw new Error('Subtitle download failed');
-  const buf = await r.arrayBuffer();
-  let text = new TextDecoder('utf-8').decode(buf);
-  if (text.includes('�')) text = new TextDecoder('windows-1252').decode(buf);
-  return parseSubs(text);
+  return parseSubs(decodeSubs(await r.arrayBuffer(), lang));
 }
 
 // Self-check: node js/player/subs.js
@@ -81,5 +106,8 @@ if (typeof process !== 'undefined' && process.argv && process.argv[1] && process
   assert.deepEqual(cuesAt(c, 45), ['KELLER: <i>Our Father</i>']);
   assert.deepEqual(cuesAt(c, 48.9), []);
   assert.ok(toVTT(c).startsWith('WEBVTT\n\n00:00:43.480 --> 00:00:48.646'));
+  const a = parseSubs('[Script Info]\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.50,0:00:03.00,Default,,0,0,0,,{\\an8}Hello,\\Nworld\n');
+  assert.deepEqual(a, [{ start: 1.5, end: 3, text: 'Hello,\nworld' }]);
+  assert.equal(decodeSubs(new Uint8Array([0xc7, 0xe1]), 'ara'), 'ال');
   console.log('subs.js ok');
 }

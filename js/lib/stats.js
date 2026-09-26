@@ -148,6 +148,11 @@ export async function loadGenres(items, limit = 40) {
   return out;
 }
 
+/** summary() with genres loaded for that year's finished items (shared by Diary stats and Year in Review). */
+export async function yearSummary(data, year, genreMap) {
+  return summary(data, year, genreMap || await loadGenres((data.history || []).filter(h => inYear(h.at, year))));
+}
+
 /** Sample data for demo mode (not saved anywhere). */
 export function demoData(year = new Date().getFullYear()) {
   const shows = [

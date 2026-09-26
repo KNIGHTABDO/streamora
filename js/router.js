@@ -13,35 +13,48 @@ export const ROUTES = [
   ['/genres', () => import('./pages/genres.js')],
   ['/genre/:type/:genre', () => import('./pages/genres.js')],
   ['/mood', () => import('./pages/mood.js')],
-  ['/surprise', () => import('./pages/surprise.js')],
   ['/calendar', () => import('./pages/calendar.js')],
-  ['/world', () => import('./pages/world.js')],
-  ['/world/:country', () => import('./pages/world.js')],
-  ['/time', () => import('./pages/timemachine.js')],
   ['/collections', () => import('./pages/collections.js')],
   ['/collection/:slug', () => import('./pages/collections.js')],
   ['/person/:name', () => import('./pages/people.js')],
   ['/people', () => import('./pages/people.js')],
   ['/watchlist', () => import('./pages/watchlist.js')],
   ['/diary', () => import('./pages/diary.js')],
-  ['/wrapped', () => import('./pages/wrapped.js')],
   ['/add', () => import('./pages/add.js')],
   ['/profiles', () => import('./pages/profiles.js')],
   ['/settings', () => import('./pages/settings.js')],
   ['/welcome', () => import('./pages/welcome.js')],
   ['/import', () => import('./pages/settings.js')],                  // #/import?d=<backup> (from a QR code)
-  ['/kit', () => import('./pages/kit.js')],                          // living style guide
 ];
+const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+if (LOCAL) ROUTES.push(['/kit', () => import('./pages/kit.js')]);  // living style guide (dev only)
+
+// Old sections that were merged into others: keep bookmarks working.
+const decadeOf = x => { const n = parseInt(x, 10); return n >= 1900 ? String(Math.floor(n / 10) * 10) : ''; };
+function redirectOf(path, query) {
+  const [, a, b] = path.split('/');
+  const q = o => { const s = new URLSearchParams(Object.entries(o).filter(([, v]) => v)).toString(); return s ? '?' + s : ''; };
+  if (a === 'surprise') return '#/mood';
+  if (a === 'time' || a === 'timemachine') return '#/genres' + q({ decade: decadeOf(b || query.d || query.decade), t: query.t });
+  if (a === 'world') return '#/collections' + q({ country: b });
+  if (a === 'wrapped') return '#/diary' + q({ wrapped: 1, year: query.year, demo: query.demo });
+  return null;
+}
+
+const decode = x => { try { return decodeURIComponent(x); } catch { return x; } };
 
 export function parseHash(h = location.hash) {
   const raw = h.replace(/^#/, '') || '/';
-  const [path, qs = ''] = raw.split('?');
+  const [p, qs = ''] = raw.split('?');
+  const path = p.replace(/\/+$/, '') || '/';
   const query = Object.fromEntries(new URLSearchParams(qs));
+  const redirect = redirectOf(path, query);
+  if (redirect) return { ...parseHash(redirect), redirect };
   for (const [pattern, load] of ROUTES) {
     const pp = pattern.split('/'), xs = path.split('/');
     if (pp.length !== xs.length) continue;
     const params = {};
-    if (pp.every((p, i) => (p.startsWith(':') ? ((params[p.slice(1)] = decodeURIComponent(xs[i])), true) : p === xs[i]))) {
+    if (pp.every((p, i) => (p.startsWith(':') ? ((params[p.slice(1)] = decode(xs[i])), true) : p === xs[i]))) {
       return { path, pattern, params, query, load };
     }
   }

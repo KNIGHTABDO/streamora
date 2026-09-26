@@ -2,25 +2,33 @@
 // Props:
 //   meta, video (episode or null), stream {hls, direct, downloadId, filename}, info (mediaInfos or null),
 //   start (seconds), source {infoHash, fileIdx, binge, release, quality} | null, noProgress,
-//   onFatal(err) (stream died: parent tries another source), onPickSource(), onBack()
+//   onFatal(err, pos) (stream died or stalled; pos = real seconds to resume at: parent tries another source), onPickSource(), onBack()
+// Emits window 'streamora:playback' events (see emit()).
 import { html, useState, useEffect, useRef, useMemo, useCallback } from '../../vendor/preact-htm.js';
 import { Icon, Reel, cx, fmtTime, toast, Img } from '../ui/components.js';
 import { registerIcons } from '../ui/icons.js';
 import { underlinePath, scribbleLoop, roughRect, hash } from '../ui/sketch.js';
 import { useStore, settings } from '../core/store.js';
-import { saveProgress, epState } from '../core/progress.js';
+import { saveProgress, epState, showPrefs } from '../core/progress.js';
+import { watchHref } from '../lib/play.js';
 import { nextVideo, seasonsOf, isReleased } from '../core/meta.js';
 import { isPhone } from '../core/sources.js';
 import { navigate } from '../router.js';
 import { moveFocus } from '../ui/focus.js';
 import { attach, buildUrl, autoQuality, QUALITIES, isIOS, isSafari } from './engine.js';
-import { openSubs, loadSubFile, cuesAt, toVTT, langName } from './subs.js';
+import { openSubs, loadSubFile, parseSubs, decodeSubs, cuesAt, toVTT, langName } from './subs.js';
+import { skipTimes } from './skip.js';
 
 registerIcons({
   episodes: { d: 'M3.6 5.2h11.6M3.5 10.1h11.7M3.6 15h7.9M17.2 12.6l3.6 2.4-3.6 2.5zM3.5 19.8h7.9' },
   moon2: { d: 'M18.6 14.4c-4.6 1.2-9-2.2-9-7 0-1.2.3-2.3.8-3.3-3.6 1-6.1 4.3-6 8.1.1 4.6 3.9 8.3 8.5 8.2 3.2 0 5.9-2 7.1-4.8zM16.4 3.9h3.2l-3.2 3.6h3.3', fill: 'M18.6 14.4c-4.6 1.2-9-2.2-9-7 0-1.2.3-2.3.8-3.3-3.6 1-6.1 4.3-6 8.1.1 4.6 3.9 8.3 8.5 8.2 3.2 0 5.9-2 7.1-4.8z' },
   source: { d: 'M4.1 5.1h15.8M4.1 12h15.8M4.1 18.9h15.8M8.2 3.2v3.9M15.6 10.1v3.9M10.4 17v3.8' },
 });
+
+// consecutive auto-played episodes without any input; after STILL_AFTER we ask "Still watching?"
+const AUTO_KEY = 'streamora:autoNextRuns', STILL_AFTER = 3;
+const autoRuns = () => { try { return +sessionStorage.getItem(AUTO_KEY) || 0; } catch { return 0; } };
+const resetAutoRuns = () => { try { sessionStorage.removeItem(AUTO_KEY); } catch {} };
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 const SLEEP = [{ id: 'off', label: 'Off' }, { id: 'end', label: 'End of this episode' }, { id: '15', label: '15 minutes' }, { id: '30', label: '30 minutes' }, { id: '60', label: '1 hour' }];
@@ -52,10 +60,19 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const vRef = useRef(), boxRef = useRef();
   const phone = useMemo(isPhone, []);
   const height = info && info.details && Object.values(info.details.video || {})[0]?.height;
+  const fatalRef = useRef(onFatal);
+  fatalRef.current = onFatal;
+  const fatal = (e, pos) => fatalRef.current && fatalRef.current(e, pos);
+  // per-show memory (audio language, subtitle language or 'off', speed): read once, written on save when the viewer changes one
+  const mem = useMemo(() => (noProgress || !meta ? {} : showPrefs(meta.id)), []);
+  const picked = useRef({});
+  // started from 0 on a finished episode/movie = a rewatch, so it may become unwatched again
+  const rewatch = useMemo(() => !start && !!meta && !!(epState(meta.id, video && video.id) || {}).done, []);
+  const rateRef = useRef(mem.rate || 1);
 
   // ------------------------------------------------ stream selection
   const [quality, setQuality] = useState(() => (s.quality && s.quality !== 'auto' ? s.quality : autoQuality(height, phone)));
-  const [audio, setAudio] = useState(() => pickAudio(info, s.audioLang));
+  const [audio, setAudio] = useState(() => pickAudio(info, mem.audioLang || s.audioLang));
   const [burn, setBurn] = useState('none');            // embedded subtitle key burned into the video
   const url = useMemo(() => {
     if (info && info.modelUrl && audio) return buildUrl(info.modelUrl, { audio, subs: burn, quality });
@@ -64,7 +81,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   }, [info, audio, burn, quality, stream]);
 
   // ------------------------------------------------ playback state
-  const [st, setSt] = useState({ playing: false, t: start, dur: 0, buf: 0, waiting: true, vol: 1, muted: false, rate: 1, ended: false });
+  const [st, setSt] = useState({ playing: false, t: start, dur: 0, buf: 0, waiting: true, vol: 1, muted: false, rate: rateRef.current, ended: false });
   const [blocked, setBlocked] = useState(false);       // autoplay refused
   const [started, setStarted] = useState(false);       // first frame shown (drop the backdrop behind the video)
   const [ui, setUi] = useState(true);                  // controls visible
@@ -89,43 +106,67 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     hideT.current = setTimeout(() => { const v = vRef.current; if (v && !v.paused) { setUi(false); setMenu(m => (m === 'episodes' ? m : null)); } }, 3200);
   }, []);
 
+  // Playback events for scrobblers (Trakt): window 'streamora:playback' { state: 'start'|'pause'|'stop', meta, video, progress 0-100 }
+  const pctRef = useRef(0);
+  const emit = state => {
+    if (!meta || noProgress) return;
+    try { window.dispatchEvent(new CustomEvent('streamora:playback', { detail: { state, meta, video, progress: +pctRef.current.toFixed(2) } })); } catch {}
+  };
+
   // attach / re-attach when the url changes (keep position)
   useEffect(() => {
     const v = vRef.current;
-    if (!url) { onFatal && onFatal(new Error('No playable stream for this file.')); return; }
+    if (!url) { fatal(new Error('No playable stream for this file.'), posRef.current); return; }
     let detach = () => {}, dead = false;
     seekPending.current = false;
     const o = isTc ? Math.max(0, Math.floor(posRef.current)) : 0;
     offRef.current = o; setOff(o);
     const src = o > 0 ? `${url}${url.includes('?') ? '&' : '?'}t=${o}` : url;
     setSt(x => ({ ...x, waiting: true }));
-    attach(v, src, { start: isTc ? 0 : posRef.current, onFatal: e => !dead && onFatal && onFatal(e) }).then(d => {
+    attach(v, src, { start: isTc ? 0 : posRef.current, onFatal: (e, p) => !dead && fatal(e, offRef.current + (p || 0)) }).then(d => {
       if (dead) return d();
       detach = d;
-      v.playbackRate = st.rate;
+      v.playbackRate = rateRef.current;
       const p = v.play();
       p && p.catch(() => setBlocked(true));
-    }, e => onFatal && onFatal(e));
+    }, e => !dead && fatal(e, posRef.current));
     return () => { dead = true; if (!seekPending.current && v.currentTime > 0) posRef.current = realNow(v); detach(); };
   }, [url, reload]);
 
   useEffect(() => {
     const v = vRef.current;
-    const up = () => setSt(x => ({ ...x, t: realNow(v), dur: realDur(v) || x.dur, buf: offRef.current + (v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0) }));
+    const up = () => {
+      const dur = realDur(v);
+      if (dur && v.currentTime > 0) pctRef.current = Math.min(100, realNow(v) / dur * 100);
+      setSt(x => ({ ...x, t: realNow(v), dur: dur || x.dur, buf: offRef.current + (v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0) }));
+    };
+    const ms ='mediaSession' in navigator ? navigator.mediaSession : null;
+    let posAt = 0;
+    const position = () => {
+      const now = Date.now(), dur = realDur(v);
+      if (!ms || !ms.setPositionState || now - posAt < 1000 || !dur || !isFinite(dur)) return;
+      posAt = now;
+      try { ms.setPositionState({ duration: dur, position: Math.min(dur, Math.max(0, realNow(v))), playbackRate: v.playbackRate || 1 }); } catch {}
+    };
+    // stall watchdog: stuck buffering for 25s while meant to be playing → let the parent try another source
+    let stallT;
+    const stall = () => { clearTimeout(stallT); stallT = setTimeout(() => { if (!v.paused && v.readyState < 3) fatal(new Error('The stream stalled.'), realNow(v)); }, 25000); };
+    const unstall = () => clearTimeout(stallT);
     const ev = {
-      timeupdate: up, durationchange: up, progress: up,
-      play: () => { setBlocked(false); setSt(x => ({ ...x, playing: true, ended: false })); poke(); },
-      pause: () => { setSt(x => ({ ...x, playing: false })); setUi(true); save(); },
-      waiting: () => setSt(x => ({ ...x, waiting: true })),
-      playing: () => { setStarted(true); setSt(x => ({ ...x, waiting: false })); },
-      canplay: () => setSt(x => ({ ...x, waiting: false })),
+      timeupdate: () => { up(); position(); }, durationchange: up, progress: up,
+      play: () => { setBlocked(false); setSt(x => ({ ...x, playing: true, ended: false })); poke(); ms && (ms.playbackState = 'playing'); emit('start'); },
+      pause: () => { setSt(x => ({ ...x, playing: false })); setUi(true); save(); unstall(); ms && (ms.playbackState = 'paused'); if (!v.ended) emit('pause'); },
+      waiting: () => { setSt(x => ({ ...x, waiting: true })); stall(); },
+      stalled: stall,
+      playing: () => { setStarted(true); setSt(x => ({ ...x, waiting: false })); unstall(); },
+      canplay: () => { setSt(x => ({ ...x, waiting: false })); unstall(); },
       seeked: up,
       volumechange: () => setSt(x => ({ ...x, vol: v.volume, muted: v.muted })),
-      ratechange: () => setSt(x => ({ ...x, rate: v.playbackRate })),
-      ended: () => { setSt(x => ({ ...x, ended: true, playing: false })); save(true); },
+      ratechange: () => { rateRef.current = v.playbackRate; setSt(x => ({ ...x, rate: v.playbackRate })); },
+      ended: () => { setSt(x => ({ ...x, ended: true, playing: false })); save(true); pctRef.current = 100; emit('stop'); },
     };
     for (const [k, f] of Object.entries(ev)) v.addEventListener(k, f);
-    return () => { for (const [k, f] of Object.entries(ev)) v.removeEventListener(k, f); };
+    return () => { unstall(); if (!v.ended) emit('stop'); for (const [k, f] of Object.entries(ev)) v.removeEventListener(k, f); };
   }, []);
 
   // ------------------------------------------------ progress
@@ -134,7 +175,8 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     if (noProgress || !v || !meta) return;
     const dur = realDur(v);
     const t = final ? dur : realNow(v);
-    if (dur && isFinite(dur)) saveProgress(meta, video, t, dur, source && { infoHash: source.infoHash, fileIdx: source.fileIdx, binge: source.binge });
+    const prefs = Object.keys(picked.current).length ? picked.current : null;
+    if (dur && isFinite(dur)) saveProgress(meta, video, t, dur, source && { infoHash: source.infoHash, fileIdx: source.fileIdx, binge: source.binge, filename: source.filename || null }, { prefs, restart: rewatch });
   }, [meta, video, source, noProgress]);
   useEffect(() => {
     const i = setInterval(() => vRef.current && !vRef.current.paused && save(), 5000);
@@ -146,54 +188,85 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
 
   // ------------------------------------------------ wake lock + media session
   useEffect(() => {
-    let lock = null;
-    if (st.playing && navigator.wakeLock) navigator.wakeLock.request('screen').then(l => (lock = l), () => {});
-    return () => lock && lock.release().catch(() => {});
+    if (!st.playing || !navigator.wakeLock) return;
+    let lock = null, gone = false;
+    const get = () => navigator.wakeLock.request('screen').then(l => { if (gone) l.release().catch(() => {}); else lock = l; }, () => {});
+    // the browser drops the lock whenever the tab is hidden: take it again on return
+    const vis = () => document.visibilityState === 'visible' && get();
+    get();
+    document.addEventListener('visibilitychange', vis);
+    return () => { gone = true; document.removeEventListener('visibilitychange', vis); lock && lock.release().catch(() => {}); };
   }, [st.playing]);
   const next = useMemo(() => (video && meta ? nextVideo(meta, video.id) : null), [meta, video]);
   const title = meta ? meta.name : stream.filename;
   const sub = video ? `S${video.season} · E${video.episode}${video.name || video.title ? ' · ' + (video.name || video.title) : ''}` : '';
-  const goNext = useCallback(() => {
+  // keep the same release for the next episode (watch falls back to ranked sources if it lacks that episode)
+  const goNext = useCallback(auto => {
     if (!next) return;
     save();
-    navigate(`#/watch/${meta.type}/${encodeURIComponent(meta.id)}?v=${encodeURIComponent(next.id)}`, { replace: true });
-  }, [next, meta, save]);
+    try { sessionStorage.setItem(AUTO_KEY, auto === true ? autoRuns() + 1 : 0); } catch {}
+    navigate(watchHref(meta, next, 0, source && source.infoHash ? { infoHash: source.infoHash } : null), { replace: true });
+  }, [next, meta, save, source]);
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
+    const ms = navigator.mediaSession;
+    const acts = ['play', 'pause', 'seekbackward', 'seekforward', 'seekto', 'nexttrack'];
     try {
       navigator.mediaSession.metadata = new MediaMetadata({ title: sub ? `${title} · ${sub}` : title, artist: 'Streamora', artwork: meta && meta.poster ? [{ src: meta.poster, sizes: '300x450', type: 'image/jpeg' }] : [] });
-      const v = vRef.current, ms = navigator.mediaSession;
+      const v = vRef.current;
       ms.setActionHandler('play', () => v.play());
       ms.setActionHandler('pause', () => v.pause());
       ms.setActionHandler('seekbackward', d => seekRef.current(realNow(v) - (d.seekOffset || 10)));
       ms.setActionHandler('seekforward', d => seekRef.current(realNow(v) + (d.seekOffset || 10)));
       ms.setActionHandler('seekto', d => seekRef.current(d.seekTime));
-      ms.setActionHandler('nexttrack', next ? goNext : null);
+      ms.setActionHandler('nexttrack', next ? () => goNext() : null);
     } catch {}
-  }, [title, sub, next]);
+    return () => {
+      for (const a of acts) try { ms.setActionHandler(a, null); } catch {}
+      try { ms.metadata = null; ms.playbackState = 'none'; } catch {}
+    };
+  }, [title, sub, next, goNext]);
 
   // ------------------------------------------------ subtitles (external, own overlay)
   const [ext, setExt] = useState([]);               // available OpenSubtitles
   const [cur, setCur] = useState(null);             // { id, label, cues }
   const [delay, setDelay] = useState(0);
   const [line, setLine] = useState([]);
+  const [subQ, setSubQ] = useState('');
   useEffect(() => {
     if (!meta || String(meta.id).startsWith('rd:')) return;
     openSubs(meta.type, video ? video.id : meta.id).then(list => {
       setExt(list);
-      // auto-pick: subtitles only when the audio isn't in the viewer's language
+      // auto-pick: this show's remembered language, else the preferred one when the audio isn't in it
+      // (unknown / 'und' audio counts as "not in it")
+      const want = mem.subLang || s.subsLang;
+      if (!want || want === 'off') return;
       const aud = info && info.details && info.details.audio && audio && info.details.audio[audio];
-      if (aud && aud.lang_iso !== 'und' && aud.lang_iso !== s.subsLang && s.subsLang) {
-        const hit = list.find(x => x.lang === s.subsLang);
+      const same = aud && aud.lang_iso && !/^(und|unk)$/i.test(aud.lang_iso) && aud.lang_iso === want;
+      if (mem.subLang || !same) {
+        const hit = list.find(x => x.lang === want);
         if (hit) chooseExt(hit);
       }
     });
   }, [meta && meta.id, video && video.id]);
-  const chooseExt = async it => {
+  const chooseExt = async (it, user) => {
+    if (user) picked.current.subLang = it ? it.lang : 'off';
     if (!it) { setCur(null); return; }
     setCur({ id: it.id, label: it.label, cues: [], loading: true });
-    try { const cues = await loadSubFile(it.url); setCur({ id: it.id, label: it.label, cues }); }
+    try { showCues(it, await loadSubFile(it.url, it.lang)); }
     catch (e) { setCur(null); toast('That subtitle file would not load', { kind: 'warn' }); }
+  };
+  const showCues = (it, cues) => {
+    if (!cues.length) { setCur(null); toast('That subtitle file has no lines I can read', { kind: 'warn' }); return; }
+    setCur({ id: it.id, label: it.label, cues });
+  };
+  const loadLocal = async e => {
+    const f = e.currentTarget.files && e.currentTarget.files[0];
+    e.currentTarget.value = '';
+    if (!f) return;
+    setBurn('none');
+    try { showCues({ id: 'file:' + f.name, label: f.name }, parseSubs(decodeSubs(await f.arrayBuffer(), s.subsLang))); }
+    catch { toast('That subtitle file would not load', { kind: 'warn' }); }
   };
   useEffect(() => {
     if (!cur || !cur.cues.length) { setLine([]); return; }
@@ -241,10 +314,18 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   // ------------------------------------------------ up next card
   const [nextDismissed, setNextDismissed] = useState(false);
   const [count, setCount] = useState(10);
-  const showNext = !!next && isReleased(next) && !nextDismissed && st.dur > 0 && (st.ended || st.dur - st.t < 22) && sleep.id !== 'end' && !asleep;
+  // anime: AniSkip opening / ending times (null until loaded, or when unknown → heuristics below)
+  const [skip, setSkip] = useState(null);
+  useEffect(() => { let ok = true; skipTimes(meta, video).then(x => ok && setSkip(x)); return () => { ok = false; }; }, []);
+  const credits = skip && skip.ed && skip.ed[0] > 60 ? st.t >= skip.ed[0] : st.dur - st.t < 22;
+  const [stillAsk, setStillAsk] = useState(false);   // "Still watching?" after STILL_AFTER auto-played episodes
+  const showNext = !!next && isReleased(next) && !nextDismissed && !stillAsk && st.dur > 0 && (st.ended || credits) && sleep.id !== 'end' && !asleep;
   useEffect(() => {
     if (!showNext || !s.autoNext) return;
-    if (count <= 0) { goNext(); return; }
+    if (count <= 0) {
+      if (autoRuns() >= STILL_AFTER) { v() && v().pause(); setStillAsk(true); } else goNext(true);
+      return;
+    }
     const i = setTimeout(() => setCount(c => c - 1), 1000);
     return () => clearTimeout(i);
   }, [showNext, count, s.autoNext]);
@@ -286,8 +367,14 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const [isFs, setFs] = useState(false);
   useEffect(() => {
     const on = () => setFs(!!fsEl());
+    // iPhone: native video fullscreen only fires these on the <video>
+    const x = v(), vIn = () => setFs(true), vOut = () => setFs(false);
     document.addEventListener('fullscreenchange', on); document.addEventListener('webkitfullscreenchange', on);
-    return () => { document.removeEventListener('fullscreenchange', on); document.removeEventListener('webkitfullscreenchange', on); };
+    x.addEventListener('webkitbeginfullscreen', vIn); x.addEventListener('webkitendfullscreen', vOut);
+    return () => {
+      document.removeEventListener('fullscreenchange', on); document.removeEventListener('webkitfullscreenchange', on);
+      x.removeEventListener('webkitbeginfullscreen', vIn); x.removeEventListener('webkitendfullscreen', vOut);
+    };
   }, []);
   const pip = async () => {
     const x = v();
@@ -333,36 +420,50 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   };
 
   // ------------------------------------------------ keyboard & remote
+  // the handler is rebuilt every render (it reads fresh state); the listener is added once and calls the latest one
+  const keyRef = useRef();
+  keyRef.current = e => {
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) && e.target.type !== 'range' || e.target.isContentEditable;
+    if (typing) return;
+    resetAutoRuns();
+    const onControl = e.target.closest && e.target.closest('.pl-ui button, .pl-ui a, .pl-menu, .pl-still');
+    const k = e.key;
+    const hover = matchMedia('(hover: hover)').matches;
+    if (k === ' ' || k === 'k' || k === 'MediaPlayPause') { if (k === ' ' && onControl) return; e.preventDefault(); toggle(); poke(); }
+    else if (k === 'j') seekBy(-10);
+    else if (k === 'l') seekBy(10);
+    else if (k === 'f') fullscreen();
+    else if (k === 'm') { v().muted = !v().muted; poke(); }
+    else if (k === 'c') { setMenu(m => (m === 'subs' ? null : 'subs')); poke(); }
+    else if (k === 'n' && next) goNext();
+    else if (k === 'MediaFastForward') { e.preventDefault(); seekBy(30); }
+    else if (k === 'MediaRewind') { e.preventDefault(); seekBy(-30); }
+    else if (k === 'MediaTrackNext' && next) { e.preventDefault(); goNext(); }
+    else if (k === 'MediaStop') { e.preventDefault(); v().pause(); onBack && onBack(); }
+    else if (k === 'Escape' || k === 'GoBack' || k === 'BrowserBack' || k === 'Backspace') {
+      e.preventDefault();
+      if (menu) setMenu(null);
+      else if (k === 'Escape' && fsEl()) fullscreen();
+      else onBack && onBack();
+    }
+    else if (k === 'ArrowLeft' || k === 'ArrowRight') {
+      e.preventDefault();
+      if (onControl && ui) { moveFocus(k) || null; poke(); }
+      else seekBy(k === 'ArrowLeft' ? -5 : 5);
+    } else if (k === 'ArrowUp' || k === 'ArrowDown') {
+      e.preventDefault();
+      if (!ui) { poke(); return; }
+      if (hover && !onControl) setVol(v().volume + (k === 'ArrowUp' ? .1 : -.1));
+      else moveFocus(k);
+      poke();
+    } else if (k === 'Enter' && !onControl) { e.preventDefault(); toggle(); poke(); }
+  };
   useEffect(() => {
-    const onKey = e => {
-      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
-      if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) && e.target.type !== 'range') return;
-      const onControl = e.target.closest && e.target.closest('.pl-ui button, .pl-ui a, .pl-menu');
-      const k = e.key;
-      const hover = matchMedia('(hover: hover)').matches;
-      if (k === ' ' || k === 'k' || k === 'MediaPlayPause') { if (k === ' ' && onControl) return; e.preventDefault(); toggle(); poke(); }
-      else if (k === 'j') seekBy(-10);
-      else if (k === 'l') seekBy(10);
-      else if (k === 'f') fullscreen();
-      else if (k === 'm') { v().muted = !v().muted; poke(); }
-      else if (k === 'c') { setMenu(m => (m === 'subs' ? null : 'subs')); poke(); }
-      else if (k === 'n' && next) goNext();
-      else if (k === 'Escape' && menu) { setMenu(null); }
-      else if (k === 'ArrowLeft' || k === 'ArrowRight') {
-        e.preventDefault();
-        if (onControl && ui) { moveFocus(k) || null; poke(); }
-        else seekBy(k === 'ArrowLeft' ? -5 : 5);
-      } else if (k === 'ArrowUp' || k === 'ArrowDown') {
-        e.preventDefault();
-        if (!ui) { poke(); return; }
-        if (hover && !onControl) setVol(v().volume + (k === 'ArrowUp' ? .1 : -.1));
-        else moveFocus(k);
-        poke();
-      } else if (k === 'Enter' && !onControl) { e.preventDefault(); toggle(); poke(); }
-    };
+    const onKey = e => keyRef.current(e);
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
-  });
+  }, []);
 
   // ------------------------------------------------ touch: tap = controls, double tap sides = ±10
   const lastTap = useRef(0);
@@ -393,16 +494,22 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const embedded = useMemo(() => trackLabels((info && info.details && info.details.subtitles) || {}), [info]);
   const extByLang = useMemo(() => {
     const m = new Map();
-    for (const x of ext) { if (!m.has(x.lang)) m.set(x.lang, []); m.get(x.lang).push(x); }
+    const q = subQ.trim().toLowerCase();
+    for (const x of ext) {
+      if (q && !`${x.label} ${x.lang} ${x.release}`.toLowerCase().includes(q)) continue;
+      if (!m.has(x.lang)) m.set(x.lang, []); m.get(x.lang).push(x);
+    }
     return [...m.entries()].sort((a, b) => (b[0] === s.subsLang) - (a[0] === s.subsLang) || a[1][0].label.localeCompare(b[1][0].label));
-  }, [ext]);
+  }, [ext, subQ]);
   const pct = st.dur ? st.t / st.dur : 0;
   const subStyle = `--sub-size:${(s.subsSize || 100) / 100};--sub-color:${s.subsColor || '#fffbe8'};--sub-bg:rgba(0,0,0,${s.subsBg ?? .35})`;
-  const inIntro = !!video && st.t > 5 && st.t < 180 && st.dur > 600;
+  const op = skip && skip.op;
+  const inIntro = op ? st.t >= op[0] && st.t < op[1] - 1 : !!video && st.t > 5 && st.t < 180 && st.dur > 600;
+  const skipIntro = () => (op ? seekTo(op[1]) : seekBy(s.skipIntroSec || 85));
 
   return html`<div class=${cx('player', ui ? 'show-ui' : 'hide-ui', st.waiting && 'is-waiting')} ref=${boxRef} data-own-arrows data-focus-scope
-      onPointerMove=${e => e.pointerType === 'mouse' && poke()} style=${subStyle}>
-    <video ref=${vRef} class="pl-video" playsinline webkit-playsinline preload="auto" crossorigin="anonymous" x-webkit-airplay="allow"
+      onPointerMove=${e => e.pointerType === 'mouse' && poke()} onPointerDown=${resetAutoRuns} style=${subStyle}>
+    <video ref=${vRef} class="pl-video" playsinline webkit-playsinline autopictureinpicture preload="auto" crossorigin="anonymous" x-webkit-airplay="allow"
       style=${meta && meta.background && !started ? `background:#000 url("${meta.background}") center/cover no-repeat` : ''}>
       ${trackUrl && html`<track kind="subtitles" src=${trackUrl} srclang=${s.subsLang || 'en'} label=${cur && cur.label} default />`}
     </video>
@@ -436,7 +543,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       </div>
 
       <div class="pl-bottom">
-        ${inIntro && html`<button type="button" class="pl-chip pl-skipintro" onClick=${() => seekBy(s.skipIntroSec || 85)}><${Icon} name="skip" size=${18} /> Skip intro</button>`}
+        ${inIntro && html`<button type="button" class="pl-chip pl-skipintro" onClick=${skipIntro}><${Icon} name="skip" size=${18} /> Skip intro</button>`}
         <${SeekBar} t=${st.t} dur=${st.dur} buf=${st.buf} onSeek=${seekTo} seed=${hash(String(meta && meta.id))} onActive=${poke} />
         <div class="pl-row">
           <button type="button" class="pl-btn" onClick=${toggle} aria-label=${st.playing ? 'Pause' : 'Play'}><${Icon} name=${st.playing ? 'pause' : 'play'} /></button>
@@ -460,33 +567,36 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     </div>
 
     ${menu === 'subs' && html`<${Menu} title="Subtitles" onClose=${() => setMenu(null)}>
-      <${Item} on=${!cur && burn === 'none'} onClick=${() => { chooseExt(null); setBurn('none'); }}>Off<//>
+      <${Item} on=${!cur && burn === 'none'} onClick=${() => { chooseExt(null, true); setBurn('none'); }}>Off<//>
+      <label class="pl-chip pl-subfile"><${Icon} name="upload" size=${16} /> Load file…<input type="file" accept=".srt,.vtt,.ass,.ssa" onChange=${loadLocal} /></label>
       ${cur && html`<div class="pl-delay"><span>Timing</span>
         <button type="button" class="pl-chip" onClick=${() => setDelay(d => +(d - .25).toFixed(2))}>−¼s</button>
         <span class="type">${delay > 0 ? '+' : ''}${delay.toFixed(2)}s</span>
         <button type="button" class="pl-chip" onClick=${() => setDelay(d => +(d + .25).toFixed(2))}>+¼s</button>
       </div>`}
       ${embedded.length > 0 && html`<div class="pl-menu-kicker kicker type">in the file (burned in)</div>`}
-      ${embedded.map(([k, x, label]) => html`<${Item} on=${burn === k} onClick=${() => { chooseExt(null); setBurn(k); }}>${label}${x.type && html` <span class="faint type">${String(x.type).toUpperCase()}</span>`}<//>`)}
-      ${extByLang.length > 0 && html`<div class="pl-menu-kicker kicker type">opensubtitles</div>`}
-      ${extByLang.map(([lang, list]) => html`<details class="pl-sublang" open=${lang === s.subsLang}>
+      ${embedded.map(([k, x, label]) => html`<${Item} on=${burn === k} onClick=${() => { chooseExt(null); setBurn(k); picked.current.subLang = x.lang_iso && !/^(und|unk)$/i.test(x.lang_iso) ? x.lang_iso : 'off'; }}>${label}${x.type && html` <span class="faint type">${String(x.type).toUpperCase()}</span>`}<//>`)}
+      ${ext.length > 0 && html`<div class="pl-menu-kicker kicker type">opensubtitles</div>
+        <input type="search" class="pl-subfilter" placeholder="Filter by language or release…" value=${subQ} onInput=${e => setSubQ(e.currentTarget.value)} aria-label="Filter subtitles" />`}
+      ${extByLang.map(([lang, list]) => html`<details class="pl-sublang" open=${lang === s.subsLang || !!subQ}>
         <summary>${list[0].label} <span class="faint type">${list.length}</span></summary>
-        ${list.slice(0, 8).map(x => html`<${Item} on=${cur && cur.id === x.id} onClick=${() => { setBurn('none'); chooseExt(x); }}><span class="pl-sub-rel">${x.release || x.label}</span><//>`)}
+        ${list.slice(0, subQ ? 30 : 8).map(x => html`<${Item} on=${cur && cur.id === x.id} onClick=${() => { setBurn('none'); chooseExt(x, true); }}><span class="pl-sub-rel">${x.release || x.label}</span><//>`)}
       </details>`)}
-      ${!embedded.length && !extByLang.length && html`<p class="faint">No subtitles found for this one.</p>`}
+      ${subQ && !extByLang.length && html`<p class="faint">Nothing matches “${subQ}”.</p>`}
+      ${!embedded.length && !ext.length && html`<p class="faint">No subtitles found for this one.</p>`}
     <//>`}
 
     ${menu === 'audio' && html`<${Menu} title="Audio" onClose=${() => setMenu(null)}>
-      ${audios.map(([k, a]) => html`<${Item} on=${audio === k} onClick=${() => setAudio(k)}>${a.lang || langName(a.lang_iso)} <span class="faint type">${a.codec} ${a.channels}</span><//>`)}
+      ${audios.map(([k, a]) => html`<${Item} on=${audio === k} onClick=${() => { setAudio(k); picked.current.audioLang = a.lang_iso; }}>${a.lang || langName(a.lang_iso)} <span class="faint type">${a.codec} ${a.channels}</span><//>`)}
     <//>`}
 
     ${menu === 'settings' && html`<${Menu} title="Settings" onClose=${() => setMenu(null)}>
       <div class="pl-menu-kicker kicker type">quality</div>
       <div class="pl-grid">${QUALITIES.filter(q => info ? true : stream.hls && stream.hls[q.key]).map(q => html`<button type="button" class=${cx('pl-chip', quality === q.key && 'on')} onClick=${() => setQuality(q.key)}>${q.label}</button>`)}</div>
       ${audios.length > 1 && html`<div class="pl-menu-kicker kicker type">audio</div>
-        <div class="pl-grid">${audios.map(([k, a]) => html`<button type="button" class=${cx('pl-chip', audio === k && 'on')} onClick=${() => setAudio(k)}>${a.lang || langName(a.lang_iso)}</button>`)}</div>`}
+        <div class="pl-grid">${audios.map(([k, a]) => html`<button type="button" class=${cx('pl-chip', audio === k && 'on')} onClick=${() => { setAudio(k); picked.current.audioLang = a.lang_iso; }}>${a.lang || langName(a.lang_iso)}</button>`)}</div>`}
       <div class="pl-menu-kicker kicker type">speed</div>
-      <div class="pl-grid">${SPEEDS.map(r => html`<button type="button" class=${cx('pl-chip', st.rate === r && 'on')} onClick=${() => (v().playbackRate = r)}>${r}×</button>`)}</div>
+      <div class="pl-grid">${SPEEDS.map(r => html`<button type="button" class=${cx('pl-chip', st.rate === r && 'on')} onClick=${() => { v().playbackRate = r; picked.current.rate = r; }}>${r}×</button>`)}</div>
       <div class="pl-menu-kicker kicker type">sleep timer</div>
       <div class="pl-grid">${SLEEP.filter(x => x.id !== 'end' || video).map(x => html`<button type="button" class=${cx('pl-chip', sleep.id === x.id && 'on')}
         onClick=${() => setSleep({ id: x.id, at: x.id === 'off' || x.id === 'end' ? 0 : Date.now() + +x.id * 60e3 })}>${x.label}</button>`)}</div>
@@ -517,6 +627,16 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
           Play${s.autoNext ? ` in ${count}` : ''}
         </button>
         <button type="button" class="pl-chip" onClick=${() => setNextDismissed(true)}>Keep watching</button>
+      </div>
+    </div>`}
+
+    ${stillAsk && html`<div class="pl-sleep pl-still" role="dialog" aria-label="Still watching?">
+      <${Reel} mood="yawn" size=${150} />
+      <h2>Still watching?</h2>
+      <p class="muted">That's ${STILL_AFTER} episodes in a row. Up next: S${next.season} · E${next.episode}.</p>
+      <div class="pl-next-actions">
+        <button type="button" class="pl-chip on" autofocus onClick=${() => { resetAutoRuns(); goNext(); }}><${Icon} name="play" size=${18} /> Keep going</button>
+        <button type="button" class="pl-chip" onClick=${() => { resetAutoRuns(); onBack && onBack(); }}>I'm done</button>
       </div>
     </div>`}
 

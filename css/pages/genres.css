@@ -29,7 +29,7 @@
 }
 .sticker:hover .sticker-icon { animation: wiggle .5s ease-in-out; }
 .sticker-star {
-  position: absolute; top: -12px; right: -10px; font-size: 11px; padding: 2px 7px;
+  position: absolute; top: -12px; right: -10px; font-size: 14px; padding: 2px 7px;
   background: var(--paper-3); color: var(--a1); border: 2px solid var(--a1); border-radius: 10px; transform: rotate(8deg);
 }
 /* peeling corner */
@@ -45,3 +45,5 @@
   .sticker { font-size: 19px; min-height: 50px; padding: 7px 14px 8px 8px; }
   .sticker-icon { width: 34px; height: 34px; }
 }
+.genres-decade { margin-top: 18px; }
+.genres-decades .chips { margin-top: 4px; }

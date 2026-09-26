@@ -4,6 +4,6 @@
   "type": "module",
   "scripts": {
     "dev": "node dev-server.mjs",
-    "test": "node js/core/parse.js"
+    "test": "node --test tests/*.test.js && node js/core/parse.js"
   }
 }

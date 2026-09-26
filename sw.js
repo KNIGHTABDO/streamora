@@ -1,12 +1,13 @@
-// Streamora service worker: app shell stale-while-revalidate, never caches API/video/addon data.
-const VERSION = 'streamora-v1.0.0';
+// Streamora service worker: network-first app shell (cache only as offline fallback), never caches API/video/addon data.
+// tools/build.mjs stamps __BUILD__ with a content hash; in dev it stays as-is and the network always wins anyway.
+const VERSION = 'streamora-__BUILD__';
 const SHELL = ['./', './index.html', './css/paper.css', './css/components.css', './css/app.css', './js/main.js', './vendor/preact-htm.js', './art/icon.svg', './manifest.webmanifest'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).catch(() => {}).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('streamora-') && k !== VERSION && !k.startsWith('streamora-json')).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 const sameOriginShell = url => url.origin === location.origin && !url.pathname.startsWith('/api/') && /\.(html|css|js|mjs|svg|png|webmanifest|woff2?)$|\/$/.test(url.pathname);
@@ -16,12 +17,19 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  if (url.origin === location.origin && url.pathname.startsWith('/api/')) return;
   if (req.mode === 'navigate') {
-    e.respondWith(fetch(req).then(r => { const copy = r.clone(); caches.open(VERSION).then(c => c.put('./index.html', copy)); return r; })
+    e.respondWith(fetch(req).then(r => { if (r.ok) { const copy = r.clone(); caches.open(VERSION).then(c => c.put('./index.html', copy)); } return r; })
       .catch(async () => (await caches.match('./index.html')) || offline()));
     return;
   }
-  if (!(sameOriginShell(url) || fonts(url))) return; // API, video, m3u8, addon JSON: straight to network
+  if (sameOriginShell(url)) {
+    // network-first so a deploy shows up on the next load; cache is only the offline fallback
+    e.respondWith(fetch(req).then(r => { if (r.ok) { const copy = r.clone(); caches.open(VERSION).then(c => c.put(req, copy)); } return r; })
+      .catch(async () => (await caches.match(req)) || Response.error()));
+    return;
+  }
+  if (!fonts(url)) return; // video, m3u8, addon JSON: straight to network
   e.respondWith(caches.open(VERSION).then(async c => {
     const hit = await c.match(req);
     const net = fetch(req).then(r => { if (r.ok || r.type === 'opaque') c.put(req, r.clone()); return r; }).catch(() => hit);
@@ -49,3 +57,12 @@ function offline() {
 <button onclick="location.reload()" style="font:inherit;padding:10px 22px;background:#ffd23f;border:2.5px solid #1e1630;border-radius:10px 14px 9px 13px;box-shadow:3px 4px 0 #1e1630;cursor:pointer">Try again</button>
 </div></body>`, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || './#/calendar';
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
+    const c = cs.find(c => 'focus' in c);
+    return c ? c.navigate(url).then(w => (w || c).focus()) : self.clients.openWindow(url);
+  }));
+});

@@ -53,15 +53,23 @@ export function parseStream(s) {
 export async function streams(type, id) {
   const key = await getRdKey();
   const cfg = key ? `/sort=qualitysize|realdebrid=${key}` : '/sort=qualitysize';
+  const extraP = import('./addons.js').then(m => m.addonStreams(type, id)).catch(() => []);
   const r = await fetch(`${TORRENTIO}${cfg}/stream/${type}/${encodeURIComponent(id)}.json`);
   if (!r.ok) throw new Error(`Source search failed (${r.status})`);
   const j = await r.json();
-  return (j.streams || []).map(parseStream).filter(s => s.infoHash);
+  const extra = await extraP, seen = new Set((j.streams || []).map(s => s.infoHash));
+  return [...(j.streams || []), ...extra.filter(s => !seen.has(s.infoHash))].map(parseStream).filter(s => s.infoHash);
 }
+
+// Torrentio tags non-English releases with flag emojis. A release flagged only with other languages
+// (and not multi/dual audio) probably lacks the preferred audio track.
+const FLAGS = { eng: '🇬🇧🇺🇸', spa: '🇪🇸🇲🇽', fre: '🇫🇷', fra: '🇫🇷', ger: '🇩🇪', deu: '🇩🇪', ita: '🇮🇹', por: '🇵🇹🇧🇷', pob: '🇧🇷', rus: '🇷🇺', jpn: '🇯🇵', kor: '🇰🇷',
+  chi: '🇨🇳🇹🇼', zho: '🇨🇳🇹🇼', hin: '🇮🇳', ara: '🇸🇦🇦🇪🇪🇬', tur: '🇹🇷', pol: '🇵🇱', dut: '🇳🇱', nld: '🇳🇱', ukr: '🇺🇦' };
+const langMismatch = (s, lang) => !!lang && !!s.langs && s.langs.length > 0 && !s.dual && !s.langs.some(f => (FLAGS[lang] || '').includes(f));
 
 /**
  * Sort best-first for this device.
- * prefs: { maxQuality:'2160p'|'1080p'|..., cachedOnly, preferSmall (phones), preferBinge }
+ * prefs: { maxQuality:'2160p'|'1080p'|..., cachedOnly, preferSmall (phones), preferBinge, audioLang (ISO 639-2, e.g. 'eng') }
  */
 export function rankStreams(list, prefs = {}) {
   const max = QUALITY_RANK[prefs.maxQuality || '2160p'] ?? 4;
@@ -72,6 +80,7 @@ export function rankStreams(list, prefs = {}) {
     if (s.pack) x -= 1500;
     x += (s.rank <= max ? s.rank : max - (s.rank - max)) * 60;
     if (prefs.preferBinge && s.binge === prefs.preferBinge) x += 400;
+    if (langMismatch(s, prefs.audioLang)) x -= 300;
     const gb = s.size / 1e9;
     // huge remuxes transcode slowly; favour sane sizes, more so on phones
     x -= prefs.preferSmall ? gb * 4 : gb * 2 + Math.max(0, gb - 20) * 6;

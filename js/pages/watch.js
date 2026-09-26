@@ -67,7 +67,7 @@ function Session({ params, query }) {
     const id = video ? video.id : meta.id;
     const binge = (progress.get()[meta.id] || {}).source?.binge;
     // transcodes top out at 1080p unless "original" is chosen, so 4K files only cost start-up time
-    const prefs = { cachedOnly: s.cachedOnly !== false, preferSmall: isPhone(), preferBinge: binge, maxQuality: s.quality === 'original' ? '2160p' : '1080p' };
+    const prefs = { cachedOnly: s.cachedOnly !== false, preferSmall: isPhone(), preferBinge: binge, audioLang: s.audioLang, maxQuality: s.quality === 'original' ? '2160p' : '1080p' };
     Promise.all([streams(meta.type, id), torrents(1, 100).catch(() => [])]).then(([list, mine]) => {
       // sources already in the account start instantly (no new torrent added), so they go first
       const have = new Set((mine || []).filter(t => t.status === 'downloaded').map(t => t.hash.toLowerCase()));
@@ -95,11 +95,11 @@ function Session({ params, query }) {
   const tryFrom = async (list, i, manual) => {
     const me = ++gen.current;
     setErr(null); setReady(null);
-    for (let n = 0; i < list.length && (manual || n < MAX_AUTO); i++, n++) {
+    for (let n = 0; i < list.length && (manual || n < MAX_AUTO); i++) {
       const c = list[i];
       if (!manual && tried.current.has(c.infoHash)) continue;
       tried.current.add(c.infoHash);
-      setAttempt(n + 1);
+      setAttempt(++n);   // skipped (already tried) sources don't count toward MAX_AUTO
       try {
         const stream = await resolveStream({ infoHash: c.infoHash, fileIdx: c.fileIdx, filename: c.filename, season: video && video.season, episode: video && video.episode },
           t => me === gen.current && setStep(t));
@@ -120,8 +120,9 @@ function Session({ params, query }) {
   useEffect(() => { if (cands && cands.length) tryFrom(cands, 0); }, [cands]);
 
   const pick = c => { setPicker(false); tried.current.delete(c.infoHash); tryFrom([c], 0, true); };
-  const onFatal = e => {
-    // the resolved stream died while playing → move to the next untried source
+  const onFatal = (e, pos) => {
+    // the resolved stream died while playing → move to the next untried source, resuming where it stopped
+    if (pos > 0) setStartAt(Math.floor(pos));
     if (!cands) return setErr(e);
     const i = cands.findIndex(c => !tried.current.has(c.infoHash));
     if (i < 0) setErr(e); else { setStep('That stream hiccuped. Trying another source…'); tryFrom(cands, i); }

@@ -88,8 +88,15 @@ export function scribbleLoop(w, h, seed = 1, { sw = 3.4, turns = 1.18 } = {}) {
   return taper(pts, sw, { r, start: .08, end: .3 });
 }
 
-/** single stroke path (for stroke-dasharray draw-on animations) */
+/** single stroke path (for stroke-dasharray draw-on animations). Memoized by args: cards re-render often. */
+const strokeMemo = new Map();
 export function scribbleStroke(w, h, seed = 1, turns = 1.15) {
+  const k = `${w}|${h}|${seed}|${turns}`;
+  let d = strokeMemo.get(k);
+  if (d == null) { if (strokeMemo.size > 2000) strokeMemo.clear(); strokeMemo.set(k, d = drawStroke(w, h, seed, turns)); }
+  return d;
+}
+function drawStroke(w, h, seed, turns) {
   const r = rng(seed);
   const cx = w / 2, cy = h / 2, rx = w / 2 - 5, ry = h / 2 - 5;
   const a0 = -Math.PI * (.6 + r() * .2);

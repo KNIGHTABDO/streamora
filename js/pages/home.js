@@ -8,6 +8,7 @@ import { torrents } from '../core/rd.js';
 import { parse } from '../core/parse.js';
 import { navigate } from '../router.js';
 import { playAction, inWatchlist, toggleWatchlist } from '../lib/play.js';
+import { newEps } from '../lib/newEpisodes.js';
 
 loadCSS('css/pages/home.css');
 
@@ -25,9 +26,9 @@ function greeting(name) {
 
 const SHORTCUTS = [
   { href: '#/mood', label: 'Mood Wheel', icon: 'wheel', color: 'var(--a1)' },
-  { href: '#/surprise', label: 'Surprise Me', icon: 'dice', color: 'var(--a3)' },
-  { href: '#/calendar', label: 'Calendar', icon: 'calendar', color: 'var(--a4)' },
-  { href: '#/world', label: 'Around the World', icon: 'globe', color: 'var(--a2)' },
+  { href: '#/calendar', label: 'Calendar', icon: 'calendar', color: 'var(--a3)' },
+  { href: '#/collections', label: 'Collections', icon: 'layers', color: 'var(--a4)' },
+  { href: '#/genres', label: 'Genres', icon: 'tag', color: 'var(--a2)' },
 ];
 
 // ---------------------------------------------------------------- hero
@@ -37,7 +38,8 @@ function HeroCarousel({ items }) {
   const wl = useStore(watchlist);
   const n = items.length;
   useEffect(() => {
-    if (paused || n < 2) return;
+    // no auto-advance for reduced motion; pause while hovered or focused
+    if (paused || n < 2 || matchMedia('(prefers-reduced-motion: reduce)').matches || document.documentElement.dataset.motion === 'reduce') return;
     const t = setTimeout(() => setI(x => (x + 1) % n), 8000);
     return () => clearTimeout(t);
   }, [i, paused, n]);
@@ -49,7 +51,8 @@ function HeroCarousel({ items }) {
     try { navigate(playAction(await getMeta(item.type, item.id)).href); }
     catch { navigate(hrefTitle(item)); }
   };
-  return html`<div class="home-hero" onMouseEnter=${() => setPaused(true)} onMouseLeave=${() => setPaused(false)} onFocusIn=${() => setPaused(true)}>
+  return html`<div class="home-hero" onMouseEnter=${() => setPaused(true)} onMouseLeave=${() => setPaused(false)}
+      onFocusIn=${() => setPaused(true)} onFocusOut=${e => !e.currentTarget.contains(e.relatedTarget) && setPaused(false)}>
     <div class="home-hero-slide" key=${item.id}>
       <${Hero} item=${item} kicker=${item.anime ? 'trending anime' : item.type === 'series' ? 'trending show' : 'trending now'} tall actions=${html`
         <${Btn} variant="primary" size="lg" icon="play" onClick=${play}>Play<//>
@@ -66,10 +69,7 @@ function HeroCarousel({ items }) {
 }
 
 // ---------------------------------------------------------------- continue watching
-function ContinueRow() {
-  const p = useStore(progress);
-  const hid = useStore(hidden);
-  const items = useMemo(() => continueWatching(p, hid), [p, hid]);
+function ContinueRow({ items }) {
   if (!items.length) return null;
   const remove = it => {
     hideFromContinue(it.id);
@@ -82,7 +82,7 @@ function ContinueRow() {
     const s = q.toString();
     return `#/watch/${it.type}/${encodeURIComponent(it.id)}${s ? '?' + s : ''}`;
   };
-  return html`<${Row} title="Continue watching" kicker="right where you left off" icon="clock" wide items=${items}
+  return html`<${Row} title="Continue watching" kicker="right where you left off" icon="clock" wide items=${items} eager
     render=${it => html`<div class="home-cw" key=${it.id}>
       <${PosterCard} item=${it} wide href=${href(it)} pct=${it.upNext ? null : it.pct} label=${it.label || (it.pct ? `${Math.round(it.pct * 100)}% watched` : '')} onRemove=${remove} />
       <span class=${cx('home-pill type', it.upNext && 'next')}>${it.upNext ? 'up next' : 'resume'}</span>
@@ -137,13 +137,22 @@ function WatchlistRow() {
   return html`<${Row} title="From your watchlist" kicker="pinned for later" icon="heart" items=${wl.slice(0, 20)} href="#/watchlist" />`;
 }
 
+// ---------------------------------------------------------------- new episodes (see lib/newEpisodes.js)
+function NewEpisodesRow() {
+  const { items = [] } = useStore(newEps);
+  if (!items.length) return null;
+  return html`<${Row} title="New episodes" kicker="fresh off the press" icon="calendar" wide items=${items.slice(0, 20)} href="#/calendar"
+    render=${e => html`<${PosterCard} key=${e.id} wide item=${{ id: e.showId, type: 'series', name: e.name, poster: e.poster, background: e.background }}
+      href=${`#/watch/series/${encodeURIComponent(e.showId)}?v=${encodeURIComponent(e.id)}`} label=${`S${e.season} · E${e.episode}${e.title ? ' · ' + e.title : ''}`} badge="new" />`} />`;
+}
+
 // ---------------------------------------------------------------- simple catalog row
-function CatRow({ title, kicker, icon, type, id, opts, href, numbered, limit = 24, filter }) {
+function CatRow({ title, kicker, icon, type, id, opts, href, numbered, limit = 24, filter, eager }) {
   const q = useAsync(() => catalog(type, id, opts), [type, id, JSON.stringify(opts)]);
   let items = q.data;
   if (items && filter) items = items.filter(filter);
   if (items) items = items.slice(0, numbered ? 10 : limit);
-  return html`<${Row} title=${title} kicker=${kicker} icon=${icon} items=${items} loading=${q.loading} error=${q.error} href=${href} numbered=${numbered} />`;
+  return html`<${Row} title=${title} kicker=${kicker} icon=${icon} items=${items} loading=${q.loading} error=${q.error} retry=${q.reload} href=${href} numbered=${numbered} eager=${eager} />`;
 }
 
 // ---------------------------------------------------------------- page
@@ -153,6 +162,10 @@ export default function Home() {
   const profile = list.find(p => p.id === pid);
   const kids = !!(profile && profile.kids);
   const g = greeting(profile && profile.name);
+  const p = useStore(progress);
+  const hid = useStore(hidden);
+  const cw = useMemo(() => continueWatching(p, hid), [p, hid]);
+  const eagerFirst = !cw.length;   // the first shelf gets high-priority posters
 
   const heroQ = useAsync(async () => {
     if (kids) {
@@ -180,9 +193,10 @@ export default function Home() {
         </nav>
       </section>
 
-      <${ContinueRow} />
+      <${ContinueRow} items=${cw} />
+      <${NewEpisodesRow} />
       ${kids ? html`
-        <${CatRow} title="Cartoons & animation" kicker="for small humans" icon="sparkle" type="movie" id="top" opts=${{ genre: 'Animation' }} href="#/genre/movie/Animation" />
+        <${CatRow} title="Cartoons & animation" kicker="for small humans" icon="sparkle" type="movie" id="top" opts=${{ genre: 'Animation' }} href="#/genre/movie/Animation" eager=${eagerFirst} />
         <${CatRow} title="Family movie night" icon="popcorn" type="movie" id="top" opts=${{ genre: 'Family' }} href="#/genre/movie/Family" />
         <${CatRow} title="Animated shows" icon="tv" type="series" id="top" opts=${{ genre: 'Animation' }} />
         <${CatRow} title="Family shows" icon="users" type="series" id="top" opts=${{ genre: 'Family' }} />
@@ -190,7 +204,7 @@ export default function Home() {
         <${WatchlistRow} />
       ` : html`
         <${BecauseRow} kids=${kids} />
-        <${CatRow} title="Top 10 today" kicker="the most watched" icon="trophy" type="movie" id="top" numbered />
+        <${CatRow} title="Top 10 today" kicker="the most watched" icon="trophy" type="movie" id="top" numbered eager=${eagerFirst} />
         <${CatRow} title="Trending movies" kicker="the big screen" icon="film" type="movie" id="top" opts=${{ skip: 10 }} href="#/movies" />
         <${CatRow} title="Trending shows" kicker="binge material" icon="tv" type="series" id="top" href="#/shows" />
         <${CatRow} title="Top airing anime" kicker="this season" icon="anime" type="anime" id="kitsu-anime-airing" href="#/anime" />

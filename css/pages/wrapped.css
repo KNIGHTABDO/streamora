@@ -5,19 +5,19 @@
   position: fixed; inset: 0; z-index: 80; background: var(--scrim);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: calc(var(--safe-t) + 12px) 12px calc(var(--safe-b) + 12px);
-  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
 }
 .wr-center { gap: 12px; }
 .wr-empty { max-width: 460px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; background: var(--paper); color: var(--ink); }
 .wr-top { width: min(460px, 100%); margin-bottom: 10px; color: var(--paper-3); }
-.wr-top .icon-btn { color: #fff; }
+.wr-top .icon-btn { color: var(--paper-3); }
 .wr-top .input { min-height: 38px; background: var(--paper-3); color: var(--ink); }
 .wr-bars-prog { display: flex; gap: 6px; margin-bottom: 8px; }
 .wr-seg {
   position: relative; flex: 1; height: 6px; overflow: hidden; border-radius: 3px;
-  background: repeating-linear-gradient(90deg, rgba(255,255,255,.55) 0 7px, transparent 7px 11px);
+  background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--paper-3) 55%, transparent) 0 7px, transparent 7px 11px);
 }
-.wr-seg i { position: absolute; inset: 0; background: #fff; transform-origin: left; transform: scaleX(0); border-radius: 3px; }
+.wr-seg i { position: absolute; inset: 0; background: var(--paper-3); transform-origin: left; transform: scaleX(0); border-radius: 3px; }
 .wr-seg.done i { transform: none; }
 .wr-seg.now i { animation: wr-fill linear forwards; }
 .wr-seg.now.paused i { animation-play-state: paused; }
@@ -69,7 +69,7 @@
 .wr-sum b { display: block; font-weight: 400; font-size: 34px; color: var(--ink); line-height: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wr-actions { margin-top: 6px; }
 .wr-reel { position: absolute; right: 12px; bottom: 26px; z-index: 0; opacity: .95; pointer-events: none; }
-.wr-count { position: absolute; left: 28px; bottom: 16px; color: var(--ink-3); font-size: 12px; }
+.wr-count { position: absolute; left: 28px; bottom: 16px; color: var(--ink-3); font-size: 14px; }
 .wr-nav {
   position: absolute; top: 50%; width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center;
   background: var(--paper-3); color: var(--ink); box-shadow: var(--shadow-lift); transition: transform .2s var(--ease-pop);

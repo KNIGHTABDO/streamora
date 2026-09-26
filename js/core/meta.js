@@ -3,7 +3,7 @@
 //   description, releaseInfo, year, imdbRating, genres[], runtime, cast[], director[], videos[] (series)}
 // Anime items additionally get `anime: true`.
 
-import { activeProfile } from './store.js';
+import { activeProfile, ls } from './store.js';
 
 export const CINEMETA = 'https://v3-cinemeta.strem.io';
 export const KITSU = 'https://anime-kitsu.strem.fun';
@@ -14,25 +14,41 @@ const TTL = 6 * 3600e3;
 // Persistent stale-while-revalidate: anything fetched before shows instantly (even after an app restart),
 // and is refreshed in the background once older than ttl. Only a first-ever request waits on the network.
 const CACHE = 'streamora-json-v1';
-const net = url => fetch(url).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r; });
-async function getJSON(url, { ttl = TTL } = {}) {
+const CACHE_MAX = 300;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const net = async (url, retry = true) => {
+  const r = await fetch(url);
+  if (r.status === 429 && retry) { await sleep(Math.min(10, +r.headers.get('Retry-After') || 2) * 1000); return net(url, false); }
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r;
+};
+let puts = 0;
+async function prune(c) {
+  // Cache Storage keys() come back in insertion order and put() re-inserts, so the front is the oldest
+  const keys = await c.keys();
+  await Promise.all(keys.slice(0, Math.max(0, keys.length - CACHE_MAX)).map(k => c.delete(k)));
+}
+function getJSON(url, { ttl = TTL } = {}) {
   const now = Date.now();
   const m = mem.get(url);
   if (m && now - m.at < ttl) return m.p;
   const fresh = () => {
     const p = net(url).then(async r => {
-      try { const c = await caches.open(CACHE); await c.put(url, new Response(r.clone().body, { headers: { 'x-at': String(Date.now()) } })); } catch {}
+      try { const c = await caches.open(CACHE); await c.put(url, new Response(r.clone().body, { headers: { 'x-at': String(Date.now()) } })); if (++puts % 25 === 0) prune(c).catch(() => {}); } catch {}
       return r.json();
     });
     mem.set(url, { at: now, p }); p.catch(() => mem.delete(url));
     return p;
   };
-  let hit;
-  try { hit = typeof caches !== 'undefined' && await (await caches.open(CACHE)).match(url); } catch {}
-  if (!hit) return fresh();
-  const p = hit.json();
-  mem.set(url, { at: now, p });
-  if (now - +(hit.headers.get('x-at') || 0) > ttl) fresh().catch(() => {}); // refresh quietly
+  // stored before the first await, so parallel callers share one request
+  const p = (async () => {
+    let hit;
+    try { hit = typeof caches !== 'undefined' && await (await caches.open(CACHE)).match(url); } catch {}
+    if (!hit) return fresh();
+    if (now - +(hit.headers.get('x-at') || 0) > ttl) fresh().catch(() => {}); // refresh quietly
+    return hit.json();
+  })();
+  mem.set(url, { at: now, p }); p.catch(() => mem.get(url)?.p === p && mem.delete(url));
   return p;
 }
 
@@ -98,15 +114,32 @@ export async function search(q, type = 'all', onPart) {
  * Curated lists store {name, year, type}; this finds the real item.
  * Use this instead of hardcoding ids from memory.
  */
+// Resolved titles live in one capped map (ls 'rt', newest last). Old builds kept one 'rt:*' key each: fold those in once.
+const RT_MAX = 500;
+let rt = null;
+function rtMap() {
+  if (rt) return rt;
+  rt = ls.get('rt', {});
+  const old = ls.keys().filter(k => k.startsWith('rt:'));
+  if (old.length) { for (const k of old) { rt[k.slice(3)] ??= ls.get(k); ls.del(k); } rtSave(); }
+  return rt;
+}
+function rtSave() {
+  const keys = Object.keys(rt);
+  for (const k of keys.slice(0, Math.max(0, keys.length - RT_MAX))) delete rt[k];
+  ls.set('rt', rt);
+}
+
 export async function resolveTitle(name, year, type = 'movie') {
-  const key = `rt:${type}:${name}:${year || ''}`;
-  try { const c = localStorage.getItem('streamora:' + key); if (c) return JSON.parse(c); } catch {}
+  const key = `${type}:${name}:${year || ''}`;
+  const c = rtMap()[key];
+  if (c) { delete rt[key]; rt[key] = c; return c; } // LRU touch (saved with the next write)
   const res = type === 'anime' ? await search(name, 'anime') : await catalog(type, 'top', { search: name });
   const clean = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const hit = res.find(m => clean(m.name) === clean(name) && (!year || Math.abs((m.year || 0) - year) <= 1))
     || res.find(m => !year || Math.abs((m.year || 0) - year) <= 1)
     || res[0] || null;
-  if (hit) try { localStorage.setItem('streamora:' + key, JSON.stringify(hit)); } catch {}
+  if (hit) { rtMap()[key] = hit; rtSave(); }
   return hit;
 }
 

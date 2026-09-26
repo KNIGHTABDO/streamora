@@ -15,7 +15,7 @@
 .pp-tag-body { display: flex; align-items: center; gap: 10px; padding: 10px 12px 4px; min-height: 76px; }
 .pp-tag-name { font: 400 26px/1 var(--font-display); transform: rotate(-2deg); }
 .pp-tag-name.long { font-size: 21px; }
-.pp-tag-role { padding: 0 12px 10px; color: var(--ink-2); font-size: 12px; text-align: right; }
+.pp-tag-role { padding: 0 12px 10px; color: var(--ink-2); font-size: 14px; text-align: right; }
 .pp-portrait { flex: none; overflow: visible; }
 
 .pp-head { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin: 8px 0 22px; }

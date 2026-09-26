@@ -1,6 +1,6 @@
 // Settings (notebook tabs) + the #/import?d=… receiver for the "send to another device" QR code.
 import { html, useState, useEffect, useRef } from '../../vendor/preact-htm.js';
-import { Page, Btn, Tabs, Field, Input, Toggle, Select, Icon, Reel, Modal, ErrorNote, Spinner, Empty, useAsync, toast, loadCSS, cx } from '../ui/components.js';
+import { Page, Btn, IconBtn, Tabs, Field, Input, Toggle, Select, Icon, Reel, Modal, ErrorNote, Spinner, Empty, useAsync, toast, loadCSS, cx } from '../ui/components.js';
 import { Avatar } from '../ui/avatars.js';
 import {
   useStore, settings, profiles, activeProfileId, activeProfile, history, progress, hidden, watchlist,
@@ -9,6 +9,9 @@ import {
 import { user } from '../core/rd.js';
 import { navigate, setQuery } from '../router.js';
 import { THEMES, ThemeSwatch } from './profiles.js';
+import { syncState, setPassphrase, syncNow, forgetSync } from '../core/sync.js';
+import { traktRev, traktAvailable, traktAccount, startConnect, finishConnect, disconnect as traktDisconnect, importHistory, importWatchlist } from '../core/trakt.js';
+import { addons, addAddon, removeAddon } from '../core/addons.js';
 
 loadCSS('css/pages/settings.css');
 
@@ -181,6 +184,7 @@ function Player() {
       <h3>Playback</h3>
       <${Field} label="Default quality"><${Select} value=${s.quality} onChange=${v => up({ quality: v })} options=${QUALITIES} /><//>
       <${Field} label="Preferred audio"><${Select} value=${s.audioLang} onChange=${v => up({ audioLang: v })} options=${LANGS} /><//>
+      <${Toggle} checked=${s.autoPlay !== false} onChange=${v => up({ autoPlay: v })} label="Start playing automatically" />
       <${Toggle} checked=${s.autoNext} onChange=${v => up({ autoNext: v })} label="Auto-play the next episode" />
       <${Toggle} checked=${s.cachedOnly} onChange=${v => up({ cachedOnly: v })} label="Only show sources cached on Real-Debrid" />
       <${Field} label=${`Skip intro jumps ${s.skipIntroSec}s`}>
@@ -220,6 +224,134 @@ function Look() {
       <${Toggle} checked=${s.sounds} onChange=${v => up({ sounds: v })} label="Paper sounds on clicks" />
     </div>
   </div>`;
+}
+
+// ------------------------------------------------------------ connect: sync, trakt, addons, notifications
+const ago = t => { const m = Math.round((Date.now() - t) / 6e4); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(t).toLocaleDateString(); };
+
+function SyncCard() {
+  const st = useStore(syncState);
+  const [pass, setPass] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [confirm, setConfirm] = useState(false);
+  const save = async e => {
+    e.preventDefault(); setBusy(true); setErr(null);
+    try { await setPassphrase(pass); setPass(''); } catch (x) { setErr(x); } finally { setBusy(false); }
+  };
+  return html`<div class="panel stack">
+    <h3><${Icon} name="cloud" /> Sync between devices</h3>
+    ${st.on ? html`
+      <p class="muted">Encrypted with your passphrase before it leaves this device. Your Real-Debrid key never syncs.</p>
+      <p class="type st-sync-status">${st.busy ? 'syncing…' : st.last ? `last synced ${ago(st.last)}` : 'not synced yet'}</p>
+      ${st.error && html`<${ErrorNote} error=${st.error} compact />`}
+      <div class="cluster">
+        <${Btn} icon="refresh" disabled=${st.busy} onClick=${() => syncNow()}>Sync now<//>
+        <${Btn} variant="ghost" icon="logout" onClick=${() => setConfirm(true)}>Forget on this device<//>
+      </div>
+      <${Modal} open=${confirm} onClose=${() => setConfirm(false)} title="Stop syncing here?">
+        <p>This device keeps its data and stops syncing. Your other devices aren't affected.</p>
+        <div class="cluster"><${Btn} variant="danger" icon="logout" onClick=${() => { forgetSync(); setConfirm(false); }}>Stop syncing<//><${Btn} variant="ghost" onClick=${() => setConfirm(false)}>Keep<//></div>
+      <//>` : html`<form class="stack" onSubmit=${save}>
+      <p class="muted">Pick a passphrase and type the same one on each device. It's never stored or sent anywhere. Forgot it? Just pick a new one.</p>
+      <${Field} label="Passphrase" hint="12+ characters · a few random words work well"><${Input} type="password" value=${pass} onInput=${e => setPass(e.currentTarget.value)} autocomplete="new-password" spellcheck="false" /><//>
+      ${err && html`<${ErrorNote} error=${err} compact />`}
+      <div><${Btn} variant="primary" icon="cloud" type="submit" disabled=${busy || pass.length < 12}>${busy ? 'Deriving keys…' : 'Start syncing'}<//></div>
+    </form>`}
+  </div>`;
+}
+
+function TraktCard() {
+  const rev = useStore(traktRev);
+  const avail = useAsync(() => traktAvailable(), []);
+  const acct = useAsync(() => traktAccount(), [rev]);
+  const [dc, setDc] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [err, setErr] = useState(null);
+  const abort = useRef(null);
+  useEffect(() => () => abort.current && abort.current.abort(), []);
+  const connect = async () => {
+    setErr(null);
+    try {
+      const code = await startConnect(); setDc(code);
+      abort.current = new AbortController();
+      const name = await finishConnect(code, abort.current.signal);
+      toast(`Connected to Trakt${name ? ' as ' + name : ''}`, { icon: 'check' });
+    } catch (x) { if (x.message !== 'Cancelled') setErr(x); } finally { setDc(null); }
+  };
+  const run = async (which, fn, msg) => {
+    setBusy(which); setErr(null);
+    try { toast(msg(await fn()), { icon: 'download' }); } catch (x) { setErr(x); } finally { setBusy(''); }
+  };
+  const a = acct.data;
+  return html`<div class="panel stack">
+    <h3><${Icon} name="check" /> Trakt</h3>
+    ${avail.loading || acct.loading ? html`<${Spinner} size=${40} label="" />`
+      : !avail.data ? html`<p class="muted">Trakt isn't set up on this server yet. The owner can add it in a couple of minutes (see DEPLOY.md).</p>`
+      : a ? html`
+        <p>Connected${a.username ? html` as <b>${a.username}</b>` : ''}. What this profile watches is scrobbled to Trakt.</p>
+        <div class="cluster">
+          <${Btn} icon="download" disabled=${!!busy} onClick=${() => run('h', importHistory, n => `Imported ${n} watched ${n === 1 ? 'item' : 'items'}`)}>${busy === 'h' ? 'Importing…' : 'Import watch history'}<//>
+          <${Btn} icon="heart" disabled=${!!busy} onClick=${() => run('w', importWatchlist, n => `Added ${n} to your watchlist`)}>${busy === 'w' ? 'Importing…' : 'Import watchlist'}<//>
+          <${Btn} variant="ghost" icon="logout" onClick=${traktDisconnect}>Disconnect<//>
+        </div>`
+      : dc ? html`<div class="stack st-trakt-code">
+          <p>Open <a href=${dc.verification_url} target="_blank" rel="noopener">${dc.verification_url.replace(/^https?:\/\//, '')}</a> and enter this code:</p>
+          <b class="st-code type">${dc.user_code}</b>
+          <${Spinner} size=${40} label="waiting for you to approve…" />
+          <div><${Btn} variant="ghost" onClick=${() => abort.current && abort.current.abort()}>Cancel<//></div>
+        </div>`
+      : html`<p class="muted">Scrobble what you watch and bring your Trakt history into Streamora. Connected per profile.</p><div><${Btn} variant="primary" icon="link" onClick=${connect}>Connect Trakt<//></div>`}
+    ${err && html`<${ErrorNote} error=${err} compact />`}
+  </div>`;
+}
+
+function AddonsCard() {
+  const list = useStore(addons);
+  const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const add = async e => {
+    e.preventDefault(); setBusy(true); setErr(null);
+    try { const a = await addAddon(url); setUrl(''); toast(`${a.name} added`, { icon: 'plus' }); } catch (x) { setErr(x); } finally { setBusy(false); }
+  };
+  return html`<div class="panel stack">
+    <h3><${Icon} name="layers" /> Source addons</h3>
+    <p class="muted">Extra Stremio addons to search for sources next to Torrentio. Only torrent sources are used.</p>
+    ${list.length > 0 && html`<ul class="st-addons">${list.map(a => html`<li key=${a.url}>
+      <div><b>${a.name}</b><div class="type faint st-addon-url">${a.url.replace(/^https:\/\//, '').replace(/\/manifest\.json$/, '')}</div></div>
+      <${IconBtn} icon="trash" label=${`Remove ${a.name}`} onClick=${() => removeAddon(a.url)} />
+    </li>`)}</ul>`}
+    <form class="stack" onSubmit=${add}>
+      <${Field} label="Addon link" hint="…/manifest.json or stremio://…"><${Input} value=${url} onInput=${e => setUrl(e.currentTarget.value)} inputmode="url" autocomplete="off" spellcheck="false" /><//>
+      ${err && html`<${ErrorNote} error=${err} compact />`}
+      <div><${Btn} icon="plus" type="submit" disabled=${busy || !url.trim()}>${busy ? 'Checking…' : 'Add addon'}<//></div>
+    </form>
+  </div>`;
+}
+
+const notifPerm = () => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
+function NotifyCard() {
+  const [busy, setBusy] = useState(false);
+  const [perm, setPerm] = useState(notifPerm);
+  const enable = async () => {
+    setBusy(true);
+    try {
+      const m = await import('../lib/newEpisodes.js');
+      await m.requestEpisodeNotifications();
+      setPerm(notifPerm());
+      toast(notifPerm() === 'granted' ? 'New-episode alerts are on' : 'Notifications are blocked in your browser settings', { icon: 'bell' });
+    } catch (x) { toast(x.message || 'Could not turn on notifications', { kind: 'error' }); } finally { setBusy(false); }
+  };
+  return html`<div class="panel stack">
+    <h3><${Icon} name="bell" /> New episodes</h3>
+    <p class="muted">Get a heads-up when a show you follow drops an episode.${perm === 'unsupported' ? ' On iPhone, add Streamora to your Home Screen first.' : ''}</p>
+    <div><${Btn} icon="bell" disabled=${busy || perm === 'granted' || perm === 'unsupported'} onClick=${enable}>${perm === 'granted' ? 'Notifications on' : busy ? 'Asking…' : 'Enable notifications'}<//></div>
+  </div>`;
+}
+
+function Connect() {
+  return html`<div class="st-grid"><${SyncCard} /><${TraktCard} /><${AddonsCard} /><${NotifyCard} /></div>`;
 }
 
 function Backup() {
@@ -271,6 +403,7 @@ function Privacy() {
         <li><b>This browser only:</b> profiles, watchlists, progress, diary and settings (localStorage).</li>
         <li><b>Your Real-Debrid key:</b> AES-encrypted in localStorage, and the encryption key can't be exported from the browser (IndexedDB).</li>
         <li><b>The relay</b> (/api/rd) forwards requests to Real-Debrid and stores nothing.</li>
+        <li><b>Sync</b> (optional) keeps one blob encrypted with your passphrase; the server can't read it. <b>Trakt</b> (optional, per profile) sees what you watch.</li>
         <li><b>Catalog and sources</b> come from Cinemeta, Kitsu and Torrentio. Torrentio receives your key to mark cached sources.</li>
         <li>No analytics, no accounts, no cookies.</li>
       </ul>
@@ -310,6 +443,7 @@ const TABS = [
   { id: 'account', label: 'Account', icon: 'key' },
   { id: 'player', label: 'Player', icon: 'play' },
   { id: 'look', label: 'Look', icon: 'palette' },
+  { id: 'connect', label: 'Connect', icon: 'cloud' },
   { id: 'backup', label: 'Backup', icon: 'qr' },
   { id: 'privacy', label: 'Privacy', icon: 'lock' },
   { id: 'about', label: 'About', icon: 'info' },
@@ -318,7 +452,7 @@ const TABS = [
 export default function Settings({ query }) {
   if (query.d) return html`<${ImportView} d=${query.d} />`;
   const tab = TABS.some(t => t.id === query.tab) ? query.tab : 'account';
-  const View = { account: Account, player: Player, look: Look, backup: Backup, privacy: Privacy, about: About }[tab];
+  const View = { account: Account, player: Player, look: Look, connect: Connect, backup: Backup, privacy: Privacy, about: About }[tab];
   return html`<${Page} title="Settings" kicker="knobs & dials" icon="gear">
     <${Tabs} tabs=${TABS} value=${tab} onChange=${t => setQuery({ tab: t })} />
     <div class="st-body">${activeProfileId.get() || tab === 'about' ? html`<${View} />` : html`<${Empty} mood="confused" title="Pick a profile first" action=${html`<${Btn} href="#/profiles">Profiles<//>`} />`}</div>

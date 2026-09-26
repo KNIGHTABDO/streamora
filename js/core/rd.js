@@ -16,7 +16,9 @@ const MESSAGES = {
   36: 'Real-Debrid is too busy right now.',
 };
 
-export async function rd(path, { method = 'GET', body, key } = {}) {
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+export async function rd(path, { method = 'GET', body, key, retry = true } = {}) {
   key = key || await getRdKey();
   if (!key) throw new RDError('No Real-Debrid key set.', 'nokey', 0);
   const init = { method, headers: { Authorization: `Bearer ${key}` } };
@@ -27,6 +29,10 @@ export async function rd(path, { method = 'GET', body, key } = {}) {
   let r;
   try { r = await fetch(`/api/rd/${path}`, init); }
   catch { throw new RDError('Could not reach the relay. Are you offline?', 'network', 0); }
+  if (r.status === 429 && retry) {
+    await sleep(Math.min(10, +r.headers.get('Retry-After') || 2) * 1000);
+    return rd(path, { method, body, key, retry: false });
+  }
   if (r.status === 204) return null;
   const text = await r.text();
   let j = null; try { j = text ? JSON.parse(text) : null; } catch {}
@@ -103,7 +109,8 @@ function pickFile(files, { fileIdx, filename, season, episode }) {
   return pool.slice().sort((a, b) => b.bytes - a.bytes)[0];
 }
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const FAILED = ['error', 'magnet_error', 'virus', 'dead'];
+const failIf = info => { if (FAILED.includes(info.status)) throw new RDError(`Source failed on Real-Debrid (${info.status}).`, info.status, 0); };
 
 /**
  * Resolve a torrent (by info hash) into a playable stream on Real-Debrid.
@@ -120,7 +127,14 @@ export async function resolveStream({ infoHash, fileIdx, filename, season, episo
   }
 
   onStep('Looking in your Real-Debrid…');
-  const existing = ((await torrents(1, 100)) || []).find(t => t.hash.toLowerCase() === infoHash && t.status === 'downloaded');
+  // any live copy already in the account (first 3 pages), so we don't add duplicates
+  let existing = null;
+  for (let page = 1; page <= 3 && !existing; page++) {
+    const batch = (await torrents(page, 100)) || [];
+    const same = batch.filter(t => t.hash.toLowerCase() === infoHash && !FAILED.includes(t.status));
+    existing = same.find(t => t.status === 'downloaded') || same[0];
+    if (batch.length < 100) break;
+  }
   let id = existing && existing.id;
   if (!id) {
     onStep('Adding to Real-Debrid…');
@@ -128,7 +142,8 @@ export async function resolveStream({ infoHash, fileIdx, filename, season, episo
   }
 
   let info = await torrentInfo(id);
-  for (let i = 0; info.status === 'magnet_conversion' && i < 20; i++) { await sleep(1000); info = await torrentInfo(id); }
+  for (let i = 0; info.status === 'magnet_conversion' && i < 12; i++) { await sleep(Math.min(4000, 800 * 1.3 ** i)); info = await torrentInfo(id); }
+  failIf(info);
 
   const file = pickFile(info.files || [], { fileIdx, filename, season, episode });
   if (!file) throw new RDError('No playable video file in this source.', 'nofile', 0);
@@ -142,11 +157,12 @@ export async function resolveStream({ infoHash, fileIdx, filename, season, episo
   }
 
   for (let i = 0; info.status !== 'downloaded' && i < 8; i++) {
-    if (['error', 'magnet_error', 'virus', 'dead'].includes(info.status)) throw new RDError(`Source failed on Real-Debrid (${info.status}).`, info.status, 0);
+    failIf(info);
     onStep(info.status === 'downloading' ? `Not cached. Real-Debrid is downloading (${info.progress || 0}%)…` : 'Waiting for Real-Debrid…');
-    await sleep(1500);
+    await sleep(Math.min(5000, 1000 * 1.4 ** i));
     info = await torrentInfo(id);
   }
+  failIf(info);
   if (info.status !== 'downloaded') {
     throw new RDError('This source is not cached yet. Real-Debrid keeps downloading it in the background, so try another source or come back later.', 'notcached', 0);
   }
@@ -154,7 +170,8 @@ export async function resolveStream({ infoHash, fileIdx, filename, season, episo
   // links[] line up with the selected files, in file order
   const selected = info.files.filter(f => f.selected);
   const idx = selected.findIndex(f => f.id === file.id);
-  const link = info.links[idx >= 0 ? idx : 0];
+  const link = (info.links || [])[idx >= 0 ? idx : 0];
+  if (!link) throw new RDError('Real-Debrid has no link for this file yet. Try again in a moment or pick another source.', 'nolink', 0);
   onStep('Unlocking the stream…');
   const un = await unrestrict(link);
   // RD's links don't always line up with files in big packs: never play a different file than the one we picked

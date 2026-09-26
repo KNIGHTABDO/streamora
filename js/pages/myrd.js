@@ -6,6 +6,7 @@ import { resolveTitle } from '../core/meta.js';
 import { fmtSize } from '../core/sources.js';
 import { parse } from '../core/parse.js';
 import { hash } from '../ui/sketch.js';
+import { pool } from '../lib/pool.js';
 
 loadCSS('css/pages/myrd.css');
 
@@ -28,12 +29,6 @@ function groupTorrents(list) {
     if (!g.year && p.year) g.year = p.year;
   }
   return [...groups.values()];
-}
-
-// run fn over items, at most n at a time
-async function pool(items, n, fn) {
-  let i = 0;
-  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const it = items[i++]; await fn(it).catch(() => {}); } }));
 }
 
 function useMatches(groups) {

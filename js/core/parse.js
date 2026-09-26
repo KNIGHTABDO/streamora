@@ -23,15 +23,16 @@ export function parse(name) {
     [/[ ._-](\d{1,2})x(\d{2,3})\b/i, m => ({ season: +m[1], episode: +m[2] })],
     [/\[?Cap\.?\s?(\d)(\d{2})\]?/i, m => ({ season: +m[1], episode: +m[2] })],           // Spanish "Cap.404"
     [/[ ._-]S(\d{1,2})(?![0-9E])/i, m => ({ season: +m[1] })],                              // season pack
-    [/\s-\s(\d{1,4})(?:v\d)?(?:\s|$|\[|\()/i, m => ({ episode: +m[1] })],                  // anime " - 05 "
+    [/\s-\s(?!(?:19|20)\d{2}(?!\d))(\d{1,4})(?:v\d)?(?:\s|$|\[|\()/i, m => ({ episode: +m[1] })],                  // anime " - 05 "
   ];
   let cut = s.length;
   for (const [re, f] of patterns) {
     const m = re.exec(s);
     if (m) { Object.assign(info, f(m)); cut = Math.min(cut, m.index); info.type = 'series'; break; }
   }
-  const y = /[ .(\[_-]((?:19|20)\d{2})(?:[ .)\]_-]|$)/.exec(s);
-  if (y && y.index > 0) { info.year = +y[1]; cut = Math.min(cut, y.index); }
+  // last year-looking token not at the start: "Blade.Runner.2049.2017" -> 2017, title keeps 2049
+  const y = [...s.matchAll(/[ .(\[_-]((?:19|20)\d{2})(?=[ .)\]_-]|$)/g)].filter(m => m.index > 0).pop();
+  if (y) { info.year = +y[1]; cut = Math.min(cut, y.index); }
   const qi = s.search(QUAL); if (qi > 0) cut = Math.min(cut, qi);
   const bi = s.search(/\s*[\[(]/); if (bi > 0) cut = Math.min(cut, bi);
 
@@ -55,5 +56,9 @@ if (typeof process !== 'undefined' && process.argv && process.argv[1] && process
   assert.deepEqual([e.title, e.episode, e.anime], ['Frieren', 5, true]);
   const f = parse('The.Odyssey.Prologue.2025.IMAX.2D.4K.ProRes.4444.5.1.Ch.PCM-hutaoing.mov');
   assert.deepEqual([f.title, f.year], ['The Odyssey Prologue', 2025]);
+  const g = parse('Blade.Runner.2049.2017.1080p.BluRay.x264-SPARKS.mkv');
+  assert.deepEqual([g.title, g.year, g.type], ['Blade Runner 2049', 2017, 'movie']);
+  const h = parse('Spider-Man - 2002 1080p.mkv');
+  assert.deepEqual([h.title, h.year, h.type, h.episode], ['Spider-Man', 2002, 'movie', null]);
   console.log('parse.js ok');
 }

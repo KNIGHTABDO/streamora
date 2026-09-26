@@ -33,9 +33,19 @@ index.html · manifest.webmanifest · sw.js
 css/      paper.css (5 themes) · components.css · app.css · pages/*.css · player.css
 js/core/  store, rd, meta, sources, progress, parse
 js/ui/    sketch (hand-drawn geometry) · icons · reel (mascot) · avatars · components · focus (TV remote)
-js/pages/ one file per section (home, detail, watch, movies, shows, anime, myrd, search, mood, …)
-js/lib/   shared helpers for pages
+js/pages/ one file per section (home, detail, watch, movies, shows, anime, myrd, search, mood, genres, collections, calendar, diary, …)
+          mood = wheel + "just pick for me" scratch card · genres = stickers + decades · collections = franchises + around the world
+          diary/wrapped.js = Year in Review, opened from the Diary (old #/surprise #/time #/world #/wrapped links redirect)
+js/lib/   shared helpers for pages (stats, pool, newEpisodes, discover-lists, play)
 functions/api/rd/[[path]].js   Cloudflare relay   ·   dev-server.mjs   local server + the same relay
 tools/    shot.mjs (screenshots / smoke tests), build.mjs (dist for deploy), icons.mjs
 ```
-Conventions for contributors are in [CONVENTIONS.md](CONVENTIONS.md). Open `#/kit` to see the living style guide.
+Conventions for contributors are in [CONVENTIONS.md](CONVENTIONS.md). Open `#/kit` (localhost only) to see the living style guide.
+
+## Integrations (all optional)
+- **Sync:** pick a passphrase in Settings → Connect and use it on each device. Data is encrypted in the browser (PBKDF2 + AES-GCM) and stored as one opaque blob in Cloudflare KV (`functions/api/sync`). Merges item by item, newest wins. The RD key never syncs.
+- **Trakt:** scrobbles what you watch and imports watched history and your watchlist. Tokens are kept per profile in IndexedDB. `functions/api/trakt` relays only the OAuth calls.
+- **Stremio addons:** add extra source addons by manifest link. Only their JSON is read (torrent streams); `functions/api/addon` relays addons that don't send CORS headers.
+- **New-episode notifications** for shows you follow.
+
+Setup for the server side (KV binding, Trakt app) is in [DEPLOY.md](DEPLOY.md#optional-extras). Tests: `node tests/integrations.test.mjs`.

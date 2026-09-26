@@ -17,7 +17,7 @@
 }
 .topnav.scrolled {
   background: var(--glass);
-  -webkit-backdrop-filter: blur(10px) saturate(1.2); backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
 }
 .topnav.scrolled::after { /* torn-paper bottom edge */
   content: ''; position: absolute; left: 0; right: 0; bottom: -7px; height: 8px;
@@ -56,11 +56,11 @@
     display: grid; grid-template-columns: repeat(6, 1fr);
     height: calc(var(--tab-h) + var(--safe-b)); padding: 6px 4px var(--safe-b);
     background: var(--glass);
-    -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
     border-top: 2.5px solid var(--line);
     border-radius: 18px 22px 0 0;
   }
-  .tabbar-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 13px; color: var(--ink-2); position: relative; }
+  .tabbar-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 14px; color: var(--ink-2); position: relative; }
   .tabbar-item.active { color: var(--ink); }
   .tabbar-item.active .icon { --icon-fill: var(--a3); transform: rotate(-8deg) scale(1.12); }
   .tabbar-item .icon { transition: transform .25s var(--ease-pop); --icon-fill: transparent; }
@@ -97,3 +97,21 @@
 .drawer-icon { width: 44px; height: 44px; flex: none; display: grid; place-items: center; background: var(--paper-3); border-radius: 50% 44% 52% 46%; box-shadow: 2px 2px 0 var(--line); transition: transform .25s var(--ease-pop); }
 .drawer-item:hover .drawer-icon { transform: rotate(-10deg) scale(1.08); }
 .drawer-item .scribble { inset: -4px; width: calc(100% + 8px); height: calc(100% + 8px); }
+
+/* glass is costly: solid paper where blur isn't supported or transparency is unwanted */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .topnav.scrolled, .topnav.scrolled::after, .tabbar { background: var(--paper); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .topnav.scrolled, .tabbar, .modal-scrim, .wr-stage { -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .topnav.scrolled, .topnav.scrolled::after, .tabbar { background: var(--paper); }
+}
+
+/* new-episode count on the More buttons and the Calendar entry */
+.nav-more, .tabbar-item, .drawer-icon { position: relative; }
+.nav-badge {
+  position: absolute; top: -4px; right: -6px; min-width: 22px; height: 22px; padding: 0 6px;
+  display: grid; place-items: center; border-radius: 11px; border: 2px solid var(--line);
+  background: var(--a1); color: var(--on-accent); font: 14px/1 var(--font-type); transform: rotate(6deg);
+}
+.tabbar-item .nav-badge { top: 2px; right: calc(50% - 26px); }

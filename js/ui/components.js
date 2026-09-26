@@ -118,9 +118,10 @@ export function SkeletonCard({ wide, size = 'md' }) {
 // ------------------------------------------------------------------ rows & grids
 /**
  * Horizontal shelf.
- * <Row title="Trending" kicker="this week" icon="sparkle" items=${list} loading? error? href="#/movies" wide? render=${item => ...} />
+ * <Row title="Trending" kicker="this week" icon="sparkle" items=${list} loading? error? retry? href="#/movies" wide? render=${item => ...} />
+ * eager: only for the first shelf on a page (its first posters load at high priority).
  */
-export function Row({ title, kicker, icon, items, loading, error, href, wide, size, render, empty, numbered }) {
+export function Row({ title, kicker, icon, items, loading, error, retry, href, wide, size, render, empty, numbered, eager }) {
   const ref = useRef();
   const scroll = dir => ref.current && ref.current.scrollBy({ left: dir * ref.current.clientWidth * .85, behavior: 'smooth' });
   if (!loading && !error && items && !items.length && !empty) return null;
@@ -129,10 +130,10 @@ export function Row({ title, kicker, icon, items, loading, error, href, wide, si
     <div class="row-wrap">
       <button type="button" class="row-arrow left" aria-label="Scroll left" tabindex="-1" onClick=${() => scroll(-1)}><${Icon} name="back" /></button>
       <div class="row-track" ref=${ref}>
-        ${loading ? Array.from({ length: 8 }, () => html`<${SkeletonCard} wide=${wide} size=${size} />`)
-          : error ? html`<${ErrorNote} error=${error} />`
+        ${loading ? Array.from({ length: 8 }, (_, i) => html`<${SkeletonCard} key=${'sk' + i} wide=${wide} size=${size} />`)
+          : error ? html`<${ErrorNote} error=${error} retry=${retry} compact />`
           : !items.length ? empty
-          : items.map((it, i) => render ? render(it, i) : html`<${PosterCard} key=${it.id} item=${it} wide=${wide} size=${size} rank=${numbered ? i + 1 : null} eager=${i < 8} />`)}
+          : items.map((it, i) => render ? render(it, i) : html`<${PosterCard} key=${it.id} item=${it} wide=${wide} size=${size} rank=${numbered ? i + 1 : null} eager=${eager && i < 6} />`)}
       </div>
       <button type="button" class="row-arrow right" aria-label="Scroll right" tabindex="-1" onClick=${() => scroll(1)}><${Icon} name="next" /></button>
     </div>
@@ -154,7 +155,7 @@ export function Grid({ items = [], loading, onMore, done, render, size, empty })
   if (!loading && !items.length && empty) return empty;
   return html`<div class=${cx('grid', size && `grid-${size}`)}>
     ${items.map((it, i) => render ? render(it, i) : html`<${PosterCard} key=${it.id + ':' + i} item=${it} size=${size} />`)}
-    ${loading && Array.from({ length: 12 }, () => html`<${SkeletonCard} size=${size} />`)}
+    ${loading && Array.from({ length: 12 }, (_, i) => html`<${SkeletonCard} key=${'sk' + i} size=${size} />`)}
     <div ref=${sentinel} class="grid-sentinel"></div>
   </div>`;
 }
@@ -194,7 +195,7 @@ export function SectionTitle({ children, kicker, icon, action, as = 'h2' }) {
 
 /** Standard page wrapper: <Page title="Movies" kicker="the big screen" icon="film" actions=${...}>...</Page> */
 export function Page({ title, kicker, icon, actions, children, class: cls, bleed }) {
-  return html`<main class=${cx('page', bleed && 'bleed', cls)} id="main">
+  return html`<main class=${cx('page', bleed && 'bleed', cls)} id="main" tabindex="-1">
     ${title && html`<header class="page-head">
       <${SectionTitle} as="h1" kicker=${kicker} icon=${icon} action=${actions}>${title}<//>
     </header>`}
@@ -202,13 +203,13 @@ export function Page({ title, kicker, icon, actions, children, class: cls, bleed
   </main>`;
 }
 
-/** Big riso-printed banner. actions = buttons. */
+/** Big riso-printed banner. actions = buttons. One image decode: the grey riso layer is the same URL as a CSS background. */
 export function Hero({ item, kicker, actions, children, tall }) {
   if (!item) return html`<div class="hero skeleton-hero"></div>`;
   const bg = item.background || item.poster;
   return html`<section class=${cx('hero', tall && 'tall')}>
-    <div class="hero-art riso"><${Img} src=${bg} alt="" /></div>
-    <div class="hero-art print hero-color"><${Img} src=${bg} alt="" /></div>
+    <div class="hero-art riso hero-mono" style=${bg ? `background-image:url(${JSON.stringify(bg)})` : ''}></div>
+    <div class="hero-art print hero-color"><${Img} src=${bg} alt="" eager /></div>
     <div class="hero-fade"></div>
     <div class="hero-body">
       ${kicker && html`<div class="kicker type hero-kicker">${kicker}</div>`}

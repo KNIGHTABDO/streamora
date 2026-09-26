@@ -1,12 +1,13 @@
 // Calendar: new episodes of the shows you follow or are watching, drawn as a planner.
 // Week spread + month grid on desktop, a vertical agenda on phones.
-import { html, useState, useMemo } from '../../vendor/preact-htm.js';
+import { html, useState, useMemo, useEffect } from '../../vendor/preact-htm.js';
 import { Page, Btn, IconBtn, Row, PosterCard, Empty, ErrorNote, Spinner, Img, useAsync, loadCSS, cx, hrefTitle } from '../ui/components.js';
-import { follows, progress, useStore } from '../core/store.js';
-import { meta, catalog } from '../core/meta.js';
+import { follows, progress, watchlist, useStore } from '../core/store.js';
+import { catalog } from '../core/meta.js';
 import { epState } from '../core/progress.js';
 import { scribbleStroke, tiltOf, hash } from '../ui/sketch.js';
 import { dayKey } from '../lib/stats.js';
+import { loadEpisodes, followedShows, markNewEpisodesSeen } from '../lib/newEpisodes.js';
 
 loadCSS('css/pages/calendar.css');
 
@@ -17,21 +18,6 @@ const startOfDay = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return 
 const mondayOf = t => { const d = startOfDay(t); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const fmtDay = d => `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}`;
-
-async function loadEpisodes(shows) {
-  const out = [];
-  for (let i = 0; i < shows.length; i += 6) {
-    const metas = await Promise.all(shows.slice(i, i + 6).map(s => meta(s.type === 'movie' ? 'movie' : 'series', s.id).catch(() => null)));
-    for (const m of metas) {
-      if (!m) continue;
-      for (const v of m.videos || []) {
-        if (!v.released || v.season === 0) continue;
-        out.push({ show: m, v, at: new Date(v.released).getTime() });
-      }
-    }
-  }
-  return out.sort((a, b) => a.at - b.at);
-}
 
 function Sticker({ ep, compact }) {
   const aired = ep.at <= Date.now();
@@ -115,14 +101,11 @@ function Agenda({ eps }) {
 export default function Calendar() {
   const fol = useStore(follows);
   const prog = useStore(progress);
-  const shows = useMemo(() => {
-    const m = new Map();
-    for (const f of fol) if (f.type !== 'movie') m.set(f.id, f);
-    for (const p of Object.values(prog)) if (p.type !== 'movie' && !m.has(p.id)) m.set(p.id, p);
-    return [...m.values()];
-  }, [fol, prog]);
+  const wl = useStore(watchlist);
+  const shows = useMemo(followedShows, [fol, prog, wl]);
   const key = shows.map(s => s.id).sort().join();
   const data = useAsync(() => loadEpisodes(shows), [key]);
+  useEffect(markNewEpisodesSeen, []);
   const fresh = useAsync(() => catalog('series', 'year', { genre: String(new Date().getFullYear()) }), []);
   const [week, setWeek] = useState(0);
   const [month, setMonth] = useState(0);

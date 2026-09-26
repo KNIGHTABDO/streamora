@@ -44,7 +44,7 @@
 .home-cw { position: relative; }
 .home-pill {
   position: absolute; top: 14px; right: 14px; z-index: 6; pointer-events: none;
-  background: var(--a3); color: var(--on-accent); padding: 2px 10px 3px; font-size: 12px;
+  background: var(--a3); color: var(--on-accent); padding: 2px 10px 3px; font-size: 14px;
   border: 2px solid var(--line); border-radius: 12px; transform: rotate(3deg);
 }
 .home-pill.next { background: var(--a4); }
