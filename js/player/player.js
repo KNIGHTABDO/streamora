@@ -33,6 +33,17 @@ const resetAutoRuns = () => { try { sessionStorage.removeItem(AUTO_KEY); } catch
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 const SLEEP = [{ id: 'off', label: 'Off' }, { id: 'end', label: 'End of this episode' }, { id: '15', label: '15 minutes' }, { id: '30', label: '30 minutes' }, { id: '60', label: '1 hour' }];
 
+const vidCodec = { h264: 'avc1.640028', avc: 'avc1.640028', hevc: 'hvc1.1.6.L120.90', h265: 'hvc1.1.6.L120.90' };
+const audCodec = { aac: 'mp4a.40.2', mp3: 'mp4a.6B', ac3: 'ac-3', eac3: 'ec-3' };
+/** true when stream.direct is an mp4 whose first video/audio tracks this browser says it can play. */
+function directOk(stream, info) {
+  if (!/\.(mp4|m4v)(\?|$)/i.test((stream && stream.direct) || '') || !info || !info.details) return false;
+  const vc = vidCodec[String(Object.values(info.details.video || {})[0]?.codec).toLowerCase()];
+  const a0 = Object.values(info.details.audio || {})[0];
+  const ac = a0 ? audCodec[String(a0.codec).toLowerCase().replace(/[^a-z0-9]/g, '')] : 'mp4a.40.2';
+  return !!vc && !!ac && document.createElement('video').canPlayType(`video/mp4; codecs="${vc}, ${ac}"`) !== '';
+}
+
 function pickAudio(info, pref) {
   const a = (info && info.details && info.details.audio) || {};
   const keys = Object.keys(a);
@@ -74,11 +85,15 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const [quality, setQuality] = useState(() => (s.quality && s.quality !== 'auto' ? s.quality : autoQuality(height, phone)));
   const [audio, setAudio] = useState(() => pickAudio(info, mem.audioLang || s.audioLang));
   const [burn, setBurn] = useState('none');            // embedded subtitle key burned into the video
+  // Direct play: an h264 mp4 the device decodes itself needs no RD transcode (which can fall behind realtime → stalls).
+  // Only while nothing needs the transcoder (default audio, no burned subs, quality untouched); dropped on error.
+  const [direct, setDirect] = useState(() => directOk(stream, info));
   const url = useMemo(() => {
+    if (direct && burn === 'none' && (!audio || audio === pickAudio(info))) return stream.direct;
     if (info && info.modelUrl && audio) return buildUrl(info.modelUrl, { audio, subs: burn, quality });
     const h = stream.hls || {};
     return h[quality] || h.high || h.original || Object.values(h).find(Boolean) || (/\.(mp4|webm|m4v)(\?|$)/i.test(stream.direct || '') ? stream.direct : null);
-  }, [info, audio, burn, quality, stream]);
+  }, [info, audio, burn, quality, stream, direct]);
 
   // ------------------------------------------------ playback state
   const [st, setSt] = useState({ playing: false, t: start, dur: 0, buf: 0, waiting: true, vol: 1, muted: false, rate: rateRef.current, ended: false });
@@ -96,6 +111,12 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const offRef = useRef(0);
   const [off, setOff] = useState(0);
   const [reload, setReload] = useState(0);
+  const startedRef = useRef(false); startedRef.current = started;
+  // next lower transcode quality, or null (direct play / already lowest)
+  const downRef = useRef();
+  const qi = QUALITIES.findIndex(q => q.key === quality);
+  downRef.current = isTc && qi >= 0 && qi < QUALITIES.length - 1 && (info && info.modelUrl || (stream.hls || {})[QUALITIES[qi + 1].key])
+    ? () => { toast(`Slow stream — switching to ${QUALITIES[qi + 1].label}`, { icon: 'source' }); setQuality(QUALITIES[qi + 1].key); } : null;
   const realDur = x => (info && info.duration) || (x && isFinite(x.duration) ? offRef.current + x.duration : 0);
   const realNow = x => offRef.current + ((x && x.currentTime) || 0);
   const hideT = useRef();
@@ -123,7 +144,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     offRef.current = o; setOff(o);
     const src = o > 0 ? `${url}${url.includes('?') ? '&' : '?'}t=${o}` : url;
     setSt(x => ({ ...x, waiting: true }));
-    attach(v, src, { start: isTc ? 0 : posRef.current, onFatal: (e, p) => !dead && fatal(e, offRef.current + (p || 0)) }).then(d => {
+    attach(v, src, { start: isTc ? 0 : posRef.current, onFatal: (e, p) => !dead && (src === stream.direct && info && info.modelUrl ? (posRef.current = p || posRef.current, setDirect(false)) : fatal(e, offRef.current + (p || 0))) }).then(d => {
       if (dead) return d();
       detach = d;
       v.playbackRate = rateRef.current;
@@ -149,8 +170,18 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       try { ms.setPositionState({ duration: dur, position: Math.min(dur, Math.max(0, realNow(v))), playbackRate: v.playbackRate || 1 }); } catch {}
     };
     // stall watchdog: stuck buffering for 25s while meant to be playing → let the parent try another source
-    let stallT;
-    const stall = () => { clearTimeout(stallT); stallT = setTimeout(() => { if (!v.paused && v.readyState < 3) fatal(new Error('The stream stalled.'), realNow(v)); }, 25000); };
+    // RD's single-quality playlist has no ABR: if the transcode can't keep up (3 mid-play stalls in 2 min, or one
+    // 25s stall) step down a quality before giving up on the source.
+    let stallT, stalls = [];
+    const down = () => { const d = downRef.current; if (!d) return false; d(); stalls = []; return true; };
+    const stall = () => {
+      clearTimeout(stallT);
+      if (startedRef.current && !v.seeking && !v.paused) {
+        const now = Date.now(); stalls = stalls.filter(x => now - x < 120000).concat(now);
+        if (stalls.length >= 3 && down()) return;
+      }
+      stallT = setTimeout(() => { if (!v.paused && v.readyState < 3 && !down()) fatal(new Error('The stream stalled.'), realNow(v)); }, 25000);
+    };
     const unstall = () => clearTimeout(stallT);
     const ev = {
       timeupdate: () => { up(); position(); }, durationchange: up, progress: up,
@@ -592,7 +623,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
 
     ${menu === 'settings' && html`<${Menu} title="Settings" onClose=${() => setMenu(null)}>
       <div class="pl-menu-kicker kicker type">quality</div>
-      <div class="pl-grid">${QUALITIES.filter(q => info ? true : stream.hls && stream.hls[q.key]).map(q => html`<button type="button" class=${cx('pl-chip', quality === q.key && 'on')} onClick=${() => setQuality(q.key)}>${q.label}</button>`)}</div>
+      <div class="pl-grid">${QUALITIES.filter(q => info ? true : stream.hls && stream.hls[q.key]).map(q => html`<button type="button" class=${cx('pl-chip', quality === q.key && 'on')} onClick=${() => { setDirect(false); setQuality(q.key); }}>${q.label}</button>`)}</div>
       ${audios.length > 1 && html`<div class="pl-menu-kicker kicker type">audio</div>
         <div class="pl-grid">${audios.map(([k, a]) => html`<button type="button" class=${cx('pl-chip', audio === k && 'on')} onClick=${() => { setAudio(k); picked.current.audioLang = a.lang_iso; }}>${a.lang || langName(a.lang_iso)}</button>`)}</div>`}
       <div class="pl-menu-kicker kicker type">speed</div>
