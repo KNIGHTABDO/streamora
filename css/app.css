@@ -1,0 +1,99 @@
+/* ============================================================
+   STREAMORA · app.css : shell (top nav, tab bar, drawer, logo)
+   ============================================================ */
+
+.logo { display: inline-flex; align-items: center; gap: 8px; }
+.logo-reel { width: 36px; height: 36px; transition: transform .6s var(--ease-pop); }
+.logo:hover .logo-reel { transform: rotate(240deg); }
+.logo-word { font-size: 32px; letter-spacing: .01em; transform: rotate(-2deg); }
+.logo-word::first-letter { color: var(--a1); }
+
+/* ---------------------------------------------------------- top nav */
+.topnav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+  height: calc(var(--nav-h) + var(--safe-t)); padding: var(--safe-t) var(--gutter) 0;
+  display: flex; align-items: center; gap: 28px;
+  transition: background .3s, box-shadow .3s;
+}
+.topnav.scrolled {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2); backdrop-filter: blur(10px) saturate(1.2);
+}
+.topnav.scrolled::after { /* torn-paper bottom edge */
+  content: ''; position: absolute; left: 0; right: 0; bottom: -7px; height: 8px;
+  background: var(--glass);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 8' preserveAspectRatio='none'%3E%3Cpath d='M0 0h120v3l-4 2-5-2-6 3-4-2-7 3-5-3-6 2-4-1-6 3-5-3-7 2-3-2-6 3-5-2-5 2-6-3-4 2-6-1-5 3-4-3-7 2-4-2-3 2z'/%3E%3C/svg%3E") 0 0 / 240px 8px repeat-x;
+          mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 8' preserveAspectRatio='none'%3E%3Cpath d='M0 0h120v3l-4 2-5-2-6 3-4-2-7 3-5-3-6 2-4-1-6 3-5-3-7 2-3-2-6 3-5-2-5 2-6-3-4 2-6-1-5 3-4-3-7 2-4-2-3 2z'/%3E%3C/svg%3E") 0 0 / 240px 8px repeat-x;
+}
+.topnav-links { display: flex; gap: 6px; }
+.topnav-link { position: relative; padding: 6px 12px; font-size: 21px; color: var(--ink-2); transition: color .2s, transform .2s var(--ease-pop); }
+.topnav-link:hover { color: var(--ink); transform: rotate(-2deg); }
+.topnav-link.active { color: var(--ink); }
+.topnav-link.active::after { /* marker swipe under the active tab */
+  content: ''; position: absolute; left: 6px; right: 6px; bottom: 4px; height: 10px; z-index: -1;
+  background: var(--a3); border-radius: 3px 8px 4px 9px; transform: rotate(-1.5deg);
+  animation: swipe .35s var(--ease-flip) both; transform-origin: left;
+}
+@keyframes swipe { from { transform: scaleX(0) rotate(-1.5deg); } }
+.topnav-tools { margin-left: auto; display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 30px; background: var(--glass); transition: background .3s; }
+.topnav.scrolled .topnav-tools { background: transparent; }
+.topnav:not(.scrolled) .logo { padding: 2px 12px 2px 4px; border-radius: 30px; background: var(--glass); }
+.nav-avatar { display: block; margin-left: 6px; transition: transform .25s var(--ease-pop); border-radius: 50%; }
+.nav-avatar:hover { transform: rotate(-10deg) scale(1.08); }
+
+@media (max-width: 760px) {
+  .topnav { gap: 10px; }
+  .topnav-links { display: none; }
+  .logo-word { font-size: 28px; }
+  .topnav a[href="#/search"] { display: none; }
+}
+
+/* ---------------------------------------------------------- bottom tab bar (phones) */
+.tabbar { display: none; }
+@media (max-width: 760px) {
+  .tabbar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+    display: grid; grid-template-columns: repeat(6, 1fr);
+    height: calc(var(--tab-h) + var(--safe-b)); padding: 6px 4px var(--safe-b);
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
+    border-top: 2.5px solid var(--line);
+    border-radius: 18px 22px 0 0;
+  }
+  .tabbar-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 13px; color: var(--ink-2); position: relative; }
+  .tabbar-item.active { color: var(--ink); }
+  .tabbar-item.active .icon { --icon-fill: var(--a3); transform: rotate(-8deg) scale(1.12); }
+  .tabbar-item .icon { transition: transform .25s var(--ease-pop); --icon-fill: transparent; }
+  .tabbar-item.active::before { content: ''; position: absolute; top: 2px; width: 40px; height: 30px; border-radius: 50%; background: var(--a3); opacity: .45; z-index: -1; transform: rotate(-6deg); }
+}
+
+/* ---------------------------------------------------------- drawer */
+.drawer-scrim {
+  position: fixed; inset: 0; z-index: 90; background: var(--scrim);
+  opacity: 0; pointer-events: none; transition: opacity .3s;
+}
+.drawer-scrim.open { opacity: 1; pointer-events: auto; }
+.drawer {
+  position: absolute; top: 0; right: 0; bottom: 0; width: min(400px, 92vw);
+  background: var(--paper); padding: calc(18px + var(--safe-t)) 22px calc(24px + var(--safe-b));
+  overflow-y: auto; overscroll-behavior: contain;
+  transform: translateX(104%) rotate(2deg); transform-origin: top right;
+  transition: transform .45s var(--ease-flip);
+  box-shadow: -8px 0 0 rgba(0,0,0,.08);
+}
+.drawer::before { /* spiral binding holes */
+  content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 10px;
+  background: radial-gradient(circle, var(--ink-3) 3px, transparent 3.6px) 0 10px / 10px 26px repeat-y; opacity: .6;
+}
+.drawer-scrim.open .drawer { transform: none; }
+.drawer-main { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 8px; }
+.drawer-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 2px solid var(--line); border-radius: 20px; font-size: 17px; }
+.drawer-pill:hover { background: var(--a3); color: var(--on-accent); }
+.drawer-group { margin-top: 18px; }
+.drawer-item { position: relative; display: flex; align-items: center; gap: 14px; padding: 9px 8px; border-radius: 10px; }
+.drawer-item b { display: block; font-weight: 400; font-size: 20px; }
+.drawer-item small { display: block; font-size: 15px; }
+.drawer-item:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.drawer-icon { width: 44px; height: 44px; flex: none; display: grid; place-items: center; background: var(--paper-3); border-radius: 50% 44% 52% 46%; box-shadow: 2px 2px 0 var(--line); transition: transform .25s var(--ease-pop); }
+.drawer-item:hover .drawer-icon { transform: rotate(-10deg) scale(1.08); }
+.drawer-item .scribble { inset: -4px; width: calc(100% + 8px); height: calc(100% + 8px); }

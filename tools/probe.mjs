@@ -1,0 +1,12 @@
+import puppeteer from 'puppeteer-core';
+import { readFileSync } from 'node:fs';
+const [hash, js] = process.argv.slice(2);
+const KEY = readFileSync(new URL('./.rdkey', import.meta.url), 'utf8').trim();
+const b = await puppeteer.launch({ executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true });
+const p = await b.newPage(); await p.setViewport({ width: 1440, height: 900 });
+await p.goto('http://localhost:5173/#/welcome');
+await p.evaluate(async K => { const s = await import('/js/core/store.js'); if (!s.profiles.get().length) s.profiles.set([{ id: 'test1', name: 'Tester', avatar: 'cat', theme: 'ink', ink: '#ff4f79' }]); s.activeProfileId.set('test1'); await s.saveRdKey(K); }, KEY);
+await p.goto('http://localhost:5173/' + hash); await p.evaluate(() => location.reload());
+await new Promise(r => setTimeout(r, 5000));
+console.log(await p.evaluate(js));
+await b.close();

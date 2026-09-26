@@ -1,0 +1,35 @@
+/* Movies / Shows / Anime / genre grid pages */
+.browse-head {
+  display: flex; align-items: center; gap: clamp(12px, 3vw, 36px);
+  margin: 6px 0 18px; flex-wrap: wrap-reverse;
+}
+.browse-head-art { flex: 0 1 300px; min-width: 180px; animation: pop-in .5s var(--ease-pop) both; }
+.browse-doodle { width: 100%; height: auto; overflow: visible; }
+.browse-head-text { flex: 1 1 280px; }
+.browse-title { font-size: clamp(54px, 9vw, 110px); transform: rotate(-2deg); transform-origin: left; display: inline-block; position: relative; }
+.browse-title::after {
+  content: ''; position: absolute; left: -4%; right: -6%; bottom: 10%; height: 30%; z-index: -1;
+  background: var(--a3); border-radius: 4px 12px 6px 14px; transform: rotate(1deg); opacity: .8;
+}
+.browse-anime .browse-title::after { background: var(--a1); }
+.browse-series .browse-title::after { background: var(--a4); }
+.browse-surprise { margin-top: 12px; }
+.browse-tabs { margin-top: 4px; }
+.browse-chips { margin: 14px 0 6px; }
+.browse-kids { color: var(--ink-2); margin: 4px 0 0; }
+
+/* anime: manga panel speed lines behind the header */
+.browse-anime .browse-head { position: relative; padding: 14px 16px; border: 3px solid var(--line); background: var(--paper-3); box-shadow: 5px 6px 0 var(--line); transform: rotate(-.4deg); }
+.browse-anime .browse-head::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .18;
+  background: repeating-conic-gradient(from 0deg at 70% 50%, var(--line) 0 1.2deg, transparent 1.2deg 6deg);
+}
+.browse-anime .browse-head > * { position: relative; }
+
+@media (max-width: 760px) {
+  .browse-head { flex-wrap: nowrap; flex-direction: row-reverse; gap: 8px; }
+  .browse-head-art { flex: 0 0 34%; min-width: 0; }
+  .browse-head-text { flex: 1 1 auto; min-width: 0; }
+  .browse-title { font-size: 52px; }
+  .browse-surprise .btn { white-space: normal; text-align: left; }
+}

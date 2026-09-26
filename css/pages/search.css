@@ -1,0 +1,27 @@
+/* search page */
+.search-box { margin: 8px 0 26px; }
+.search-field {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--paper-3); border-radius: 12px; padding: 6px 10px 6px 18px; min-height: 76px;
+  box-shadow: var(--shadow-lift); transform: rotate(-.4deg);
+}
+.search-field input {
+  flex: 1; min-width: 0; border: 0; outline: none; background: transparent;
+  font: 400 clamp(26px, 4vw, 40px)/1.1 var(--font-display); padding: 8px 0;
+  -webkit-appearance: none; appearance: none;
+}
+.search-field input::placeholder { color: var(--ink-3); }
+.search-field input::-webkit-search-cancel-button { display: none; }
+.search-lens { color: var(--a1); transform: rotate(-10deg); }
+.search-mic.listening { background: var(--a1); color: var(--on-accent); animation: wiggle .6s ease-in-out infinite; }
+.search-recent { margin: 0 0 20px; }
+.search-clear { color: var(--ink-3); font-size: 13px; }
+.search-clear:hover { color: var(--a1); }
+.search-head { margin: 0 0 12px; }
+.search-for { font-size: clamp(26px, 3.4vw, 38px); }
+.search-people { display: inline-flex; align-items: center; gap: 6px; font-size: 18px; color: var(--ink-2); border-bottom: 2px dashed var(--ink-3); padding-bottom: 2px; }
+.search-people:hover { color: var(--a1); border-color: var(--a1); }
+@media (max-width: 760px) {
+  .search-field { min-height: 60px; padding-left: 12px; }
+  .search-field input { font-size: 24px; }
+}

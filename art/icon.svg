@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <filter id="paper"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="3" seed="4"/><feColorMatrix values="0 0 0 0 .45 0 0 0 0 .36 0 0 0 0 .28 0 0 0 .18 0"/><feComposite in2="SourceGraphic" operator="in"/></filter>
+    <pattern id="dots" width="12" height="12" patternUnits="userSpaceOnUse"><circle cx="3" cy="3" r="2" fill="#1e1630" opacity=".16"/></pattern>
+    <clipPath id="body"><circle cx="256" cy="236" r="146"/></clipPath>
+  </defs>
+  <rect width="512" height="512" rx="0" fill="#f3e6cf"/>
+  <rect width="512" height="512" fill="#f3e6cf" filter="url(#paper)"/>
+  <!-- film strip tail -->
+  <path d="M362 320c64 30 80 84 42 110-34 24-80 0-124 12" fill="none" stroke="#1e1630" stroke-width="40" stroke-linecap="round"/>
+  <path d="M362 320c64 30 80 84 42 110-34 24-80 0-124 12" fill="none" stroke="#fff8ea" stroke-width="14" stroke-dasharray="12 20"/>
+  <!-- body -->
+  <circle cx="256" cy="236" r="148" fill="#fff8ea"/>
+  <circle cx="256" cy="236" r="148" fill="#ffd23f" opacity=".45"/>
+  <g clip-path="url(#body)"><rect x="250" y="220" width="200" height="200" fill="url(#dots)"/></g>
+  <path d="M160 150q30-44 82-54" fill="none" stroke="#fff8ea" stroke-width="16" stroke-linecap="round"/>
+  <path d="M256 84c86-2 152 64 152 150 1 88-66 154-150 154-86 1-152-64-152-152 0-84 64-150 150-152" fill="none" stroke="#1e1630" stroke-width="15" stroke-linecap="round"/>
+  <circle cx="256" cy="134" r="24" fill="none" stroke="#1e1630" stroke-width="9" opacity=".8"/>
+  <circle cx="160" cy="262" r="21" fill="none" stroke="#1e1630" stroke-width="8" opacity=".55"/>
+  <circle cx="352" cy="262" r="21" fill="none" stroke="#1e1630" stroke-width="8" opacity=".55"/>
+  <!-- face -->
+  <ellipse cx="176" cy="254" rx="22" ry="13" fill="#ff4f79" opacity=".5"/>
+  <ellipse cx="336" cy="254" rx="22" ry="13" fill="#ff4f79" opacity=".5"/>
+  <ellipse cx="214" cy="222" rx="18" ry="25" fill="#1e1630"/><ellipse cx="298" cy="222" rx="18" ry="25" fill="#1e1630"/>
+  <circle cx="221" cy="212" r="7" fill="#fff8ea"/><circle cx="305" cy="212" r="7" fill="#fff8ea"/>
+  <path d="M212 274q44 50 88 0q-44 18-88 0z" fill="#1e1630" stroke="#1e1630" stroke-width="8" stroke-linejoin="round"/>
+</svg>

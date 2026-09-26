@@ -1,0 +1,40 @@
+/* settings */
+.st-body { padding: 22px 0 10px; max-width: 980px; }
+.st-body h3 { display: flex; align-items: center; gap: 8px; }
+.st-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+.st-account-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.st-account-row > div:nth-child(2) { flex: 1; min-width: 180px; }
+.st-stamp {
+  display: flex; flex-direction: column; align-items: center; padding: 8px 18px;
+  border: 3px solid var(--a4); color: var(--a4); border-radius: 48% 52% 46% 54%;
+  transform: rotate(-8deg); font-family: var(--font-type);
+}
+.st-stamp span { text-transform: uppercase; letter-spacing: .12em; font-size: 12px; }
+.st-stamp b { font: 34px/1 var(--font-display); color: var(--ink); }
+.st-stamp small { font-size: 11px; }
+.st-stamp.warn { border-color: var(--a1); color: var(--a1); }
+
+.st-range { width: 100%; accent-color: var(--a1); height: 30px; }
+.st-subs-preview {
+  position: relative; aspect-ratio: 16 / 7; border-radius: 6px; overflow: hidden;
+  display: flex; align-items: flex-end; justify-content: center; padding: 14px;
+  background: linear-gradient(160deg, #3b4a6b, #1b2030 60%, #0d0f18);
+  box-shadow: inset 0 0 0 2.5px var(--line);
+}
+.st-subs-preview::before { content: ''; position: absolute; inset: 0; background: radial-gradient(circle at 70% 30%, rgba(255,210,120,.35), transparent 40%); }
+.st-subs-preview span {
+  position: relative; font: calc(20px * var(--sub-size)) / 1.25 system-ui, sans-serif; color: var(--sub-color);
+  background: var(--sub-bg); padding: 2px 8px; border-radius: 4px; text-align: center;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+}
+.st-themes { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.st-privacy ul, .st-about ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.st-about .sticky-note { margin-top: 10px; }
+
+.st-qr-wrap { display: flex; gap: 26px; align-items: center; flex-wrap: wrap; }
+.st-qr { width: 240px; align-items: center; }
+.st-qr-code { width: 210px; height: 210px; background: #fff; }
+.st-qr-code svg { width: 100%; height: 100%; display: block; }
+.st-qr-wrap .stack { flex: 1; min-width: 220px; }
+
+.st-import { max-width: 520px; align-items: center; text-align: center; }

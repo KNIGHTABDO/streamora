@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" data-theme="ink">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Streamora</title>
+  <meta name="description" content="A sketchbook that plays movies. Your Real-Debrid, your profiles, all on this device." />
+  <meta name="theme-color" content="#f3e6cf" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Streamora" />
+  <meta name="referrer" content="no-referrer" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="art/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="art/icon-180.png" />
+  <link rel="preconnect" href="https://v3-cinemeta.strem.io" crossorigin />
+  <link rel="preconnect" href="https://anime-kitsu.strem.fun" crossorigin />
+  <link rel="preconnect" href="https://images.metahub.space" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat+Brush&family=Patrick+Hand&family=Special+Elite&display=swap" />
+  <link rel="stylesheet" href="css/paper.css" />
+  <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/app.css" />
+  <link rel="modulepreload" href="vendor/preact-htm.js" />
+  <script>
+    // paint the right theme before the app boots (no flash)
+    try {
+      var p = JSON.parse(localStorage.getItem('streamora:profiles') || '[]');
+      var a = JSON.parse(localStorage.getItem('streamora:activeProfile') || 'null');
+      var me = p.filter(function (x) { return x.id === a; })[0];
+      var s = a && JSON.parse(localStorage.getItem('streamora:p:' + a + ':settings') || '{}') || {};
+      var h = new Date().getHours();
+      document.documentElement.dataset.theme = (s.nightAuto !== false && (h >= 19 || h < 6)) ? 'blueprint' : (me && me.theme) || 'ink';
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+  <noscript>Streamora needs JavaScript to draw itself.</noscript>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

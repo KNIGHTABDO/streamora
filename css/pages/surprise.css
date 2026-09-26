@@ -1,0 +1,29 @@
+/* Surprise Me */
+.sur-layout { display: grid; grid-template-columns: minmax(280px, 440px) 1fr; gap: clamp(20px, 4vw, 56px); align-items: start; }
+@media (max-width: 860px) { .sur-layout { grid-template-columns: 1fr; } .sur-stage { order: -1; } }
+.sur-filters { display: flex; flex-direction: column; gap: 10px; }
+.sur-filters h3 { margin-bottom: 4px; }
+.sur-filters .kicker { margin-top: 6px; }
+.sur-genres { max-height: 168px; overflow-y: auto; padding: 4px 2px; }
+.sur-roll { margin-top: 12px; align-self: flex-start; }
+
+.sur-stage { display: flex; flex-direction: column; align-items: center; gap: 18px; min-height: 420px; }
+.sur-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 40px; text-align: center; }
+.sur-empty .reel { animation: float 3s ease-in-out infinite; }
+
+.sur-card {
+  position: relative; width: min(300px, 70vw); padding: 12px 12px 44px; background: var(--paper-3);
+  box-shadow: var(--shadow-lift); transform: rotate(-2deg); animation: sur-deal .5s var(--ease-pop) both;
+}
+@keyframes sur-deal { from { opacity: 0; transform: translateY(-40px) rotate(-14deg) scale(.9); } }
+.sur-photo { position: relative; aspect-ratio: 2 / 3; overflow: hidden; background: var(--paper-2); }
+.sur-photo > img { width: 100%; height: 100%; object-fit: cover; }
+.sur-foil {
+  position: absolute; left: 12px; top: 12px; width: calc(100% - 24px); aspect-ratio: 2 / 3;
+  touch-action: none; cursor: crosshair; transition: opacity .6s;
+}
+.sur-foil.gone { opacity: 0; pointer-events: none; }
+.sur-actions { justify-content: center; }
+.sur-result { max-width: 560px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; animation: fade-up .4s both; }
+.sur-desc { max-width: 52ch; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.sur-result .cluster { justify-content: center; }

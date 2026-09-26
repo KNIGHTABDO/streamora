@@ -1,0 +1,61 @@
+/* welcome / onboarding */
+.welcome { min-height: 100dvh; display: grid; place-items: center; padding: calc(24px + var(--safe-t)) 16px calc(24px + var(--safe-b)); }
+.welcome-stage { width: min(560px, 100%); display: flex; flex-direction: column; align-items: center; gap: 8px; }
+
+.welcome-title { width: min(440px, 92%); height: auto; overflow: visible; }
+.welcome-title text { font-family: var(--font-display); font-size: 104px; }
+.welcome-title-ink {
+  fill: none; stroke: var(--line); stroke-width: 2.2; stroke-linejoin: round;
+  stroke-dasharray: 900; stroke-dashoffset: 900; animation: w-draw 1.8s .15s ease-out forwards;
+}
+.welcome-title-fill { fill: var(--ink); opacity: 0; animation: w-fill .6s 1.5s ease-out forwards; }
+.welcome-title-fill { paint-order: stroke; }
+.welcome-title-under { stroke: var(--a1); stroke-width: 7; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw .6s 1.9s ease-out forwards; }
+@keyframes w-draw { to { stroke-dashoffset: 0; } }
+@keyframes w-fill { to { opacity: 1; } }
+
+.welcome-book { width: 100%; perspective: 1400px; }
+.welcome-page {
+  position: relative; padding: 26px 26px 22px; text-align: center;
+  transform-origin: left center; animation: w-flip .55s var(--ease-flip) both;
+  background:
+    repeating-linear-gradient(transparent 0 31px, color-mix(in srgb, var(--a2) 18%, transparent) 31px 32px),
+    var(--paper-3);
+}
+.welcome-page::before { /* margin line */
+  content: ''; position: absolute; top: 0; bottom: 0; left: 30px; width: 2px; background: color-mix(in srgb, var(--a1) 45%, transparent);
+}
+@keyframes w-flip { from { opacity: 0; transform: rotateY(-70deg) translateX(-20px); } to { opacity: 1; transform: none; } }
+.welcome-reel { display: flex; justify-content: center; }
+.welcome-reel .reel { animation: float 3s ease-in-out infinite; }
+.welcome-page h2 { margin: 6px 0 8px; }
+.welcome-body { font-size: 20px; line-height: 1.45; max-width: 42ch; margin: 0 auto 12px; }
+.welcome-link { color: var(--a2); text-decoration: underline wavy; text-underline-offset: 3px; }
+.welcome-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+.welcome-dots { display: flex; gap: 8px; }
+.welcome-dots span { width: 12px; height: 12px; border: 2px solid var(--line); border-radius: 50% 40% 55% 45%; }
+.welcome-dots span.on { background: var(--a1); transform: rotate(20deg) scale(1.15); }
+.welcome-skip { position: absolute; top: 12px; right: 16px; color: var(--ink-3); font-size: 14px; min-height: 32px; }
+.welcome-skip:hover { color: var(--a1); }
+.welcome-page form { text-align: left; }
+.welcome-page form h2 { text-align: center; }
+.welcome-foot { font-size: 16px; color: var(--ink-2); }
+.welcome-skip-inline { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; color: var(--ink-2); }
+.welcome-skip-inline:hover { color: var(--a1); }
+
+.welcome-stamp {
+  align-self: center; display: flex; flex-direction: column; align-items: center;
+  padding: 10px 22px; border: 3px solid var(--a4); border-radius: 48% 52% 46% 54%;
+  color: var(--a4); transform: rotate(-7deg); font-family: var(--font-type);
+  animation: w-stamp .35s var(--ease-pop) both;
+}
+.welcome-stamp span { text-transform: uppercase; letter-spacing: .1em; font-size: 13px; }
+.welcome-stamp b { font: 26px var(--font-display); color: var(--ink); }
+.welcome-stamp small { font-size: 12px; }
+@keyframes w-stamp { from { opacity: 0; transform: rotate(-20deg) scale(2); } }
+
+@media (max-width: 520px) {
+  .welcome-page { padding: 22px 16px 18px 20px; }
+  .welcome-page::before { left: 12px; }
+  .welcome-body { font-size: 18px; }
+}

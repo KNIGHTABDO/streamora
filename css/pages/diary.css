@@ -1,0 +1,69 @@
+/* Diary: a journal page with a margin line, dates written in the margin */
+.dy-page { padding-top: 22px; }
+.dy-journal {
+  position: relative; max-width: 900px;
+  background:
+    linear-gradient(90deg, transparent 84px, color-mix(in srgb, var(--a1) 55%, transparent) 84px 86px, transparent 86px),
+    repeating-linear-gradient(180deg, transparent 0 43px, color-mix(in srgb, var(--a2) 20%, transparent) 43px 44px),
+    var(--paper-3);
+  padding: 24px 22px 30px 0; border-radius: 4px; box-shadow: var(--shadow);
+}
+.dy-month { margin-bottom: 18px; }
+.dy-month-h { font-size: clamp(26px, 3.4vw, 34px); padding-left: 104px; margin-bottom: 8px; }
+.dy-month-h small { font-size: 13px; margin-left: 6px; }
+.dy-list { list-style: none; margin: 0; padding: 0; }
+.dy-entry { display: grid; grid-template-columns: 84px 58px 1fr auto; gap: 0 16px; align-items: center; padding: 8px 0; }
+.dy-entry + .dy-entry { border-top: 1.5px dashed color-mix(in srgb, var(--ink-3) 50%, transparent); }
+.dy-date { display: flex; flex-direction: column; align-items: center; line-height: 1; color: var(--ink-2); }
+.dy-day { font-size: 36px; color: var(--ink); transform: rotate(-4deg); }
+.dy-date .type { font-size: 11px; text-transform: uppercase; }
+.dy-thumb { position: relative; display: block; width: 58px; aspect-ratio: 2 / 3; overflow: hidden; background: var(--paper-2); box-shadow: 2px 3px 0 rgba(0,0,0,.14); transform: rotate(var(--tilt)); border: 3px solid var(--paper); transition: transform .2s var(--ease-pop); }
+.dy-thumb:hover { transform: rotate(0) scale(1.08); }
+.dy-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.dy-thumb .doodle-poster { font-size: 11px; padding: 2px; }
+.dy-thumb .doodle-poster span { padding: 1px 2px; }
+.dy-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dy-name { font-size: 21px; line-height: 1.1; }
+.dy-name:hover { color: var(--a1); }
+.dy-body .type { font-size: 12px; }
+.dy-note-text { margin: 4px 0 0; color: var(--ink-2); font-style: italic; }
+.dy-entry.diary .dy-name::after { content: ' ✎'; color: var(--a1); font-size: .8em; }
+
+.dy-edit textarea.dy-note {
+  width: 100%; resize: vertical; min-height: 100px; padding: 10px 12px; font-size: 19px;
+  border: 2.5px solid var(--line); border-radius: 8px 12px 9px 11px; outline: none;
+  background: repeating-linear-gradient(180deg, var(--paper-3) 0 27px, color-mix(in srgb, var(--a2) 22%, transparent) 27px 28px);
+  line-height: 28px;
+}
+.dy-edit textarea.dy-note:focus { border-color: var(--a2); }
+
+/* stats */
+.dy-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 18px; margin-bottom: 26px; }
+.dy-stat {
+  position: relative; display: flex; flex-direction: column; gap: 2px; padding: 16px 18px 14px;
+  background: var(--paper-3); box-shadow: var(--shadow); border-radius: 4px;
+}
+.dy-stat:nth-child(odd) { transform: rotate(-1deg); } .dy-stat:nth-child(even) { transform: rotate(.8deg); }
+.dy-stat::before { content: ''; position: absolute; left: 12px; right: 30%; top: 58px; height: 22px; background: var(--tone); opacity: .5; border-radius: 3px 10px 4px 12px; transform: rotate(-1.5deg); }
+.dy-stat .icon { color: var(--ink-2); }
+.dy-stat-big { position: relative; font-size: 56px; line-height: 1; }
+.dy-stat-label { color: var(--ink-2); font-size: 17px; }
+.dy-stat-row { display: grid; grid-template-columns: 1.3fr 1fr; gap: 24px; }
+.dy-panel h3 { margin-bottom: 12px; }
+.dy-bars { width: 100%; max-width: 520px; height: auto; overflow: visible; }
+.dy-most { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; }
+.dy-most img, .dy-most .doodle-poster { width: 90px; aspect-ratio: 2 / 3; object-fit: cover; box-shadow: var(--shadow); transform: rotate(-2deg); position: relative; }
+.dy-most b { display: block; font-size: 30px; font-weight: 400; }
+.dy-fav { margin: 8px 0 0; }
+
+@media (max-width: 760px) {
+  .dy-journal { background: var(--paper-3); padding: 16px 12px 20px; }
+  .dy-month-h { padding-left: 4px; }
+  .dy-entry { grid-template-columns: 44px 50px 1fr auto; gap: 0 10px; }
+  .dy-day { font-size: 28px; }
+  .dy-thumb { width: 50px; }
+  .dy-name { font-size: 18px; }
+  .dy-stat-row { grid-template-columns: 1fr; }
+  .dy-stat-big { font-size: 44px; }
+  .dy-stat-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
+}

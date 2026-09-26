@@ -1,0 +1,603 @@
+// The Streamora player: a <video> wrapped in hand-drawn controls.
+// Props:
+//   meta, video (episode or null), stream {hls, direct, downloadId, filename}, info (mediaInfos or null),
+//   start (seconds), source {infoHash, fileIdx, binge, release, quality} | null, noProgress,
+//   onFatal(err) (stream died: parent tries another source), onPickSource(), onBack()
+import { html, useState, useEffect, useRef, useMemo, useCallback } from '../../vendor/preact-htm.js';
+import { Icon, Reel, cx, fmtTime, toast, Img } from '../ui/components.js';
+import { registerIcons } from '../ui/icons.js';
+import { underlinePath, scribbleLoop, roughRect, hash } from '../ui/sketch.js';
+import { useStore, settings } from '../core/store.js';
+import { saveProgress, epState } from '../core/progress.js';
+import { nextVideo, seasonsOf, isReleased } from '../core/meta.js';
+import { isPhone } from '../core/sources.js';
+import { navigate } from '../router.js';
+import { moveFocus } from '../ui/focus.js';
+import { attach, buildUrl, autoQuality, QUALITIES, isIOS, isSafari } from './engine.js';
+import { openSubs, loadSubFile, cuesAt, toVTT, langName } from './subs.js';
+
+registerIcons({
+  episodes: { d: 'M3.6 5.2h11.6M3.5 10.1h11.7M3.6 15h7.9M17.2 12.6l3.6 2.4-3.6 2.5zM3.5 19.8h7.9' },
+  moon2: { d: 'M18.6 14.4c-4.6 1.2-9-2.2-9-7 0-1.2.3-2.3.8-3.3-3.6 1-6.1 4.3-6 8.1.1 4.6 3.9 8.3 8.5 8.2 3.2 0 5.9-2 7.1-4.8zM16.4 3.9h3.2l-3.2 3.6h3.3', fill: 'M18.6 14.4c-4.6 1.2-9-2.2-9-7 0-1.2.3-2.3.8-3.3-3.6 1-6.1 4.3-6 8.1.1 4.6 3.9 8.3 8.5 8.2 3.2 0 5.9-2 7.1-4.8z' },
+  source: { d: 'M4.1 5.1h15.8M4.1 12h15.8M4.1 18.9h15.8M8.2 3.2v3.9M15.6 10.1v3.9M10.4 17v3.8' },
+});
+
+const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const SLEEP = [{ id: 'off', label: 'Off' }, { id: 'end', label: 'End of this episode' }, { id: '15', label: '15 minutes' }, { id: '30', label: '30 minutes' }, { id: '60', label: '1 hour' }];
+
+function pickAudio(info, pref) {
+  const a = (info && info.details && info.details.audio) || {};
+  const keys = Object.keys(a);
+  if (!keys.length) return null;
+  return keys.find(k => a[k].lang_iso === pref) || keys[0];
+}
+
+// Embedded tracks often have no language tag (RD reports "Unknown"/"und"): label them by language when
+// known, "Track N" otherwise, and number duplicates ("English · 2"). -> [[key, track, label]]
+function trackLabels(tracks) {
+  const known = x => x.lang_iso && !/^(und|unk|mis|zxx)$/i.test(x.lang_iso) && !/^unknown$/i.test(x.lang || '');
+  const list = Object.entries(tracks), seen = {};
+  const total = {};
+  list.forEach(([, x]) => { if (known(x)) total[x.lang_iso] = (total[x.lang_iso] || 0) + 1; });
+  return list.map(([k, x], i) => {
+    if (!known(x)) return [k, x, `Track ${i + 1}`];
+    const name = langName(x.lang_iso) !== x.lang_iso.toUpperCase() ? langName(x.lang_iso) : (x.lang || x.lang_iso);
+    seen[x.lang_iso] = (seen[x.lang_iso] || 0) + 1;
+    return [k, x, total[x.lang_iso] > 1 ? `${name} · ${seen[x.lang_iso]}` : name];
+  });
+}
+
+export function Player({ meta, video, stream, info, start = 0, source, noProgress, onFatal, onPickSource, onBack }) {
+  const s = useStore(settings);
+  const vRef = useRef(), boxRef = useRef();
+  const phone = useMemo(isPhone, []);
+  const height = info && info.details && Object.values(info.details.video || {})[0]?.height;
+
+  // ------------------------------------------------ stream selection
+  const [quality, setQuality] = useState(() => (s.quality && s.quality !== 'auto' ? s.quality : autoQuality(height, phone)));
+  const [audio, setAudio] = useState(() => pickAudio(info, s.audioLang));
+  const [burn, setBurn] = useState('none');            // embedded subtitle key burned into the video
+  const url = useMemo(() => {
+    if (info && info.modelUrl && audio) return buildUrl(info.modelUrl, { audio, subs: burn, quality });
+    const h = stream.hls || {};
+    return h[quality] || h.high || h.original || Object.values(h).find(Boolean) || (/\.(mp4|webm|m4v)(\?|$)/i.test(stream.direct || '') ? stream.direct : null);
+  }, [info, audio, burn, quality, stream]);
+
+  // ------------------------------------------------ playback state
+  const [st, setSt] = useState({ playing: false, t: start, dur: 0, buf: 0, waiting: true, vol: 1, muted: false, rate: 1, ended: false });
+  const [blocked, setBlocked] = useState(false);       // autoplay refused
+  const [started, setStarted] = useState(false);       // first frame shown (drop the backdrop behind the video)
+  const [ui, setUi] = useState(true);                  // controls visible
+  const [menu, setMenu] = useState(null);              // null | 'settings' | 'subs' | 'audio' | 'episodes'
+  const [flash, setFlash] = useState(null);            // double-tap feedback
+  // RD transcodes on the fly and only serves segments near where it is converting, so a far seek
+  // can't just set currentTime: it re-requests the playlist with ?t=<seconds>, which restarts the
+  // conversion there. offRef = the real time of the stream's first segment; real time = off + currentTime.
+  const isTc = /stream\.real-debrid\.com\/t\//.test(url || '');
+  const posRef = useRef(start);          // real position to (re)start at
+  const seekPending = useRef(false);     // a far seek set posRef; don't let the re-attach cleanup overwrite it
+  const offRef = useRef(0);
+  const [off, setOff] = useState(0);
+  const [reload, setReload] = useState(0);
+  const realDur = x => (info && info.duration) || (x && isFinite(x.duration) ? offRef.current + x.duration : 0);
+  const realNow = x => offRef.current + ((x && x.currentTime) || 0);
+  const hideT = useRef();
+
+  const poke = useCallback(() => {
+    setUi(true);
+    clearTimeout(hideT.current);
+    hideT.current = setTimeout(() => { const v = vRef.current; if (v && !v.paused) { setUi(false); setMenu(m => (m === 'episodes' ? m : null)); } }, 3200);
+  }, []);
+
+  // attach / re-attach when the url changes (keep position)
+  useEffect(() => {
+    const v = vRef.current;
+    if (!url) { onFatal && onFatal(new Error('No playable stream for this file.')); return; }
+    let detach = () => {}, dead = false;
+    seekPending.current = false;
+    const o = isTc ? Math.max(0, Math.floor(posRef.current)) : 0;
+    offRef.current = o; setOff(o);
+    const src = o > 0 ? `${url}${url.includes('?') ? '&' : '?'}t=${o}` : url;
+    setSt(x => ({ ...x, waiting: true }));
+    attach(v, src, { start: isTc ? 0 : posRef.current, onFatal: e => !dead && onFatal && onFatal(e) }).then(d => {
+      if (dead) return d();
+      detach = d;
+      v.playbackRate = st.rate;
+      const p = v.play();
+      p && p.catch(() => setBlocked(true));
+    }, e => onFatal && onFatal(e));
+    return () => { dead = true; if (!seekPending.current && v.currentTime > 0) posRef.current = realNow(v); detach(); };
+  }, [url, reload]);
+
+  useEffect(() => {
+    const v = vRef.current;
+    const up = () => setSt(x => ({ ...x, t: realNow(v), dur: realDur(v) || x.dur, buf: offRef.current + (v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0) }));
+    const ev = {
+      timeupdate: up, durationchange: up, progress: up,
+      play: () => { setBlocked(false); setSt(x => ({ ...x, playing: true, ended: false })); poke(); },
+      pause: () => { setSt(x => ({ ...x, playing: false })); setUi(true); save(); },
+      waiting: () => setSt(x => ({ ...x, waiting: true })),
+      playing: () => { setStarted(true); setSt(x => ({ ...x, waiting: false })); },
+      canplay: () => setSt(x => ({ ...x, waiting: false })),
+      seeked: up,
+      volumechange: () => setSt(x => ({ ...x, vol: v.volume, muted: v.muted })),
+      ratechange: () => setSt(x => ({ ...x, rate: v.playbackRate })),
+      ended: () => { setSt(x => ({ ...x, ended: true, playing: false })); save(true); },
+    };
+    for (const [k, f] of Object.entries(ev)) v.addEventListener(k, f);
+    return () => { for (const [k, f] of Object.entries(ev)) v.removeEventListener(k, f); };
+  }, []);
+
+  // ------------------------------------------------ progress
+  const save = useCallback((final) => {
+    const v = vRef.current;
+    if (noProgress || !v || !meta) return;
+    const dur = realDur(v);
+    const t = final ? dur : realNow(v);
+    if (dur && isFinite(dur)) saveProgress(meta, video, t, dur, source && { infoHash: source.infoHash, fileIdx: source.fileIdx, binge: source.binge });
+  }, [meta, video, source, noProgress]);
+  useEffect(() => {
+    const i = setInterval(() => vRef.current && !vRef.current.paused && save(), 5000);
+    const vis = () => document.visibilityState === 'hidden' && save();
+    document.addEventListener('visibilitychange', vis);
+    addEventListener('pagehide', vis);
+    return () => { clearInterval(i); document.removeEventListener('visibilitychange', vis); removeEventListener('pagehide', vis); save(); };
+  }, [save]);
+
+  // ------------------------------------------------ wake lock + media session
+  useEffect(() => {
+    let lock = null;
+    if (st.playing && navigator.wakeLock) navigator.wakeLock.request('screen').then(l => (lock = l), () => {});
+    return () => lock && lock.release().catch(() => {});
+  }, [st.playing]);
+  const next = useMemo(() => (video && meta ? nextVideo(meta, video.id) : null), [meta, video]);
+  const title = meta ? meta.name : stream.filename;
+  const sub = video ? `S${video.season} · E${video.episode}${video.name || video.title ? ' · ' + (video.name || video.title) : ''}` : '';
+  const goNext = useCallback(() => {
+    if (!next) return;
+    save();
+    navigate(`#/watch/${meta.type}/${encodeURIComponent(meta.id)}?v=${encodeURIComponent(next.id)}`, { replace: true });
+  }, [next, meta, save]);
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({ title: sub ? `${title} · ${sub}` : title, artist: 'Streamora', artwork: meta && meta.poster ? [{ src: meta.poster, sizes: '300x450', type: 'image/jpeg' }] : [] });
+      const v = vRef.current, ms = navigator.mediaSession;
+      ms.setActionHandler('play', () => v.play());
+      ms.setActionHandler('pause', () => v.pause());
+      ms.setActionHandler('seekbackward', d => seekRef.current(realNow(v) - (d.seekOffset || 10)));
+      ms.setActionHandler('seekforward', d => seekRef.current(realNow(v) + (d.seekOffset || 10)));
+      ms.setActionHandler('seekto', d => seekRef.current(d.seekTime));
+      ms.setActionHandler('nexttrack', next ? goNext : null);
+    } catch {}
+  }, [title, sub, next]);
+
+  // ------------------------------------------------ subtitles (external, own overlay)
+  const [ext, setExt] = useState([]);               // available OpenSubtitles
+  const [cur, setCur] = useState(null);             // { id, label, cues }
+  const [delay, setDelay] = useState(0);
+  const [line, setLine] = useState([]);
+  useEffect(() => {
+    if (!meta || String(meta.id).startsWith('rd:')) return;
+    openSubs(meta.type, video ? video.id : meta.id).then(list => {
+      setExt(list);
+      // auto-pick: subtitles only when the audio isn't in the viewer's language
+      const aud = info && info.details && info.details.audio && audio && info.details.audio[audio];
+      if (aud && aud.lang_iso !== 'und' && aud.lang_iso !== s.subsLang && s.subsLang) {
+        const hit = list.find(x => x.lang === s.subsLang);
+        if (hit) chooseExt(hit);
+      }
+    });
+  }, [meta && meta.id, video && video.id]);
+  const chooseExt = async it => {
+    if (!it) { setCur(null); return; }
+    setCur({ id: it.id, label: it.label, cues: [], loading: true });
+    try { const cues = await loadSubFile(it.url); setCur({ id: it.id, label: it.label, cues }); }
+    catch (e) { setCur(null); toast('That subtitle file would not load', { kind: 'warn' }); }
+  };
+  useEffect(() => {
+    if (!cur || !cur.cues.length) { setLine([]); return; }
+    let raf, last = '';
+    const tick = () => {
+      const v = vRef.current;
+      const l = v ? cuesAt(cur.cues, realNow(v) - delay) : [];
+      const k = l.join('\n');
+      if (k !== last) { last = k; setLine(l); }
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => cancelAnimationFrame(raf);
+  }, [cur, delay]);
+  // iOS native fullscreen can't show our overlay: mirror the cues into a <track>
+  const trackUrl = useMemo(() => {
+    if (!isIOS || !cur || !cur.cues.length) return null;
+    return URL.createObjectURL(new Blob([toVTT(cur.cues.map(c => ({ ...c, start: c.start + delay - off, end: c.end + delay - off })).filter(c => c.end > 0))], { type: 'text/vtt' }));
+  }, [cur, delay, off]);
+  useEffect(() => () => trackUrl && URL.revokeObjectURL(trackUrl), [trackUrl]);
+  // Only show the native <track> in iOS native fullscreen; inline, our overlay draws them (else: double subs).
+  useEffect(() => {
+    const x = vRef.current; if (!x || !trackUrl) return;
+    const set = m => () => { for (const tt of x.textTracks) tt.mode = m; };
+    const hide = set('hidden'), show = set('showing');
+    hide(); const t0 = setTimeout(hide, 300);   // the <track default> flips itself to 'showing' once loaded
+    x.addEventListener('webkitbeginfullscreen', show); x.addEventListener('webkitendfullscreen', hide);
+    return () => { clearTimeout(t0); x.removeEventListener('webkitbeginfullscreen', show); x.removeEventListener('webkitendfullscreen', hide); };
+  }, [trackUrl]);
+
+  // ------------------------------------------------ sleep timer
+  const [sleep, setSleep] = useState({ id: 'off', at: 0 });
+  const [asleep, setAsleep] = useState(false);
+  useEffect(() => {
+    if (sleep.id === 'off') return;
+    const i = setInterval(() => {
+      const v = vRef.current;
+      if (sleep.id === 'end' ? st.ended || (v && realDur(v) - realNow(v) < 1) : Date.now() >= sleep.at) {
+        v && v.pause(); setAsleep(true); setSleep({ id: 'off', at: 0 });
+      }
+    }, 1000);
+    return () => clearInterval(i);
+  }, [sleep, st.ended]);
+
+  // ------------------------------------------------ up next card
+  const [nextDismissed, setNextDismissed] = useState(false);
+  const [count, setCount] = useState(10);
+  const showNext = !!next && isReleased(next) && !nextDismissed && st.dur > 0 && (st.ended || st.dur - st.t < 22) && sleep.id !== 'end' && !asleep;
+  useEffect(() => {
+    if (!showNext || !s.autoNext) return;
+    if (count <= 0) { goNext(); return; }
+    const i = setTimeout(() => setCount(c => c - 1), 1000);
+    return () => clearTimeout(i);
+  }, [showNext, count, s.autoNext]);
+  useEffect(() => { if (!showNext) setCount(10); }, [showNext]);
+
+  // ------------------------------------------------ actions
+  const v = () => vRef.current;
+  const toggle = () => { const x = v(); if (!x) return; if (x.paused) { const p = x.play(); p && p.catch(() => setBlocked(true)); } else x.pause(); };
+  const reloadT = useRef();
+  const seekTo = T => {
+    const x = v(); if (!x) return;
+    const dur = realDur(x);
+    T = Math.max(0, dur ? Math.min(dur - .5, T) : T);
+    const local = T - offRef.current;
+    // inside a loaded range (or a few seconds past one): a normal seek. Anywhere else on a transcode: restart there.
+    let near = false;
+    for (let i = 0; i < x.buffered.length; i++) near ||= local >= x.buffered.start(i) - 1 && local <= x.buffered.end(i) + 8;
+    clearTimeout(reloadT.current);
+    if (!isTc || (local >= 0 && near)) { seekPending.current = false; x.currentTime = Math.max(0, local); }
+    else {
+      // debounce: rapid taps / scrubbing would otherwise restart the transcode once per step
+      posRef.current = T; seekPending.current = true; x.pause();
+      reloadT.current = setTimeout(() => setReload(k => k + 1), 450);
+    }
+    setSt(s0 => ({ ...s0, t: T }));
+  };
+  const seekBy = d => { const x = v(); if (!x) return; seekTo(realNow(x) + d); poke(); };
+  const seekRef = useRef(seekTo);
+  seekRef.current = seekTo;
+  const setVol = val => { const x = v(); if (!x) return; x.volume = Math.max(0, Math.min(1, val)); x.muted = x.volume === 0; };
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+  const fullscreen = () => {
+    const box = boxRef.current, x = v();
+    if (fsEl()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    else if (box.requestFullscreen) box.requestFullscreen().then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {}), () => {});
+    else if (box.webkitRequestFullscreen) box.webkitRequestFullscreen();
+    else if (x.webkitEnterFullscreen) x.webkitEnterFullscreen();
+  };
+  const [isFs, setFs] = useState(false);
+  useEffect(() => {
+    const on = () => setFs(!!fsEl());
+    document.addEventListener('fullscreenchange', on); document.addEventListener('webkitfullscreenchange', on);
+    return () => { document.removeEventListener('fullscreenchange', on); document.removeEventListener('webkitfullscreenchange', on); };
+  }, []);
+  const pip = async () => {
+    const x = v();
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else if (x.requestPictureInPicture) await x.requestPictureInPicture();
+      else if (x.webkitSetPresentationMode) x.webkitSetPresentationMode(x.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
+    } catch { toast('Picture-in-picture is not available here', { kind: 'warn' }); }
+  };
+  const canPip = typeof document !== 'undefined' && (document.pictureInPictureEnabled || (isSafari || isIOS));
+  const [airplay, setAirplay] = useState(false);
+  useEffect(() => {
+    const x = v();
+    if (!window.WebKitPlaybackTargetAvailabilityEvent) return;
+    const on = e => setAirplay(e.availability === 'available');
+    x.addEventListener('webkitplaybacktargetavailabilitychanged', on);
+    return () => x.removeEventListener('webkitplaybacktargetavailabilitychanged', on);
+  }, []);
+  const canCast = !isSafari && !isIOS && typeof HTMLMediaElement !== 'undefined' && 'remote' in HTMLMediaElement.prototype;
+  const cast = () => v().remote.prompt().catch(e => toast(e && e.name === 'NotSupportedError' ? 'Casting isn\'t supported for this stream in this browser' : 'No cast device picked', { kind: 'warn' }));
+
+  const still = () => {
+    const x = v();
+    try {
+      const w = x.videoWidth, h = x.videoHeight;
+      if (!w) throw new Error('no frame');
+      const pad = Math.round(w * .04), c = document.createElement('canvas');
+      c.width = w + pad * 2; c.height = h + pad * 3.2;
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff8ea'; g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(x, pad, pad, w, h);
+      g.fillStyle = '#1e1630';
+      g.fill(new Path2D(roughRect(c.width, c.height, hash(title || 'x'), { inset: pad * .35, sw: pad * .12 })));
+      g.font = `${Math.round(pad * .9)}px "Caveat Brush", cursive`;
+      g.fillText(`${title || ''}${sub ? ' · ' + sub : ''}  ·  ${fmtTime(realNow(x))}`, pad, h + pad * 2.3);
+      c.toBlob(b => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(b); a.download = `${(title || 'still').replace(/[^\w-]+/g, '_')}_${Math.floor(realNow(x))}.png`;
+        a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        toast('Still saved', { icon: 'camera' });
+      }, 'image/png');
+    } catch { toast('This browser won\'t let me grab that frame', { kind: 'warn' }); }
+  };
+
+  // ------------------------------------------------ keyboard & remote
+  useEffect(() => {
+    const onKey = e => {
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) && e.target.type !== 'range') return;
+      const onControl = e.target.closest && e.target.closest('.pl-ui button, .pl-ui a, .pl-menu');
+      const k = e.key;
+      const hover = matchMedia('(hover: hover)').matches;
+      if (k === ' ' || k === 'k' || k === 'MediaPlayPause') { if (k === ' ' && onControl) return; e.preventDefault(); toggle(); poke(); }
+      else if (k === 'j') seekBy(-10);
+      else if (k === 'l') seekBy(10);
+      else if (k === 'f') fullscreen();
+      else if (k === 'm') { v().muted = !v().muted; poke(); }
+      else if (k === 'c') { setMenu(m => (m === 'subs' ? null : 'subs')); poke(); }
+      else if (k === 'n' && next) goNext();
+      else if (k === 'Escape' && menu) { setMenu(null); }
+      else if (k === 'ArrowLeft' || k === 'ArrowRight') {
+        e.preventDefault();
+        if (onControl && ui) { moveFocus(k) || null; poke(); }
+        else seekBy(k === 'ArrowLeft' ? -5 : 5);
+      } else if (k === 'ArrowUp' || k === 'ArrowDown') {
+        e.preventDefault();
+        if (!ui) { poke(); return; }
+        if (hover && !onControl) setVol(v().volume + (k === 'ArrowUp' ? .1 : -.1));
+        else moveFocus(k);
+        poke();
+      } else if (k === 'Enter' && !onControl) { e.preventDefault(); toggle(); poke(); }
+    };
+    addEventListener('keydown', onKey);
+    return () => removeEventListener('keydown', onKey);
+  });
+
+  // ------------------------------------------------ touch: tap = controls, double tap sides = ±10
+  const lastTap = useRef(0);
+  const onSurface = e => {
+    if (e.target !== e.currentTarget) return;
+    const touch = e.pointerType === 'touch' || e.pointerType === 'pen';
+    const now = Date.now();
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width;
+    if (touch) {
+      if (now - lastTap.current < 300 && (x < .35 || x > .65)) {
+        const d = x < .35 ? -10 : 10;
+        seekBy(d); setFlash({ side: d < 0 ? 'left' : 'right', k: now });
+        lastTap.current = 0; return;
+      }
+      lastTap.current = now;
+      if (ui && !menu) { setUi(false); } else { poke(); }
+      setMenu(null);
+    } else {
+      if (menu) { setMenu(null); return; }
+      toggle(); poke();
+    }
+  };
+  useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 600); return () => clearTimeout(t); }, [flash]);
+
+  // ------------------------------------------------ render
+  const audios = Object.entries((info && info.details && info.details.audio) || {});
+  const embedded = useMemo(() => trackLabels((info && info.details && info.details.subtitles) || {}), [info]);
+  const extByLang = useMemo(() => {
+    const m = new Map();
+    for (const x of ext) { if (!m.has(x.lang)) m.set(x.lang, []); m.get(x.lang).push(x); }
+    return [...m.entries()].sort((a, b) => (b[0] === s.subsLang) - (a[0] === s.subsLang) || a[1][0].label.localeCompare(b[1][0].label));
+  }, [ext]);
+  const pct = st.dur ? st.t / st.dur : 0;
+  const subStyle = `--sub-size:${(s.subsSize || 100) / 100};--sub-color:${s.subsColor || '#fffbe8'};--sub-bg:rgba(0,0,0,${s.subsBg ?? .35})`;
+  const inIntro = !!video && st.t > 5 && st.t < 180 && st.dur > 600;
+
+  return html`<div class=${cx('player', ui ? 'show-ui' : 'hide-ui', st.waiting && 'is-waiting')} ref=${boxRef} data-own-arrows data-focus-scope
+      onPointerMove=${e => e.pointerType === 'mouse' && poke()} style=${subStyle}>
+    <video ref=${vRef} class="pl-video" playsinline webkit-playsinline preload="auto" crossorigin="anonymous" x-webkit-airplay="allow"
+      style=${meta && meta.background && !started ? `background:#000 url("${meta.background}") center/cover no-repeat` : ''}>
+      ${trackUrl && html`<track kind="subtitles" src=${trackUrl} srclang=${s.subsLang || 'en'} label=${cur && cur.label} default />`}
+    </video>
+
+    <div class="pl-surface" onPointerUp=${onSurface}></div>
+
+    ${line.length > 0 && html`<div class="pl-subs" aria-live="off">${line.map(l => html`<span dangerouslySetInnerHTML=${{ __html: l.replace(/\n/g, '<br>') }}></span>`)}</div>`}
+
+    ${flash && html`<div class=${'pl-flash ' + flash.side} key=${flash.k}><${Icon} name=${flash.side === 'left' ? 'rewind' : 'forward'} size=${38} /><span>10s</span></div>`}
+    ${st.waiting && !blocked && html`<div class="pl-buffer" aria-label="Buffering"><${Reel} mood="think" size=${96} /></div>`}
+    ${blocked && html`<button type="button" class="pl-bigplay" onClick=${toggle} aria-label="Play"><${Icon} name="play" size=${54} /><span class="display">tap to play</span></button>`}
+
+    <div class="pl-ui" aria-hidden=${!ui}>
+      <div class="pl-top">
+        <button type="button" class="pl-btn" onClick=${onBack} aria-label="Back"><${Icon} name="back" size=${28} /></button>
+        <div class="pl-title">
+          <div class="display pl-title-main">${title}</div>
+          ${sub && html`<div class="type pl-title-sub">${sub}</div>`}
+        </div>
+        <div class="pl-top-tools">
+          ${airplay && html`<button type="button" class="pl-btn" onClick=${() => v().webkitShowPlaybackTargetPicker()} aria-label="AirPlay"><${Icon} name="airplay" /></button>`}
+          ${canCast && html`<button type="button" class="pl-btn" onClick=${cast} aria-label="Cast"><${Icon} name="cast" /></button>`}
+          ${onPickSource && html`<button type="button" class="pl-btn pl-source-btn" onClick=${onPickSource} aria-label="Change source" title=${source && source.release}><${Icon} name="source" /><span class="type">${source && source.quality !== '?' ? source.quality : 'source'}</span></button>`}
+        </div>
+      </div>
+
+      <div class="pl-center">
+        <button type="button" class="pl-btn pl-skip10" onClick=${() => seekBy(-10)} aria-label="Back 10 seconds"><${Icon} name="rewind" size=${38} /></button>
+        <button type="button" class="pl-btn pl-play" onClick=${toggle} aria-label=${st.playing ? 'Pause' : 'Play'}><${Icon} name=${st.playing ? 'pause' : 'play'} size=${46} /></button>
+        <button type="button" class="pl-btn pl-skip10" onClick=${() => seekBy(10)} aria-label="Forward 10 seconds"><${Icon} name="forward" size=${38} /></button>
+      </div>
+
+      <div class="pl-bottom">
+        ${inIntro && html`<button type="button" class="pl-chip pl-skipintro" onClick=${() => seekBy(s.skipIntroSec || 85)}><${Icon} name="skip" size=${18} /> Skip intro</button>`}
+        <${SeekBar} t=${st.t} dur=${st.dur} buf=${st.buf} onSeek=${seekTo} seed=${hash(String(meta && meta.id))} onActive=${poke} />
+        <div class="pl-row">
+          <button type="button" class="pl-btn" onClick=${toggle} aria-label=${st.playing ? 'Pause' : 'Play'}><${Icon} name=${st.playing ? 'pause' : 'play'} /></button>
+          <button type="button" class="pl-btn hide-phone" onClick=${() => seekBy(-10)} aria-label="Back 10 seconds"><${Icon} name="rewind" /></button>
+          <button type="button" class="pl-btn hide-phone" onClick=${() => seekBy(10)} aria-label="Forward 10 seconds"><${Icon} name="forward" /></button>
+          <div class="pl-vol hide-phone">
+            <button type="button" class="pl-btn" onClick=${() => (v().muted = !v().muted)} aria-label=${st.muted ? 'Unmute' : 'Mute'}><${Icon} name=${st.muted || st.vol === 0 ? 'mute' : 'audio'} /></button>
+            <input type="range" min="0" max="1" step="0.05" value=${st.muted ? 0 : st.vol} onInput=${e => setVol(+e.currentTarget.value)} aria-label="Volume" />
+          </div>
+          <span class="pl-time type">${fmtTime(st.t)} <span class="faint">/ ${fmtTime(st.dur)}</span></span>
+          <span class="pl-spacer"></span>
+          ${next && html`<button type="button" class="pl-btn" onClick=${goNext} aria-label="Next episode" title="Next episode"><${Icon} name="skip" /></button>`}
+          ${meta && meta.videos && meta.videos.length > 0 && html`<button type="button" class=${cx('pl-btn', menu === 'episodes' && 'on')} onClick=${() => setMenu(m => (m === 'episodes' ? null : 'episodes'))} aria-label="Episodes"><${Icon} name="episodes" /></button>`}
+          <button type="button" class=${cx('pl-btn', (cur || burn !== 'none') && 'lit', menu === 'subs' && 'on')} onClick=${() => setMenu(m => (m === 'subs' ? null : 'subs'))} aria-label="Subtitles"><${Icon} name="subtitles" /></button>
+          ${audios.length > 1 && html`<button type="button" class=${cx('pl-btn hide-phone', menu === 'audio' && 'on')} onClick=${() => setMenu(m => (m === 'audio' ? null : 'audio'))} aria-label="Audio"><${Icon} name="audio" /></button>`}
+          <button type="button" class=${cx('pl-btn', menu === 'settings' && 'on', sleep.id !== 'off' && 'lit')} onClick=${() => setMenu(m => (m === 'settings' ? null : 'settings'))} aria-label="Settings"><${Icon} name="gear" /></button>
+          ${canPip && html`<button type="button" class="pl-btn hide-phone" onClick=${pip} aria-label="Picture in picture"><${Icon} name="pip" /></button>`}
+          <button type="button" class="pl-btn" onClick=${fullscreen} aria-label="Fullscreen"><${Icon} name=${isFs ? 'exitFullscreen' : 'fullscreen'} /></button>
+        </div>
+      </div>
+    </div>
+
+    ${menu === 'subs' && html`<${Menu} title="Subtitles" onClose=${() => setMenu(null)}>
+      <${Item} on=${!cur && burn === 'none'} onClick=${() => { chooseExt(null); setBurn('none'); }}>Off<//>
+      ${cur && html`<div class="pl-delay"><span>Timing</span>
+        <button type="button" class="pl-chip" onClick=${() => setDelay(d => +(d - .25).toFixed(2))}>−¼s</button>
+        <span class="type">${delay > 0 ? '+' : ''}${delay.toFixed(2)}s</span>
+        <button type="button" class="pl-chip" onClick=${() => setDelay(d => +(d + .25).toFixed(2))}>+¼s</button>
+      </div>`}
+      ${embedded.length > 0 && html`<div class="pl-menu-kicker kicker type">in the file (burned in)</div>`}
+      ${embedded.map(([k, x, label]) => html`<${Item} on=${burn === k} onClick=${() => { chooseExt(null); setBurn(k); }}>${label}${x.type && html` <span class="faint type">${String(x.type).toUpperCase()}</span>`}<//>`)}
+      ${extByLang.length > 0 && html`<div class="pl-menu-kicker kicker type">opensubtitles</div>`}
+      ${extByLang.map(([lang, list]) => html`<details class="pl-sublang" open=${lang === s.subsLang}>
+        <summary>${list[0].label} <span class="faint type">${list.length}</span></summary>
+        ${list.slice(0, 8).map(x => html`<${Item} on=${cur && cur.id === x.id} onClick=${() => { setBurn('none'); chooseExt(x); }}><span class="pl-sub-rel">${x.release || x.label}</span><//>`)}
+      </details>`)}
+      ${!embedded.length && !extByLang.length && html`<p class="faint">No subtitles found for this one.</p>`}
+    <//>`}
+
+    ${menu === 'audio' && html`<${Menu} title="Audio" onClose=${() => setMenu(null)}>
+      ${audios.map(([k, a]) => html`<${Item} on=${audio === k} onClick=${() => setAudio(k)}>${a.lang || langName(a.lang_iso)} <span class="faint type">${a.codec} ${a.channels}</span><//>`)}
+    <//>`}
+
+    ${menu === 'settings' && html`<${Menu} title="Settings" onClose=${() => setMenu(null)}>
+      <div class="pl-menu-kicker kicker type">quality</div>
+      <div class="pl-grid">${QUALITIES.filter(q => info ? true : stream.hls && stream.hls[q.key]).map(q => html`<button type="button" class=${cx('pl-chip', quality === q.key && 'on')} onClick=${() => setQuality(q.key)}>${q.label}</button>`)}</div>
+      ${audios.length > 1 && html`<div class="pl-menu-kicker kicker type">audio</div>
+        <div class="pl-grid">${audios.map(([k, a]) => html`<button type="button" class=${cx('pl-chip', audio === k && 'on')} onClick=${() => setAudio(k)}>${a.lang || langName(a.lang_iso)}</button>`)}</div>`}
+      <div class="pl-menu-kicker kicker type">speed</div>
+      <div class="pl-grid">${SPEEDS.map(r => html`<button type="button" class=${cx('pl-chip', st.rate === r && 'on')} onClick=${() => (v().playbackRate = r)}>${r}×</button>`)}</div>
+      <div class="pl-menu-kicker kicker type">sleep timer</div>
+      <div class="pl-grid">${SLEEP.filter(x => x.id !== 'end' || video).map(x => html`<button type="button" class=${cx('pl-chip', sleep.id === x.id && 'on')}
+        onClick=${() => setSleep({ id: x.id, at: x.id === 'off' || x.id === 'end' ? 0 : Date.now() + +x.id * 60e3 })}>${x.label}</button>`)}</div>
+      <div class="pl-menu-kicker kicker type">extras</div>
+      <div class="pl-grid">
+        <button type="button" class="pl-chip" onClick=${still}><${Icon} name="camera" size=${16} /> Save a still</button>
+        ${canPip && html`<button type="button" class="pl-chip" onClick=${pip}><${Icon} name="pip" size=${16} /> Picture in picture</button>`}
+        ${onPickSource && html`<button type="button" class="pl-chip" onClick=${() => { setMenu(null); onPickSource(); }}><${Icon} name="source" size=${16} /> Change source</button>`}
+      </div>
+      ${source && source.release && html`<p class="faint type pl-release">${source.release}</p>`}
+    <//>`}
+
+    ${menu === 'episodes' && meta && html`<${Episodes} meta=${meta} current=${video && video.id} onClose=${() => setMenu(null)} />`}
+
+    ${showNext && html`<div class="pl-next">
+      <span class="tape top"></span>
+      <div class="kicker type">up next</div>
+      <div class="pl-next-body">
+        ${next.thumbnail && html`<${Img} src=${next.thumbnail} alt="" class="pl-next-thumb" />`}
+        <div>
+          <div class="display pl-next-title">S${next.season} · E${next.episode}</div>
+          <div class="pl-next-name">${next.name || next.title || ''}</div>
+        </div>
+      </div>
+      <div class="pl-next-actions">
+        <button type="button" class="pl-chip on pl-next-go" onClick=${goNext}>
+          <svg viewBox="0 0 36 36" class="pl-count" aria-hidden="true"><circle cx="18" cy="18" r="15" pathLength="1" style=${`stroke-dashoffset:${s.autoNext ? count / 10 : 0}`} /></svg>
+          Play${s.autoNext ? ` in ${count}` : ''}
+        </button>
+        <button type="button" class="pl-chip" onClick=${() => setNextDismissed(true)}>Keep watching</button>
+      </div>
+    </div>`}
+
+    ${asleep && html`<div class="pl-sleep" onClick=${() => setAsleep(false)}>
+      <${Reel} mood="sleep" size=${170} />
+      <h2>Sleep well.</h2>
+      <p class="muted">Paused by your sleep timer. Tap to wake up.</p>
+    </div>`}
+  </div>`;
+}
+
+function Menu({ title, onClose, children }) {
+  const ref = useRef();
+  useEffect(() => { const b = ref.current && ref.current.querySelector('button, summary'); b && b.focus({ preventScroll: true }); }, []);
+  return html`<div class="pl-menu" ref=${ref} role="dialog" aria-label=${title}>
+    <div class="pl-menu-head"><h3>${title}</h3><button type="button" class="pl-btn" onClick=${onClose} aria-label="Close"><${Icon} name="close" size=${20} /></button></div>
+    <div class="pl-menu-body">${children}</div>
+  </div>`;
+}
+function Item({ on, onClick, children }) {
+  return html`<button type="button" class=${cx('pl-item', on && 'on')} onClick=${onClick}>
+    <span class="pl-item-tick">${on && html`<${Icon} name="check" size=${18} />`}</span><span class="pl-item-label">${children}</span>
+  </button>`;
+}
+
+function Episodes({ meta, current, onClose }) {
+  const seasons = seasonsOf(meta);
+  const curSeason = (meta.videos.find(x => x.id === current) || {}).season;
+  const [season, setSeason] = useState(curSeason ?? (seasons[0] && seasons[0][0]));
+  const list = (seasons.find(x => x[0] === season) || [0, []])[1];
+  const ref = useRef();
+  useEffect(() => { const el = ref.current && ref.current.querySelector('.pl-ep.now'); el && el.scrollIntoView({ block: 'center' }); }, [season]);
+  return html`<div class="pl-menu pl-episodes" role="dialog" aria-label="Episodes">
+    <div class="pl-menu-head"><h3>Episodes</h3><button type="button" class="pl-btn" onClick=${onClose} aria-label="Close"><${Icon} name="close" size=${20} /></button></div>
+    ${seasons.length > 1 && html`<div class="pl-grid pl-seasons">${seasons.map(([n]) => html`<button type="button" class=${cx('pl-chip', n === season && 'on')} onClick=${() => setSeason(n)}>${n === 0 ? 'Specials' : `S${n}`}</button>`)}</div>`}
+    <div class="pl-menu-body" ref=${ref}>
+      ${list.map(ep => {
+        const e = epState(meta.id, ep.id);
+        const out = !isReleased(ep);
+        return html`<a class=${cx('pl-ep', ep.id === current && 'now', out && 'soon')} href=${out ? null : `#/watch/${meta.type}/${encodeURIComponent(meta.id)}?v=${encodeURIComponent(ep.id)}`}
+            onClick=${e2 => { if (out) return; e2.preventDefault(); navigate(`#/watch/${meta.type}/${encodeURIComponent(meta.id)}?v=${encodeURIComponent(ep.id)}`, { replace: true }); }}>
+          <span class="pl-ep-thumb">${ep.thumbnail ? html`<${Img} src=${ep.thumbnail} alt="" />` : html`<span class="display">${ep.episode}</span>`}
+            ${e && html`<span class="pl-ep-bar" style=${`width:${e.done ? 100 : Math.round(e.t / e.dur * 100)}%`}></span>`}</span>
+          <span class="pl-ep-text"><b>${ep.episode}. ${ep.name || ep.title || 'Episode ' + ep.episode}</b>
+            <small class="faint type">${out ? 'coming ' + new Date(ep.released).toLocaleDateString() : e && e.done ? 'watched ✓' : ''}</small></span>
+        </a>`;
+      })}
+    </div>
+  </div>`;
+}
+
+/** Pencil-line seek bar with a scribbled scrubber. */
+function SeekBar({ t, dur, buf, onSeek, seed, onActive }) {
+  const ref = useRef();
+  const [drag, setDrag] = useState(null);      // fraction while dragging
+  const [hover, setHover] = useState(null);
+  const d = useMemo(() => underlinePath(1000, seed, { sw: 6, h: 14 }), [seed]);
+  const knob = useMemo(() => scribbleLoop(40, 40, seed, { sw: 3.2, turns: 1.3 }), [seed]);
+  const frac = e => { const r = ref.current.getBoundingClientRect(); return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); };
+  const shown = drag ?? (dur ? t / dur : 0);
+  const kb = e => {
+    if (!dur) return;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); onSeek(Math.max(0, Math.min(dur, t + (e.key === 'ArrowLeft' ? -10 : 10)))); onActive(); }
+    if (e.key === 'Home') onSeek(0);
+    if (e.key === 'End') onSeek(dur - 1);
+  };
+  return html`<div class="pl-seek" ref=${ref} role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax=${Math.round(dur)} aria-valuenow=${Math.round(t)} aria-valuetext=${fmtTime(t)}
+      onKeyDown=${kb}
+      onPointerDown=${e => { if (!dur) return; e.currentTarget.setPointerCapture(e.pointerId); setDrag(frac(e)); onActive(); }}
+      onPointerMove=${e => { if (!dur) return; const f = frac(e); setHover(f); if (drag != null) { setDrag(f); onActive(); } }}
+      onPointerUp=${e => { if (drag != null) { onSeek(frac(e) * dur); setDrag(null); } }}
+      onPointerCancel=${() => setDrag(null)}
+      onPointerLeave=${() => setHover(null)}>
+    <svg viewBox="0 0 1000 14" preserveAspectRatio="none" class="pl-seek-line" aria-hidden="true">
+      <clipPath id="plbuf"><rect width=${dur ? 1000 * Math.min(1, buf / dur) : 0} height="14" /></clipPath>
+      <clipPath id="plplay"><rect width=${1000 * shown} height="14" /></clipPath>
+      <path d=${d} fill="rgba(255,255,255,.28)" />
+      <path d=${d} fill="rgba(255,255,255,.55)" clip-path="url(#plbuf)" />
+      <path d=${d} fill="var(--a1)" clip-path="url(#plplay)" />
+    </svg>
+    <svg viewBox="0 0 40 40" class="pl-knob" style=${`left:${shown * 100}%`} aria-hidden="true"><circle cx="20" cy="20" r="11" fill="var(--a3)"/><path d=${knob} fill="#1e1630"/></svg>
+    ${hover != null && dur > 0 && html`<span class="pl-seek-tip type" style=${`left:${(drag ?? hover) * 100}%`}>${fmtTime((drag ?? hover) * dur)}</span>`}
+  </div>`;
+}

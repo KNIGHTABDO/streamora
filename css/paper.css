@@ -1,0 +1,278 @@
+/* ============================================================
+   STREAMORA · paper.css
+   Themes = the five looks of the hand-drawn skill, as UI.
+   Set on <html data-theme="ink|riso|blueprint|pencil|doodle">.
+   Every colour in the app comes from these tokens.
+   ============================================================ */
+
+:root {
+  --font-display: 'Caveat Brush', 'Comic Sans MS', cursive;
+  --font-hand: 'Patrick Hand', 'Comic Sans MS', cursive;
+  --font-type: 'Special Elite', 'Courier New', monospace;
+
+  --r: 14px;                 /* base radius (rough borders sit on top) */
+  --gap: clamp(12px, 2.4vw, 22px);
+  --gutter: clamp(16px, 4vw, 48px);
+  --nav-h: 64px;
+  --tab-h: 68px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+  --ease-flip: cubic-bezier(.7, 0, .2, 1);
+  --ease-pop: cubic-bezier(.3, 1.6, .5, 1);
+  --boil: 480ms;             /* one boil cycle frame; line redraw rate */
+}
+
+/* ---------- Paper & Ink (default) : warm paper, brown fills, fluorescent accents ---------- */
+:root, [data-theme="ink"] {
+  --paper: #f3e6cf;
+  --paper-2: #ead9bb;        /* cards, panels */
+  --paper-3: #fff8ea;        /* polaroid frame, raised surfaces */
+  --ink: #1e1630;
+  --ink-2: #4a3d52;          /* secondary text */
+  --ink-3: #8a7a78;          /* faint text, construction lines */
+  --line: #1e1630;
+  --guide: rgba(70, 100, 255, .45);
+  --a1: #ff4f79;             /* accents: marker pink */
+  --a2: #2b5fb8;             /* ink blue */
+  --a3: #ffd23f;             /* highlighter yellow */
+  --a4: #1fb58f;             /* mint */
+  --fill-1: #c8473f; --fill-2: #d9a441; --fill-3: #7a8f5a; --fill-4: #8a5a44;
+  --shade: rgba(30, 22, 48, .55);
+  --dot: rgba(30, 22, 48, .22);          /* halftone dot colour */
+  --tape: rgba(255, 216, 120, .72);
+  --tape-2: rgba(255, 150, 170, .6);
+  --shadow: 0 1px 0 rgba(30,22,48,.08), 3px 5px 0 rgba(30,22,48,.14);
+  --shadow-lift: 0 2px 0 rgba(30,22,48,.08), 8px 14px 0 rgba(30,22,48,.16);
+  --glass: rgba(243, 230, 207, .86);
+  --on-accent: #1e1630;
+  --scrim: rgba(30, 22, 48, .55);
+  --print-a: #c8473f;        /* riso plate inks used by print effects */
+  --print-b: #2b5fb8;
+  color-scheme: light;
+}
+
+/* ---------- Riso Pop : cream stock, fluoro inks, halftone ---------- */
+[data-theme="riso"] {
+  --paper: #f0ece2; --paper-2: #e6dfcf; --paper-3: #fbf8f0;
+  --ink: #22366b; --ink-2: #3f4f86; --ink-3: #8d93b3; --line: #22366b;
+  --a1: #ff48b0; --a2: #0078bf; --a3: #ffe800; --a4: #00a95c;
+  --fill-1: #ff48b0; --fill-2: #0078bf; --fill-3: #ffe800; --fill-4: #22366b;
+  --shade: rgba(34, 54, 107, .55); --dot: rgba(255, 72, 176, .28);
+  --tape: rgba(255, 232, 0, .6); --tape-2: rgba(255, 72, 176, .5);
+  --shadow: 3px 3px 0 #ff48b0; --shadow-lift: 6px 7px 0 #0078bf;
+  --glass: rgba(240, 236, 226, .88); --on-accent: #22366b;
+  --print-a: #ff48b0; --print-b: #0078bf;
+}
+
+/* ---------- Blueprint Night : chalk on navy (auto after sunset) ---------- */
+[data-theme="blueprint"] {
+  --paper: #0b0d1f; --paper-2: #14183a; --paper-3: #1b2150;
+  --ink: #e8ecff; --ink-2: #b9c2f0; --ink-3: #6b75a8; --line: #cfd8ff;
+  --guide: rgba(127, 231, 255, .35);
+  --a1: #ff7ab8; --a2: #7fe7ff; --a3: #ffe27a; --a4: #8dffc4;
+  --fill-1: #3b4aa8; --fill-2: #7fe7ff; --fill-3: #ff7ab8; --fill-4: #2a3170;
+  --shade: rgba(127, 231, 255, .5); --dot: rgba(127, 231, 255, .16);
+  --tape: rgba(127, 231, 255, .35); --tape-2: rgba(255, 122, 184, .35);
+  --shadow: 0 0 0 1px rgba(207,216,255,.08), 3px 5px 0 rgba(0,0,0,.45);
+  --shadow-lift: 0 0 0 1px rgba(207,216,255,.12), 8px 14px 0 rgba(0,0,0,.5);
+  --glass: rgba(11, 13, 31, .84); --on-accent: #0b0d1f; --scrim: rgba(0,0,0,.6);
+  --print-a: #ff7ab8; --print-b: #7fe7ff;
+  color-scheme: dark;
+}
+
+/* ---------- Pencil Minimal : cream + graphite, calm ---------- */
+[data-theme="pencil"] {
+  --paper: #f4efe4; --paper-2: #ebe4d4; --paper-3: #fbf8f1;
+  --ink: #201f1b; --ink-2: #55534b; --ink-3: #9a968a; --line: #3a3934;
+  --a1: #e8a5a5; --a2: #8a8a55; --a3: #e9d8a6; --a4: #9fb8a0;
+  --fill-1: #e8c6c0; --fill-2: #c9d3b8; --fill-3: #d9d2c0; --fill-4: #8a8a55;
+  --shade: rgba(32, 31, 27, .4); --dot: rgba(32, 31, 27, .12);
+  --tape: rgba(233, 216, 166, .7); --tape-2: rgba(232, 165, 165, .5);
+  --shadow: 0 1px 2px rgba(32,31,27,.12); --shadow-lift: 0 6px 18px rgba(32,31,27,.14);
+  --glass: rgba(244, 239, 228, .9); --on-accent: #201f1b;
+  --print-a: #8a8a55; --print-b: #55534b;
+}
+
+/* ---------- Doodle Pastel : brush pen on pastel ---------- */
+[data-theme="doodle"] {
+  --paper: #efd2d1; --paper-2: #e6c2c1; --paper-3: #fbeeee;
+  --ink: #23202b; --ink-2: #4b4458; --ink-3: #8f8098; --line: #23202b;
+  --a1: #e8505b; --a2: #5b7bd8; --a3: #ffd166; --a4: #3fbf9b;
+  --fill-1: #d3e6d9; --fill-2: #efe4b3; --fill-3: #d2dee8; --fill-4: #ded4e9;
+  --shade: rgba(35, 32, 43, .45); --dot: rgba(232, 80, 91, .2);
+  --tape: rgba(211, 230, 217, .8); --tape-2: rgba(222, 212, 233, .85);
+  --shadow: 3px 4px 0 rgba(35,32,43,.9); --shadow-lift: 6px 9px 0 rgba(35,32,43,.95);
+  --glass: rgba(239, 210, 209, .9); --on-accent: #23202b;
+  --print-a: #e8505b; --print-b: #5b7bd8;
+}
+
+/* ---------- Time Machine sepia (set data-era="old" on <html>) ---------- */
+[data-era="old"] .page-enter { filter: sepia(.55) contrast(1.02); }
+
+/* ============================================================ base */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; background: var(--paper); overflow-x: hidden; overflow-x: clip; }
+body {
+  margin: 0; min-height: 100dvh;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 18px/1.35 var(--font-hand);
+  overflow-x: hidden; overflow-x: clip;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color .6s, color .6s;
+}
+/* the paper texture belongs to the sheet: fixed, not scrolling with content */
+body::before {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 999;
+  background-image: var(--paper-tex);
+  background-size: 360px;
+  opacity: .4; mix-blend-mode: multiply;
+}
+[data-theme="blueprint"] body::before { mix-blend-mode: screen; opacity: .18; }
+body:has([data-no-paper])::before, body:has([data-no-paper])::after { display: none; }
+[data-theme="blueprint"] body::after {
+  /* blueprint grid */
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background-image:
+    linear-gradient(var(--guide) 1px, transparent 1px),
+    linear-gradient(90deg, var(--guide) 1px, transparent 1px);
+  background-size: 48px 48px; opacity: .22;
+}
+#app { position: relative; z-index: 1; }
+
+h1, h2, h3, .display { font-family: var(--font-display); font-weight: 400; line-height: 1.05; margin: 0; letter-spacing: .01em; }
+h1 { font-size: clamp(40px, 7vw, 84px); }
+h2 { font-size: clamp(28px, 4vw, 42px); }
+h3 { font-size: clamp(22px, 2.6vw, 28px); }
+p { margin: 0 0 .6em; }
+.type { font-family: var(--font-type); font-size: .82em; letter-spacing: .02em; }
+.muted { color: var(--ink-2); }
+.faint { color: var(--ink-3); }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+input, select, textarea { font: inherit; color: inherit; }
+img { display: block; max-width: 100%; }
+::selection { background: var(--a3); color: var(--ink); }
+
+/* hand-drawn focus ring (keyboard / TV remote) */
+:focus { outline: none; }
+:focus-visible, .tv-focus {
+  outline: 3px dashed var(--a2);
+  outline-offset: 5px;
+  border-radius: 10px;
+}
+[data-theme="blueprint"] :focus-visible { outline-color: var(--a3); }
+
+/* scrollbars like pencil lines */
+* { scrollbar-width: thin; scrollbar-color: var(--ink-3) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--ink-3); border-radius: 10px; border: 3px solid var(--paper); }
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ============================================================ print & paper effects */
+
+/* halftone dots: add .halftone to any positioned element */
+.halftone::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background-image: radial-gradient(var(--dot) 1.2px, transparent 1.6px);
+  background-size: 7px 7px;
+  mix-blend-mode: multiply;
+}
+[data-theme="blueprint"] .halftone::after { mix-blend-mode: screen; }
+
+/* riso print of an image: grayscale plate + ink multiply + misregistered second plate */
+.riso { position: relative; overflow: hidden; isolation: isolate; background: var(--paper-3); }
+.riso > img { width: 100%; height: 100%; object-fit: cover; filter: grayscale(1) contrast(1.25) brightness(1.08); mix-blend-mode: multiply; }
+.riso::before {
+  content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: var(--print-a); mix-blend-mode: screen; opacity: .9;
+}
+.riso::after {
+  content: ''; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  background-image: radial-gradient(var(--print-b) 1px, transparent 1.7px);
+  background-size: 6px 6px; transform: translate(2px, -1px) rotate(.4deg);
+  mix-blend-mode: multiply; opacity: .5;
+}
+/* colour variant: keep the photo, add print texture + slight misregistration */
+.print { position: relative; overflow: hidden; isolation: isolate; }
+.print > img { width: 100%; height: 100%; object-fit: cover; filter: saturate(.9) contrast(1.05); }
+.print::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image: radial-gradient(rgba(0,0,0,.18) .8px, transparent 1.3px);
+  background-size: 5px 5px; mix-blend-mode: multiply;
+}
+
+/* rough ink border: .ink-edge draws a boiling hand-drawn outline using masks generated by sketch.js */
+.ink-edge { position: relative; }
+.ink-edge::before {
+  content: ''; position: absolute; inset: -3px; pointer-events: none; z-index: 2;
+  background: var(--line);
+  -webkit-mask: var(--edge-a) center / 100% 100% no-repeat;
+          mask: var(--edge-a) center / 100% 100% no-repeat;
+}
+.ink-edge.wide::before { -webkit-mask-image: var(--wedge-a); mask-image: var(--wedge-a); }
+.ink-edge.tall::before { -webkit-mask-image: var(--tedge-a); mask-image: var(--tedge-a); }
+.ink-edge:is(:hover, :focus-visible, .boil)::before { animation: boil calc(var(--boil) * 3) steps(1) infinite; }
+.ink-edge.wide:is(:hover, :focus-visible, .boil)::before { animation-name: boil-wide; }
+.ink-edge.tall:is(:hover, :focus-visible, .boil)::before { animation-name: boil-tall; }
+@keyframes boil {
+  0% { -webkit-mask-image: var(--edge-a); mask-image: var(--edge-a); }
+  33% { -webkit-mask-image: var(--edge-b); mask-image: var(--edge-b); }
+  66% { -webkit-mask-image: var(--edge-c); mask-image: var(--edge-c); }
+}
+@keyframes boil-wide {
+  0% { -webkit-mask-image: var(--wedge-a); mask-image: var(--wedge-a); }
+  33% { -webkit-mask-image: var(--wedge-b); mask-image: var(--wedge-b); }
+  66% { -webkit-mask-image: var(--wedge-c); mask-image: var(--wedge-c); }
+}
+@keyframes boil-tall {
+  0% { -webkit-mask-image: var(--tedge-a); mask-image: var(--tedge-a); }
+  33% { -webkit-mask-image: var(--tedge-b); mask-image: var(--tedge-b); }
+  66% { -webkit-mask-image: var(--tedge-c); mask-image: var(--tedge-c); }
+}
+
+/* washi tape strip; place with .tape.tl / .tr / .top */
+.tape {
+  position: absolute; width: 74px; height: 22px; z-index: 3; pointer-events: none;
+  background: var(--tape);
+  clip-path: polygon(0 12%, 6% 0, 12% 10%, 18% 0, 25% 8%, 100% 0, 96% 50%, 100% 100%, 8% 92%, 3% 100%, 0 88%, 4% 50%);
+  box-shadow: inset 0 0 0 100px rgba(255,255,255,.08);
+}
+.tape.alt { background: var(--tape-2); }
+.tape.top { top: -10px; left: 50%; transform: translateX(-50%) rotate(-3deg); }
+.tape.tl { top: -8px; left: -18px; transform: rotate(-38deg); }
+.tape.tr { top: -8px; right: -18px; transform: rotate(36deg); }
+
+/* marker highlight behind text */
+.mark {
+  background: linear-gradient(104deg, transparent 2%, var(--a3) 4%, var(--a3) 94%, transparent 97%) 0 62% / 100% 58% no-repeat;
+  padding: 0 .12em;
+}
+[data-theme="blueprint"] .mark { color: var(--on-accent); }
+
+/* ============================================================ motion */
+@keyframes pop-in { from { opacity: 0; transform: scale(.92) rotate(-1deg); } to { opacity: 1; transform: none; } }
+@keyframes fade-up { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes wiggle { 0%,100% { transform: rotate(0); } 25% { transform: rotate(-3deg); } 75% { transform: rotate(3deg); } }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes spin-steps { to { transform: rotate(360deg); } }
+
+/* page flip transition (router adds these) */
+.page-enter { animation: page-in .55s var(--ease-flip) backwards; /* not "both": a filled transform would trap position:fixed children (modals) */ transform-origin: left center; }
+@keyframes page-in {
+  from { opacity: 0; transform: perspective(1400px) rotateY(-14deg) translateX(30px); filter: brightness(.94); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+::view-transition-old(root) { animation: .35s var(--ease-flip) both vt-out; }
+::view-transition-new(root) { animation: .5s var(--ease-flip) both vt-in; }
+@keyframes vt-out { to { opacity: 0; transform: perspective(1400px) rotateY(12deg) translateX(-24px); } }
+@keyframes vt-in { from { opacity: 0; transform: perspective(1400px) rotateY(-12deg) translateX(24px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+}
+[data-motion="reduce"] *, [data-motion="reduce"] *::before, [data-motion="reduce"] *::after {
+  animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important;
+}

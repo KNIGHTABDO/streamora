@@ -1,0 +1,23 @@
+import puppeteer from 'puppeteer-core';
+import { readFileSync } from 'node:fs';
+const KEY = readFileSync(new URL('./.rdkey', import.meta.url), 'utf8').trim();
+const B = 'https://api.real-debrid.com/rest/1.0';
+const H = { Authorization: 'Bearer ' + KEY };
+const before = new Set((await (await fetch(B + '/torrents?limit=100', { headers: H })).json()).map(t => t.id));
+const browser = await puppeteer.launch({ executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true });
+const page = await browser.newPage(); await page.setViewport({ width: 1440, height: 900 });
+const errs = []; page.on('pageerror', e => errs.push(e.message)); page.on('console', m => m.type() === 'error' && !/Manifest/.test(m.text()) && errs.push(m.text()));
+await page.goto('http://localhost:5173/#/welcome');
+await page.evaluate(async KEY => { const s = await import('/js/core/store.js'); if (!s.profiles.get().length) s.profiles.set([{ id: 'test1', name: 'Tester', avatar: 'cat', theme: 'ink', ink: '#ff4f79' }]); s.activeProfileId.set('test1'); s.settings.update(x => ({ ...x, nightAuto: false })); await s.saveRdKey(KEY); }, KEY);
+await page.goto('http://localhost:5173/#/add'); await page.reload();
+await page.waitForSelector('#add-text');
+await page.type('#add-text', '9f1014857b841af99b452376f9c8c536e4ce8812');
+await page.click('.add-drop button[type=submit]');
+await page.waitForSelector('.add-ready, .error-note', { timeout: 60000 }).catch(() => errs.push('timeout'));
+await new Promise(r => setTimeout(r, 1500));
+await page.screenshot({ path: 'tools/shots/b_add.png' });
+console.log(await page.$$eval('.add-files li', ls => ls.map(l => l.innerText.replace(/\n/g, ' | '))));
+const after = (await (await fetch(B + '/torrents?limit=100', { headers: H })).json()).filter(t => !before.has(t.id));
+for (const t of after) { await fetch(B + '/torrents/delete/' + t.id, { method: 'DELETE', headers: H }); console.log('cleaned', t.id, t.filename); }
+console.log(errs.join('\n') || 'no errors');
+await browser.close();

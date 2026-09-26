@@ -1,0 +1,29 @@
+# Streamora conventions (read before touching anything)
+
+**Stack:** Preact + htm (`vendor/preact-htm.js`: exports `html, render, useState, useEffect, useRef, useMemo, useCallback, useContext, createContext, useErrorBoundary, h`). No build step. ES modules. hls.js is a UMD file at `vendor/hls.min.js`. QR generator is at `vendor/qrcode.js` (both loaded with a `<script>` tag when needed).
+**Run:** `node dev-server.mjs` → http://localhost:5173. Screenshot and smoke test: `MSYS_NO_PATHCONV=1 node tools/shot.mjs "#/movies" [--phone|--tv] [--theme riso|blueprint|pencil|doodle] [--full] [--out name] [--click sel] [--wait ms]`. It seeds the RD key and a test profile, prints console errors, and saves to `tools/shots/`. **Look at your screenshots** (desktop and `--phone`) before calling a page done.
+**Style guide:** open `#/kit` for every shared component, Reel's moods and the icons.
+
+## Look (the user's standing preference)
+The whole app is a hand-drawn sketchbook (the hand-drawn-canvas-animation skill's look, applied to UI): warm paper, pressure-tapered ink lines, riso and halftone prints, washi tape, marker highlights, scribbles, and boiling lines that redraw on hover. Be creative and playful, but keep it **readable and fast**. There are 5 themes (`ink`, `riso`, `blueprint`, `pencil`, `doodle`), so **only use CSS tokens** (`--paper --paper-2 --paper-3 --ink --ink-2 --ink-3 --line --a1..--a4 --fill-1..4 --shadow --shadow-lift --glass --on-accent --print-a --print-b` and the fonts `--font-display --font-hand --font-type`), never raw colours except inside illustrations. Check at least one other theme (`--theme blueprint`).
+Helper classes: `.ink-edge` (+`.wide`/`.tall`) boiling border · `.tape .top/.tl/.tr .alt` · `.halftone` · `.riso` / `.print` image effects · `.mark` highlighter · `.panel` · `.sticky-note` · `.chips` / `.chips.scroll` · `.stack` `.cluster` `.spread` · `.kicker` · `.type` (typewriter) · `.muted` `.faint` · `.center-fill`. Drawing helpers are in `js/ui/sketch.js` (`roughRect, scribbleLoop, scribbleStroke, underlinePath, hatch, taper, rng, hash, tiltOf`, `<Scribble>`, `<Underline>`).
+
+## Files and ownership
+- **Do not edit** `js/core/*`, `js/ui/components.js`, `js/ui/sketch.js`, `js/router.js`, `js/main.js`, `css/paper.css`, `css/components.css` or `css/app.css`. If you need a change there, write it as a note in your final report (the lead makes it). Small bug fixes to core are OK **only** when a bug blocks you: keep them minimal and mention them.
+- Your page goes in `js/pages/<name>.js` and exports `default function X({ params, query })`. Page CSS goes in `css/pages/<name>.css`, loaded by `loadCSS('css/pages/<name>.css')` at the top of the module. Prefix your class names with the page name (e.g. `.home-…`) so they don't collide.
+- New icons: `registerIcons({ name: { d, fill?, fillColor?, w? } })` from `js/ui/icons.js` inside your module (24×24, pen-style, slightly wobbly on purpose).
+- Shared helper modules for your feature go in `js/pages/<name>/…` or `js/lib/<name>.js`.
+
+## Contracts
+- Routes are listed in `js/router.js` (don't add routes; they're already there). Link with hrefs like `#/title/movie/tt123`, and use `navigate()` and `setQuery()` from `router.js`.
+- **Watch URL:** `#/watch/{type}/{metaId}?v={videoId}&t={startSeconds}&hash={infoHash}&file={fileIdx}&fn={filename}`. `type` is `movie` or `series`. `v` is the episode video id for series (Cinemeta: `tt123:1:2`, Kitsu: `kitsu:7442:3`). With no `hash`, the player picks the best source itself. `#/watch/rd/{downloadLinkOrId}?name=` plays an item from the user's own Real-Debrid account.
+- Data: `core/meta.js` (catalog, meta, search, resolveTitle(s), seasonsOf, nextVideo, posterOf, backdropOf), `core/sources.js` (streams, rankStreams, fmtSize, isPhone), `core/rd.js` (resolveStream, resolveLink, transcode, mediaInfos, torrents, …), `core/progress.js` (saveProgress, resumeAt, continueWatching, hideFromContinue, epState, markWatched), `core/store.js` (per-profile `watchlist, progress, history, diary, follows, hidden, settings` pstores + `useStore`, `profiles`, `activeProfileId`, `activeProfile()`, `saveRdKey/getRdKey/forgetRdKey`, `exportAll/importAll`, `uid`), `core/parse.js` (release filename parser).
+- Components (`js/ui/components.js`): `Page, Hero, Row, Grid, usePaged, PosterCard, SkeletonCard, SectionTitle, Btn, IconBtn, Chip, Tabs, Stars, Spinner, ErrorNote, Empty, Modal, toast, Toasts, Field, Input, Toggle, Select, Img, DoodlePoster, useAsync, loadCSS, fmtTime, plural, shuffle, cx, hrefTitle`, plus `Reel` (moods: happy wave sleep yawn search binoculars sad confused popcorn party love think) and `Avatar/AVATARS/INKS` from `js/ui/avatars.js`.
+- Meta objects are Stremio metas: `{id, type:'movie'|'series', name, poster, background, logo, description, releaseInfo, year, imdbRating, genres, runtime, cast, director, videos[{id,season,episode,name|title,released,thumbnail,overview}]}`. Kitsu anime also has `anime:true`.
+- Curated lists (moods, collections, countries…) are stored as `{name, year, type}` and resolved at runtime with `resolveTitles()`. **Never hardcode IMDb ids from memory.**
+
+## Quality bar
+- Works on iPhone Safari (≥ iOS 16), desktop Chrome, Firefox and Edge, and TV browsers. Touch targets ≥ 44px, no horizontal page scroll, safe areas respected. Use `prefers-reduced-motion`.
+- Everything reachable with arrow keys (TV): use real `<a>` / `<button>` elements. Spatial navigation is automatic (`js/ui/focus.js`). Add `data-own-arrows` to widgets that handle arrows themselves.
+- Handle loading (skeletons or `<Spinner>`), empty (`<Empty>` with a Reel mood + a helpful action) and error (`<ErrorNote retry>`) states on every page.
+- No new dependencies. No console errors. Keep code tidy and match the surrounding style.

@@ -1,0 +1,47 @@
+/* genre sticker wall */
+.genres-group { margin: 8px 0 34px; }
+.genres-group-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+.genres-wall { display: flex; flex-wrap: wrap; gap: 18px 16px; padding: 6px 4px; }
+
+.sticker {
+  position: relative; display: inline-flex; align-items: center; gap: 10px;
+  padding: 10px 20px 11px 12px; min-height: 58px;
+  font: 400 calc(22px * var(--sz, 1))/1 var(--font-display);
+  background: var(--st); color: var(--on-accent);
+  border: 3px solid var(--line);
+  /* die-cut white edge around the ink line */
+  box-shadow: 0 0 0 5px var(--paper-3), 4px 6px 0 5px rgba(0, 0, 0, .14);
+  transform: rotate(var(--tilt, 0deg));
+  transition: transform .25s var(--ease-pop), box-shadow .25s;
+}
+.sticker.shape-0 { border-radius: 999px; }
+.sticker.shape-1 { border-radius: 16px 26px 14px 30px; }
+.sticker.shape-2 { border-radius: 30px 10px 30px 12px; }
+.sticker:hover, .sticker:focus-visible {
+  transform: rotate(calc(var(--tilt, 0deg) * -1)) scale(1.08) translateY(-3px);
+  box-shadow: 0 0 0 5px var(--paper-3), 7px 11px 0 5px rgba(0, 0, 0, .16);
+  z-index: 2;
+}
+.sticker-icon {
+  display: grid; place-items: center; width: 40px; height: 40px; flex: none;
+  background: var(--paper-3); color: var(--ink); border-radius: 50%; border: 2px solid var(--line);
+  --icon-fill: var(--st);
+}
+.sticker:hover .sticker-icon { animation: wiggle .5s ease-in-out; }
+.sticker-star {
+  position: absolute; top: -12px; right: -10px; font-size: 11px; padding: 2px 7px;
+  background: var(--paper-3); color: var(--a1); border: 2px solid var(--a1); border-radius: 10px; transform: rotate(8deg);
+}
+/* peeling corner */
+.sticker::after {
+  content: ''; position: absolute; right: -3px; bottom: -3px; width: 16px; height: 16px;
+  background: linear-gradient(135deg, transparent 48%, var(--paper-3) 50%, var(--paper-2) 100%);
+  border-bottom-right-radius: inherit; opacity: 0; transition: opacity .2s;
+}
+.sticker:hover::after { opacity: 1; }
+
+@media (max-width: 520px) {
+  .genres-wall { gap: 14px 12px; }
+  .sticker { font-size: 19px; min-height: 50px; padding: 7px 14px 8px 8px; }
+  .sticker-icon { width: 34px; height: 34px; }
+}
