@@ -4,6 +4,9 @@ import Capacitor
 
 // JS: Capacitor.Plugins.StreamoraPlayer.play({ url, title, subtitle, start, hasNext, audioLang, subsLang }) / close()
 //     extras({ subs: [{label, lang, url}], intro: [start, end]?, outro: [start, end]? }) once the web side has them
+// Engine mode (the web player's own controls on top of VLC, see VlcEngine.swift and js/player/vlc.js):
+//     capabilities() -> { engine: true } · engineOpen({ url, start, audioLang }) · enginePlay() · enginePause()
+//     engineSeek({ time }) · engineRate({ rate }) · engineVolume({ volume, muted }) · engineAudio({ id }) · engineSub({ id }) · engineClose()
 // Events: 'progress' {position, duration, paused}, 'next', 'closed' {position, duration, ended, error?}
 @objc(StreamoraPlayerPlugin)
 public class StreamoraPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -12,10 +15,60 @@ public class StreamoraPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "play", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "close", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "extras", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "extras", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "capabilities", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "engineOpen", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "enginePlay", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "enginePause", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "engineSeek", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "engineRate", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "engineVolume", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "engineAudio", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "engineSub", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "engineClose", returnType: CAPPluginReturnPromise)
     ]
 
     private weak var current: PlayerViewController?
+    private var engine: VlcEngine?
+
+    @objc func capabilities(_ call: CAPPluginCall) { call.resolve(["engine": true]) }
+
+    @objc func engineOpen(_ call: CAPPluginCall) {
+        guard let s = call.getString("url"), let url = URL(string: s) else { return call.reject("No playable link") }
+        let start = call.getDouble("start") ?? 0, audioLang = call.getString("audioLang") ?? ""
+        DispatchQueue.main.async {
+            self.engine?.close()
+            guard let web = self.bridge?.webView,
+                  let e = VlcEngine(webView: web, url: url, start: start, audioLang: audioLang, send: { [weak self] ev, data in self?.notifyListeners(ev, data: data) })
+            else { return call.reject("No view to play in") }
+            self.engine = e
+            call.resolve()
+        }
+    }
+
+    private func onEngine(_ call: CAPPluginCall, _ f: @escaping (VlcEngine) -> Void) {
+        DispatchQueue.main.async {
+            if let e = self.engine { f(e) }
+            call.resolve()
+        }
+    }
+    @objc func enginePlay(_ call: CAPPluginCall) { onEngine(call) { $0.play() } }
+    @objc func enginePause(_ call: CAPPluginCall) { onEngine(call) { $0.pause() } }
+    @objc func engineSeek(_ call: CAPPluginCall) { let t = call.getDouble("time") ?? 0; onEngine(call) { $0.seek(t) } }
+    @objc func engineRate(_ call: CAPPluginCall) { let r = call.getDouble("rate") ?? 1; onEngine(call) { $0.setRate(r) } }
+    @objc func engineVolume(_ call: CAPPluginCall) {
+        let v = call.getDouble("volume") ?? 1, m = call.getBool("muted") ?? false
+        onEngine(call) { $0.setVolume(v, muted: m) }
+    }
+    @objc func engineAudio(_ call: CAPPluginCall) { let i = Int32(call.getInt("id") ?? -1); onEngine(call) { $0.setAudio(i) } }
+    @objc func engineSub(_ call: CAPPluginCall) { let i = Int32(call.getInt("id") ?? -1); onEngine(call) { $0.setSub(i) } }
+    @objc func engineClose(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.engine?.close()
+            self.engine = nil
+            call.resolve()
+        }
+    }
 
     @objc func play(_ call: CAPPluginCall) {
         guard let s = call.getString("url"), let url = URL(string: s) else {
