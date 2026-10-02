@@ -485,7 +485,10 @@ final class PlayerViewController: UIViewController, UIGestureRecognizerDelegate 
             let n = perLang[s.lang, default: 0]
             if n < 3 && online.count < 12 { online.append(s); perLang[s.lang] = n + 1 }
         }
-        let extra = online.map { s in ("🌐 " + s.label, { [weak self] in self?.useOnline(s) }) }
+        var extra: [(String, () -> Void)] = []
+        for s in online {
+            extra.append(("🌐 " + s.label, { [weak self] in self?.useOnline(s) }))
+        }
         menu("Subtitles", names, ids, player.currentVideoSubTitleIndex, subsBtn, extra: extra) { [weak self] i in self?.player.currentVideoSubTitleIndex = i }
     }
 
