@@ -3,6 +3,7 @@
 //   meta, video (episode or null), stream {hls, direct, downloadId, filename}, info (mediaInfos or null),
 //   start (seconds), source {infoHash, fileIdx, binge, release, quality} | null, noProgress,
 //   onFatal(err, pos) (stream died or stalled; pos = real seconds to resume at: parent tries another source), onPickSource(), onBack()
+//   engine: 'web' (a <video>) | 'vlc' (iPhone/iPad app: VLC draws behind the transparent page, see vlc.js; same controls)
 // Emits window 'streamora:playback' events (see emit()).
 import { html, useState, useEffect, useRef, useMemo, useCallback } from '../../vendor/preact-htm.js';
 import { Icon, Reel, cx, fmtTime, toast, Img } from '../ui/components.js';
@@ -18,6 +19,7 @@ import { moveFocus } from '../ui/focus.js';
 import { attach, buildUrl, autoQuality, QUALITIES, isIOS, isSafari } from './engine.js';
 import { openSubs, loadSubFile, parseSubs, decodeSubs, cuesAt, toVTT, langName } from './subs.js';
 import { skipTimes } from './skip.js';
+import { VlcVideo } from './vlc.js';
 
 registerIcons({
   episodes: { d: 'M3.6 5.2h11.6M3.5 10.1h11.7M3.6 15h7.9M17.2 12.6l3.6 2.4-3.6 2.5zM3.5 19.8h7.9' },
@@ -66,9 +68,11 @@ function trackLabels(tracks) {
   });
 }
 
-export function Player({ meta, video, stream, info, start = 0, source, noProgress, onFatal, onPickSource, onBack }) {
+export function Player({ meta, video, stream, info, start = 0, source, noProgress, onFatal, onPickSource, onBack, engine = 'web' }) {
   const s = useStore(settings);
-  const vRef = useRef(), boxRef = useRef();
+  // VLC mode: a stand-in for the <video> element (same properties and events), so everything below works on both
+  const vlc = useMemo(() => (engine === 'vlc' ? new VlcVideo() : null), []);
+  const vRef = useRef(vlc), boxRef = useRef();
   const phone = useMemo(isPhone, []);
   const height = info && info.details && Object.values(info.details.video || {})[0]?.height;
   const fatalRef = useRef(onFatal);
@@ -89,6 +93,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   // Only while nothing needs the transcoder (default audio, no burned subs, quality untouched); dropped on error.
   const [direct, setDirect] = useState(() => directOk(stream, info));
   const url = useMemo(() => {
+    if (vlc) return stream.direct;   // VLC plays the original file, whatever it is
     if (direct && burn === 'none' && (!audio || audio === pickAudio(info))) return stream.direct;
     if (info && info.modelUrl && audio) return buildUrl(info.modelUrl, { audio, subs: burn, quality });
     const h = stream.hls || {};
@@ -144,7 +149,8 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     offRef.current = o; setOff(o);
     const src = o > 0 ? `${url}${url.includes('?') ? '&' : '?'}t=${o}` : url;
     setSt(x => ({ ...x, waiting: true }));
-    attach(v, src, { start: isTc ? 0 : posRef.current, onFatal: (e, p) => !dead && (src === stream.direct && info && info.modelUrl ? (posRef.current = p || posRef.current, setDirect(false)) : fatal(e, offRef.current + (p || 0))) }).then(d => {
+    (vlc ? vlc.open(src, { start: posRef.current, audioLang: mem.audioLang || s.audioLang, onFatal: (e, p) => !dead && fatal(e, p) })
+      : attach(v, src, { start: isTc ? 0 : posRef.current, onFatal: (e, p) => !dead && (src === stream.direct && info && info.modelUrl ? (posRef.current = p || posRef.current, setDirect(false)) : fatal(e, offRef.current + (p || 0))) })).then(d => {
       if (dead) return d();
       detach = d;
       v.playbackRate = rateRef.current;
@@ -263,12 +269,41 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const [delay, setDelay] = useState(0);
   const [line, setLine] = useState([]);
   const [subQ, setSubQ] = useState('');
+  const [extDone, setExtDone] = useState(false);
+  // VLC: the file's audio / subtitle tracks as VLC lists them
+  const [vt, setVt] = useState({ audio: [], subs: [], audioId: -1, subId: -1 });
+  useEffect(() => {
+    if (!vlc) return;
+    const on = e => setVt(e.detail);
+    vlc.addEventListener('tracks', on);
+    return () => vlc.removeEventListener('tracks', on);
+  }, []);
+  // VLC auto-pick: a subtitle track in the file in the wanted language, else OpenSubtitles; none when the
+  // audio is already in that language (unless this show remembers subtitles on)
+  const autoSubbed = useRef(false);
+  useEffect(() => {
+    if (!vlc || autoSubbed.current || !(vt.audio.length || vt.subs.length)) return;
+    const want = mem.subLang || s.subsLang;
+    if (!want || want === 'off') { autoSubbed.current = true; return; }
+    const name = langName(want).toLowerCase();
+    const isWant = t => t.name.toLowerCase().includes(name) || new RegExp(`\\b${want}\\b`, 'i').test(t.name);
+    const aud = vt.audio.find(t => t.id === vt.audioId);
+    if (!mem.subLang && aud && isWant(aud)) { autoSubbed.current = true; return; }
+    const inFile = vt.subs.find(t => t.id >= 0 && isWant(t));
+    if (inFile) { autoSubbed.current = true; vlc.setSub(inFile.id); return; }
+    if (!extDone) return;
+    autoSubbed.current = true;
+    const hit = ext.find(x => x.lang === want);
+    if (hit) chooseExt(hit);
+  }, [vt, extDone]);
   useEffect(() => {
     if (!meta || String(meta.id).startsWith('rd:')) return;
     openSubs(meta.type, video ? video.id : meta.id).then(list => {
       setExt(list);
       // auto-pick: this show's remembered language, else the preferred one when the audio isn't in it
       // (unknown / 'und' audio counts as "not in it")
+      setExtDone(true);
+      if (vlc) return;   // VLC: see the effect below (the file's own tracks count too)
       const want = mem.subLang || s.subsLang;
       if (!want || want === 'off') return;
       const aud = info && info.details && info.details.audio && audio && info.details.audio[audio];
@@ -281,6 +316,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   }, [meta && meta.id, video && video.id]);
   const chooseExt = async (it, user) => {
     if (user) picked.current.subLang = it ? it.lang : 'off';
+    if (vlc && (it || user)) vlc.setSub(-1);
     if (!it) { setCur(null); return; }
     setCur({ id: it.id, label: it.label, cues: [], loading: true });
     try { showCues(it, await loadSubFile(it.url, it.lang)); }
@@ -414,7 +450,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       else if (x.webkitSetPresentationMode) x.webkitSetPresentationMode(x.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
     } catch { toast('Picture-in-picture is not available here', { kind: 'warn' }); }
   };
-  const canPip = typeof document !== 'undefined' && (document.pictureInPictureEnabled || (isSafari || isIOS));
+  const canPip = !vlc && typeof document !== 'undefined' && (document.pictureInPictureEnabled || (isSafari || isIOS));
   const [airplay, setAirplay] = useState(false);
   useEffect(() => {
     const x = v();
@@ -423,7 +459,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     x.addEventListener('webkitplaybacktargetavailabilitychanged', on);
     return () => x.removeEventListener('webkitplaybacktargetavailabilitychanged', on);
   }, []);
-  const canCast = !isSafari && !isIOS && typeof HTMLMediaElement !== 'undefined' && 'remote' in HTMLMediaElement.prototype;
+  const canCast = !vlc && !isSafari && !isIOS && typeof HTMLMediaElement !== 'undefined' && 'remote' in HTMLMediaElement.prototype;
   const cast = () => v().remote.prompt().catch(e => toast(e && e.name === 'NotSupportedError' ? 'Casting isn\'t supported for this stream in this browser' : 'No cast device picked', { kind: 'warn' }));
 
   const still = () => {
@@ -520,8 +556,20 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 600); return () => clearTimeout(t); }, [flash]);
 
   // ------------------------------------------------ render
-  const audios = Object.entries((info && info.details && info.details.audio) || {});
-  const embedded = useMemo(() => trackLabels((info && info.details && info.details.subtitles) || {}), [info]);
+  // audio + in-file subtitle choices: RD's media info on the web, VLC's own track list in VLC mode
+  const audios = vlc
+    ? vt.audio.filter(t => t.id >= 0).map(t => ({ key: t.id, label: t.name, on: vt.audioId === t.id, pick: () => vlc.setAudio(t.id) }))
+    : Object.entries((info && info.details && info.details.audio) || {}).map(([k, a]) => ({ key: k, label: a.lang || langName(a.lang_iso), extra: `${a.codec} ${a.channels}`, on: audio === k, pick: () => { setAudio(k); picked.current.audioLang = a.lang_iso; } }));
+  const embeddedWeb = useMemo(() => trackLabels((info && info.details && info.details.subtitles) || {}), [info]);
+  const embedded = vlc
+    ? vt.subs.filter(t => t.id >= 0).map(t => ({ key: t.id, label: t.name, on: !cur && vt.subId === t.id, pick: () => { chooseExt(null); vlc.setSub(t.id); } }))
+    : embeddedWeb.map(([k, x, label]) => ({ key: k, label, extra: x.type && String(x.type).toUpperCase(), on: burn === k, pick: () => { chooseExt(null); setBurn(k); picked.current.subLang = x.lang_iso && !/^(und|unk)$/i.test(x.lang_iso) ? x.lang_iso : 'off'; } }));
+  const subsOn = !!cur || burn !== 'none' || (!!vlc && vt.subId >= 0);
+  useEffect(() => {
+    if (!vlc) return;
+    document.documentElement.classList.add('vlc-on');
+    return () => document.documentElement.classList.remove('vlc-on');
+  }, []);
   const extByLang = useMemo(() => {
     const m = new Map();
     const q = subQ.trim().toLowerCase();
@@ -537,12 +585,13 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const inIntro = op ? st.t >= op[0] && st.t < op[1] - 1 : !!video && st.t > 5 && st.t < 180 && st.dur > 600;
   const skipIntro = () => (op ? seekTo(op[1]) : seekBy(s.skipIntroSec || 85));
 
-  return html`<div class=${cx('player', ui ? 'show-ui' : 'hide-ui', st.waiting && 'is-waiting')} ref=${boxRef} data-own-arrows data-focus-scope
+  return html`<div class=${cx('player', ui ? 'show-ui' : 'hide-ui', st.waiting && 'is-waiting', vlc && 'pl-vlc')} ref=${boxRef} data-own-arrows data-focus-scope
       onPointerMove=${e => e.pointerType === 'mouse' && poke()} onPointerDown=${resetAutoRuns} style=${subStyle}>
-    <video ref=${vRef} class="pl-video" playsinline webkit-playsinline autopictureinpicture preload="auto" crossorigin="anonymous" x-webkit-airplay="allow"
+    ${vlc ? (!started && html`<div class="pl-poster" style=${meta && meta.background ? `background-image:url("${meta.background}")` : ''}></div>`)
+      : html`<video ref=${vRef} class="pl-video" playsinline webkit-playsinline autopictureinpicture preload="auto" crossorigin="anonymous" x-webkit-airplay="allow"
       style=${meta && meta.background && !started ? `background:#000 url("${meta.background}") center/cover no-repeat` : ''}>
       ${trackUrl && html`<track kind="subtitles" src=${trackUrl} srclang=${s.subsLang || 'en'} label=${cur && cur.label} default />`}
-    </video>
+    </video>`}
 
     <div class="pl-surface" onPointerUp=${onSurface}></div>
 
@@ -587,25 +636,25 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
           <span class="pl-spacer"></span>
           ${next && html`<button type="button" class="pl-btn" onClick=${goNext} aria-label="Next episode" title="Next episode"><${Icon} name="skip" /></button>`}
           ${meta && meta.videos && meta.videos.length > 0 && html`<button type="button" class=${cx('pl-btn', menu === 'episodes' && 'on')} onClick=${() => setMenu(m => (m === 'episodes' ? null : 'episodes'))} aria-label="Episodes"><${Icon} name="episodes" /></button>`}
-          <button type="button" class=${cx('pl-btn', (cur || burn !== 'none') && 'lit', menu === 'subs' && 'on')} onClick=${() => setMenu(m => (m === 'subs' ? null : 'subs'))} aria-label="Subtitles"><${Icon} name="subtitles" /></button>
+          <button type="button" class=${cx('pl-btn', subsOn && 'lit', menu === 'subs' && 'on')} onClick=${() => setMenu(m => (m === 'subs' ? null : 'subs'))} aria-label="Subtitles"><${Icon} name="subtitles" /></button>
           ${audios.length > 1 && html`<button type="button" class=${cx('pl-btn hide-phone', menu === 'audio' && 'on')} onClick=${() => setMenu(m => (m === 'audio' ? null : 'audio'))} aria-label="Audio"><${Icon} name="audio" /></button>`}
           <button type="button" class=${cx('pl-btn', menu === 'settings' && 'on', sleep.id !== 'off' && 'lit')} onClick=${() => setMenu(m => (m === 'settings' ? null : 'settings'))} aria-label="Settings"><${Icon} name="gear" /></button>
           ${canPip && html`<button type="button" class="pl-btn hide-phone" onClick=${pip} aria-label="Picture in picture"><${Icon} name="pip" /></button>`}
-          <button type="button" class="pl-btn" onClick=${fullscreen} aria-label="Fullscreen"><${Icon} name=${isFs ? 'exitFullscreen' : 'fullscreen'} /></button>
+          ${!vlc && html`<button type="button" class="pl-btn" onClick=${fullscreen} aria-label="Fullscreen"><${Icon} name=${isFs ? 'exitFullscreen' : 'fullscreen'} /></button>`}
         </div>
       </div>
     </div>
 
     ${menu === 'subs' && html`<${Menu} title="Subtitles" onClose=${() => setMenu(null)}>
-      <${Item} on=${!cur && burn === 'none'} onClick=${() => { chooseExt(null, true); setBurn('none'); }}>Off<//>
+      <${Item} on=${!subsOn} onClick=${() => { chooseExt(null, true); setBurn('none'); }}>Off<//>
       <label class="pl-chip pl-subfile"><${Icon} name="upload" size=${16} /> Load file…<input type="file" accept=".srt,.vtt,.ass,.ssa" onChange=${loadLocal} /></label>
       ${cur && html`<div class="pl-delay"><span>Timing</span>
         <button type="button" class="pl-chip" onClick=${() => setDelay(d => +(d - .25).toFixed(2))}>−¼s</button>
         <span class="type">${delay > 0 ? '+' : ''}${delay.toFixed(2)}s</span>
         <button type="button" class="pl-chip" onClick=${() => setDelay(d => +(d + .25).toFixed(2))}>+¼s</button>
       </div>`}
-      ${embedded.length > 0 && html`<div class="pl-menu-kicker kicker type">in the file (burned in)</div>`}
-      ${embedded.map(([k, x, label]) => html`<${Item} on=${burn === k} onClick=${() => { chooseExt(null); setBurn(k); picked.current.subLang = x.lang_iso && !/^(und|unk)$/i.test(x.lang_iso) ? x.lang_iso : 'off'; }}>${label}${x.type && html` <span class="faint type">${String(x.type).toUpperCase()}</span>`}<//>`)}
+      ${embedded.length > 0 && html`<div class="pl-menu-kicker kicker type">${vlc ? 'in the file' : 'in the file (burned in)'}</div>`}
+      ${embedded.map(x => html`<${Item} key=${x.key} on=${x.on} onClick=${x.pick}>${x.label}${x.extra && html` <span class="faint type">${x.extra}</span>`}<//>`)}
       ${ext.length > 0 && html`<div class="pl-menu-kicker kicker type">opensubtitles</div>
         <input type="search" class="pl-subfilter" placeholder="Filter by language or release…" value=${subQ} onInput=${e => setSubQ(e.currentTarget.value)} aria-label="Filter subtitles" />`}
       ${extByLang.map(([lang, list]) => html`<details class="pl-sublang" open=${lang === s.subsLang || !!subQ}>
@@ -617,14 +666,14 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     <//>`}
 
     ${menu === 'audio' && html`<${Menu} title="Audio" onClose=${() => setMenu(null)}>
-      ${audios.map(([k, a]) => html`<${Item} on=${audio === k} onClick=${() => { setAudio(k); picked.current.audioLang = a.lang_iso; }}>${a.lang || langName(a.lang_iso)} <span class="faint type">${a.codec} ${a.channels}</span><//>`)}
+      ${audios.map(a => html`<${Item} key=${a.key} on=${a.on} onClick=${a.pick}>${a.label}${a.extra && html` <span class="faint type">${a.extra}</span>`}<//>`)}
     <//>`}
 
     ${menu === 'settings' && html`<${Menu} title="Settings" onClose=${() => setMenu(null)}>
-      <div class="pl-menu-kicker kicker type">quality</div>
-      <div class="pl-grid">${QUALITIES.filter(q => info ? true : stream.hls && stream.hls[q.key]).map(q => html`<button type="button" class=${cx('pl-chip', quality === q.key && 'on')} onClick=${() => { setDirect(false); setQuality(q.key); }}>${q.label}</button>`)}</div>
+      ${!vlc && html`<div class="pl-menu-kicker kicker type">quality</div>`}
+      ${!vlc && html`<div class="pl-grid">${QUALITIES.filter(q => info ? true : stream.hls && stream.hls[q.key]).map(q => html`<button type="button" class=${cx('pl-chip', quality === q.key && 'on')} onClick=${() => { setDirect(false); setQuality(q.key); }}>${q.label}</button>`)}</div>`}
       ${audios.length > 1 && html`<div class="pl-menu-kicker kicker type">audio</div>
-        <div class="pl-grid">${audios.map(([k, a]) => html`<button type="button" class=${cx('pl-chip', audio === k && 'on')} onClick=${() => { setAudio(k); picked.current.audioLang = a.lang_iso; }}>${a.lang || langName(a.lang_iso)}</button>`)}</div>`}
+        <div class="pl-grid">${audios.map(a => html`<button type="button" key=${a.key} class=${cx('pl-chip', a.on && 'on')} onClick=${a.pick}>${a.label}</button>`)}</div>`}
       <div class="pl-menu-kicker kicker type">speed</div>
       <div class="pl-grid">${SPEEDS.map(r => html`<button type="button" class=${cx('pl-chip', st.rate === r && 'on')} onClick=${() => { v().playbackRate = r; picked.current.rate = r; }}>${r}×</button>`)}</div>
       <div class="pl-menu-kicker kicker type">sleep timer</div>
@@ -632,7 +681,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
         onClick=${() => setSleep({ id: x.id, at: x.id === 'off' || x.id === 'end' ? 0 : Date.now() + +x.id * 60e3 })}>${x.label}</button>`)}</div>
       <div class="pl-menu-kicker kicker type">extras</div>
       <div class="pl-grid">
-        <button type="button" class="pl-chip" onClick=${still}><${Icon} name="camera" size=${16} /> Save a still</button>
+        ${!vlc && html`<button type="button" class="pl-chip" onClick=${still}><${Icon} name="camera" size=${16} /> Save a still</button>`}
         ${canPip && html`<button type="button" class="pl-chip" onClick=${pip}><${Icon} name="pip" size=${16} /> Picture in picture</button>`}
         ${onPickSource && html`<button type="button" class="pl-chip" onClick=${() => { setMenu(null); onPickSource(); }}><${Icon} name="source" size=${16} /> Change source</button>`}
       </div>

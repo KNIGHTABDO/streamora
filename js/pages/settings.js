@@ -10,6 +10,7 @@ import { idbWipe } from '../core/idb.js';
 import { user } from '../core/rd.js';
 import { navigate, setQuery } from '../router.js';
 import { THEMES, ThemeSwatch } from './profiles.js';
+const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 import { syncState, syncNow, syncPending, deleteDriveData } from '../core/sync.js';
 import { traktRev, traktAvailable, traktAccount, startConnect, finishConnect, disconnect as traktDisconnect, importHistory, importWatchlist } from '../core/trakt.js';
 import { addons, addAddon, removeAddon } from '../core/addons.js';
@@ -134,6 +135,7 @@ function Player() {
       <${Toggle} checked=${s.autoPlay !== false} onChange=${v => up({ autoPlay: v })} label="Start playing automatically" />
       <${Toggle} checked=${s.autoNext} onChange=${v => up({ autoNext: v })} label="Auto-play the next episode" />
       <${Toggle} checked=${s.cachedOnly} onChange=${v => up({ cachedOnly: v })} label="Only show sources cached on Real-Debrid" />
+      ${isNative() && html`<${Toggle} checked=${s.appPlayer === 'classic'} onChange=${v => up({ appPlayer: v ? 'classic' : 'web' })} label="Classic app player (VLC's own simple controls)" />`}
       <${Field} label=${`Skip intro jumps ${s.skipIntroSec}s`}>
         <input type="range" class="st-range" min="30" max="180" step="5" value=${s.skipIntroSec} onInput=${e => up({ skipIntroSec: +e.currentTarget.value })} data-own-arrows />
       <//>

@@ -3,7 +3,7 @@
 // Same props as <Player>. The native side sends 'progress' {position, duration, paused} every few seconds,
 // 'next' when the viewer taps Next, and 'closed' {position, duration, ended} when it goes away.
 // Once playing, it gets extras: OpenSubtitles files (same source as the web player) and anime intro/credits times.
-import { html, useEffect, useRef } from '../../vendor/preact-htm.js';
+import { html, useEffect, useRef, useState } from '../../vendor/preact-htm.js';
 import { Reel } from '../ui/components.js';
 import { useStore, settings } from '../core/store.js';
 import { saveProgress } from '../core/progress.js';
@@ -12,9 +12,34 @@ import { nextVideo } from '../core/meta.js';
 import { navigate } from '../router.js';
 import { openSubs } from './subs.js';
 import { skipTimes } from './skip.js';
+import { Player } from './player.js';
+import { vlcEngineAvailable } from './vlc.js';
 
 const plugin = () => (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.StreamoraPlayer) || null;
 export const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && plugin());
+
+/**
+ * The player inside the app. Normally the web player (all its controls and menus) on one of two engines:
+ * - mp4 files go to a regular <video> first (Picture in Picture and AirPlay work); if WebKit can't play one, VLC takes over;
+ * - everything else (mkv, DTS, TrueHD…) plays on VLC drawn behind the page.
+ * Settings → Player → "Classic app player", or an older .ipa without the engine, use NativePlayer below.
+ */
+export function AppPlayer(props) {
+  const s = useStore(settings);
+  const [mode, setMode] = useState(null);           // null (deciding) | 'web' | 'vlc' | 'classic'
+  const [from, setFrom] = useState(null);           // resume point when the <video> gave up and VLC takes over
+  const file = (props.stream && (props.stream.filename || props.stream.direct)) || '';
+  useEffect(() => {
+    let ok = true;
+    setFrom(null);
+    vlcEngineAvailable().then(has => ok && setMode(!has || s.appPlayer === 'classic' ? 'classic' : /\.(mp4|m4v)(\?|$)/i.test(file) ? 'web' : 'vlc'));
+    return () => { ok = false; };
+  }, [props.stream && props.stream.direct]);
+  if (!mode) return html`<div class="watch-native" style="position:fixed;inset:0;display:grid;place-items:center;background:#000"><${Reel} size=${80} /></div>`;
+  if (mode === 'classic') return html`<${NativePlayer} ...${props} />`;
+  const onFatal = mode === 'web' ? (e, pos) => { setFrom(pos || props.start || 0); setMode('vlc'); } : props.onFatal;
+  return html`<${Player} key=${mode} ...${props} start=${from != null ? from : props.start} engine=${mode} onFatal=${onFatal} />`;
+}
 
 export function NativePlayer({ meta, video, stream, start = 0, source, noProgress, onFatal, onBack }) {
   const s = useStore(settings);

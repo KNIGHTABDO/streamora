@@ -24,7 +24,7 @@ if (phone) await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like
 
 // the fake Google sign-in below must not reach Google (it would be refused and sign the page out)
 await page.setRequestInterception(true);
-page.on('request', r => (/googleapis\.com|\/api\/google\/refresh/.test(r.url()) ? r.abort() : r.continue()));
+page.on('request', r => (/www\.googleapis\.com|\/api\/google\/refresh/.test(r.url()) ? r.abort() : r.continue()));
 const errors = [];
 page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`[${m.type()}] ${m.text()}`); });
 page.on('pageerror', e => errors.push('[pageerror] ' + e.message));

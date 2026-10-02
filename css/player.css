@@ -198,3 +198,8 @@
   .pl-bottom { padding-top: 24px; }
   .pl-menu { max-height: calc(100vh - 110px); bottom: 76px; }
 }
+
+/* ---------------------------------------------------------- app: VLC draws the picture behind the page */
+html.vlc-on, html.vlc-on body, html.vlc-on #app, html.vlc-on .watch, .player.pl-vlc { background: transparent !important; }
+html.vlc-on body::before, html.vlc-on body::after { display: none; }
+.pl-poster { position: absolute; inset: 0; background: #000 center / cover no-repeat; }
