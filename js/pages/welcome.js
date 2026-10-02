@@ -43,6 +43,9 @@ function loadQR() {
   });
 }
 
+// Google's code page fills the code in itself when it's in the link: only "Continue" and "Allow" are left to tap
+const prefilled = dc => `${dc.verification_url}?user_code=${encodeURIComponent(dc.user_code)}`;
+
 /** "Go to google.com/device and type this code" (TVs, and the iPhone app where Google blocks its sign-in page). */
 function DeviceCode() {
   const [round, setRound] = useState(0);
@@ -55,7 +58,7 @@ function DeviceCode() {
     (async () => {
       const code = await startDeviceSignIn();
       setDc(code);
-      loadQR().then(q => { const c = q(0, 'M'); c.addData(code.verification_url); c.make(); setQr(c.createSvgTag({ cellSize: 4, margin: 2, scalable: true })); }).catch(() => {});
+      loadQR().then(q => { const c = q(0, 'M'); c.addData(prefilled(code)); c.make(); setQr(c.createSvgTag({ cellSize: 4, margin: 2, scalable: true })); }).catch(() => {});
       await finishDeviceSignIn(code, ab.signal);
     })().catch(e => e.message !== 'Cancelled' && setErr(e));
     return () => ab.abort();
@@ -64,9 +67,11 @@ function DeviceCode() {
   if (!dc) return html`<${Spinner} label="asking Google for a code…" />`;
   const url = dc.verification_url.replace(/^https?:\/\//, '');
   return html`<div class="welcome-device stack">
-    <p>On your phone or computer, open <a class="welcome-link" href=${dc.verification_url} target="_blank" rel="noopener">${url}</a> and type:</p>
-    <b class="welcome-code type" aria-label=${`Code ${dc.user_code.split('').join(' ')}`}>${dc.user_code}</b>
+    <${Btn} variant="primary" size="lg" class="welcome-gbtn" href=${prefilled(dc)} target="_blank" rel="noopener"><${GoogleG} />Open Google sign-in<//>
+    <p>The code is already filled in there: check it matches, then tap <b>Continue</b> and <b>Allow</b>. On a TV, scan this with your phone instead.</p>
     ${qr && html`<div class="welcome-qr" aria-hidden="true" dangerouslySetInnerHTML=${{ __html: qr }}></div>`}
+    <b class="welcome-code type" aria-label=${`Code ${dc.user_code.split('').join(' ')}`}>${dc.user_code}</b>
+    <p class="faint">No camera? Open ${url} anywhere and type the code.</p>
     <${Spinner} size=${40} label="waiting for Google…" />
     ${isNative() && html`<div><${Btn} variant="ghost" icon="refresh" onClick=${() => setRound(round + 1)}>New code<//></div>`}
   </div>`;
