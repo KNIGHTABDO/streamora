@@ -1,13 +1,16 @@
 // Trakt: device-code sign-in, scrobbling from the player, and importing watched history / watchlist.
 // Only the OAuth calls go through /api/trakt (they need the client secret); the rest goes straight to api.trakt.tv.
-// Tokens live per profile in IndexedDB (not localStorage), so they never end up in backups or sync.
+// Tokens live per profile in IndexedDB (not localStorage) and travel to other devices inside the private Drive file
+// (sync.js). Every write is stamped with `at`; disconnecting leaves { off: true, at } so that syncs too.
 import { activeProfileId, progress, history, watchlist, store } from './store.js';
-import { idbGet, idbSet, idbDel } from './sync.js';
+import { idbGet, idbSet, idbDel } from './idb.js';
 
 const API = 'https://api.trakt.tv';
 export const traktRev = store('trakt-rev', 0); // bumped on connect/disconnect so the UI re-reads
 const slot = () => `trakt:${activeProfileId.get()}`;
 const bump = () => traktRev.set(traktRev.get() + 1);
+const live = t => (t && !t.off && t.access_token ? t : null);
+const save = async (key, t) => { await idbSet(key, { ...t, at: Date.now() }); bump(); };
 
 let cfg = null;
 async function clientId() {
@@ -18,17 +21,18 @@ export const traktAvailable = () => clientId().then(() => true, () => false);
 
 const relay = (path, body) => fetch(`/api/trakt/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
 
-export const traktAccount = () => idbGet(slot());
+export const traktAccount = async () => live(await idbGet(slot()));
 
 async function fresh() {
   const key = slot();
-  let t = await idbGet(key);
+  let t = live(await idbGet(key));
   if (!t) return null;
   if ((t.created_at + t.expires_in - 86400) * 1000 < Date.now()) {
     const r = await relay('oauth/token', { refresh_token: t.refresh_token });
+    // another device may have refreshed (and rotated) it first: forget only here, and sync brings its newer token
     if (!r.ok) { if (r.status === 400 || r.status === 401) { await idbDel(key); bump(); } throw new Error('Trakt sign-in expired. Connect again.'); }
     t = { ...t, ...(await r.json()) };
-    await idbSet(key, t);
+    await save(key, t);
   }
   return t;
 }
@@ -61,11 +65,10 @@ export async function finishConnect(dc, signal) {
     if (signal && signal.aborted) throw new Error('Cancelled');
     const r = await relay('oauth/device/token', { code: dc.device_code });
     if (r.status === 200) {
-      await idbSet(key, await r.json());
+      await idbSet(key, { ...(await r.json()), at: Date.now() });
       let name = '';
       try { name = (await api('/users/settings')).user.username; } catch {}
-      await idbSet(key, { ...(await idbGet(key)), username: name });
-      bump();
+      await save(key, { ...(await idbGet(key)), username: name });
       return name;
     }
     if (r.status === 429) wait += 1000;
@@ -73,7 +76,7 @@ export async function finishConnect(dc, signal) {
   }
   throw new Error('Code expired. Try again.');
 }
-export async function disconnect() { await idbDel(slot()); bump(); }
+export async function disconnect() { await save(slot(), { off: true }); }
 
 // ------------------------------------------------------------ scrobbling
 const imdbOf = meta => [meta && meta.id, meta && meta.imdb_id, meta && meta.imdb].find(x => /^tt\d+$/.test(x || '')) || null;

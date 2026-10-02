@@ -1,15 +1,16 @@
-// Settings (notebook tabs) + the #/import?d=… receiver for the "send to another device" QR code.
+// Settings (notebook tabs). Everything here is saved to the Google Drive file by js/core/sync.js.
 import { html, useState, useEffect, useRef } from '../../vendor/preact-htm.js';
 import { Page, Btn, IconBtn, Tabs, Field, Input, Toggle, Select, Icon, Reel, Modal, ErrorNote, Spinner, Empty, useAsync, toast, loadCSS, cx } from '../ui/components.js';
-import { Avatar } from '../ui/avatars.js';
 import {
-  useStore, settings, profiles, activeProfileId, activeProfile, history, progress, hidden, watchlist,
-  saveRdKey, forgetRdKey, exportAll, importAll, ls,
+  useStore, settings, profiles, activeProfileId, activeProfile, history, progress, hidden,
+  saveRdKey, forgetRdKey, ls,
 } from '../core/store.js';
+import { account, signOut, revokeAccess } from '../core/google.js';
+import { idbWipe } from '../core/idb.js';
 import { user } from '../core/rd.js';
 import { navigate, setQuery } from '../router.js';
 import { THEMES, ThemeSwatch } from './profiles.js';
-import { syncState, syncNow } from '../core/sync.js';
+import { syncState, syncNow, syncPending, deleteDriveData } from '../core/sync.js';
 import { traktRev, traktAvailable, traktAccount, startConnect, finishConnect, disconnect as traktDisconnect, importHistory, importWatchlist } from '../core/trakt.js';
 import { addons, addAddon, removeAddon } from '../core/addons.js';
 
@@ -17,111 +18,56 @@ loadCSS('css/pages/settings.css');
 
 export const VERSION = '1.0.0';
 
-// ------------------------------------------------------------ transfer encoding (deflate-raw + base64url)
-const b64u = bytes => { let s = ''; bytes.forEach(b => (s += String.fromCharCode(b))); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
-const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
-async function pipe(bytes, stream) { return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer()); }
+// ------------------------------------------------------------ tabs
+const ago = t => { const m = Math.round((Date.now() - t) / 6e4); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(t).toLocaleDateString(); };
 
-export async function packTransfer(obj) {
-  const raw = new TextEncoder().encode(JSON.stringify(obj));
-  if (typeof CompressionStream !== 'undefined') {
-    try { return 'z' + b64u(await pipe(raw, new CompressionStream('deflate-raw'))); } catch {}
-  }
-  return 'p' + b64u(raw);
-}
-export async function unpackTransfer(s) {
-  const bytes = unb64u(s.slice(1));
-  const raw = s[0] === 'z' ? await pipe(bytes, new DecompressionStream('deflate-raw')) : bytes;
-  return JSON.parse(new TextDecoder().decode(raw));
+/** Wipes this device (Drive keeps everything) and goes back to the welcome page. */
+export async function eraseDevice() {
+  forgetRdKey();
+  for (const k of ls.keys()) ls.del(k);
+  try { sessionStorage.clear(); } catch {}
+  await idbWipe();
+  try { for (const n of await caches.keys()) await caches.delete(n); } catch {}
+  location.hash = '#/welcome'; location.reload();
 }
 
-// Only what a new device needs, newest progress first, trimmed until the URL fits in a QR code.
-function transferBundle(pid, keepProgress) {
-  const full = exportAll({ onlyProfile: pid }).data;
-  const p = k => full[`p:${pid}:${k}`];
-  const prog = Object.entries(p('progress') || {}).sort((a, b) => (b[1].updated || 0) - (a[1].updated || 0)).slice(0, keepProgress)
-    .map(([id, e]) => {
-      const last = e.eps && e.eps[e.last || '_'];
-      return [id, { ...e, eps: last ? { [e.last || '_']: last } : {}, background: undefined }];
-    });
-  return {
-    app: 'streamora', v: 1, at: Date.now(),
-    data: {
-      profiles: full.profiles,
-      [`p:${pid}:settings`]: p('settings'),
-      [`p:${pid}:watchlist`]: (p('watchlist') || []).slice(0, keepProgress * 2).map(({ id, type, name, poster }) => ({ id, type, name, poster })),
-      [`p:${pid}:progress`]: Object.fromEntries(prog),
-      [`p:${pid}:follows`]: (p('follows') || []).slice(0, 30).map(({ id, type, name }) => ({ id, type, name })),
-    },
+function GoogleCard() {
+  const a = useStore(account);
+  const st = useStore(syncState);
+  const [out, setOut] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick(x => x + 1), 30e3); return () => clearInterval(t); }, []);
+  const leave = async () => {
+    setBusy(true);
+    try { if (syncPending()) await syncNow(); } catch {}
+    if (syncPending()) { setBusy(false); return toast('Some changes are not in Drive yet. Get online, then try again.', { kind: 'error', ms: 5000 }); }
+    await signOut();
+    await eraseDevice();
   };
-}
-const QR_MAX = 2600; // bytes of URL a version-40/L QR can still carry with margin
-
-function loadQR() {
-  return window.qrcode ? Promise.resolve(window.qrcode) : new Promise((res, rej) => {
-    const s = document.createElement('script');
-    s.src = 'vendor/qrcode.js'; s.onload = () => res(window.qrcode); s.onerror = rej;
-    document.head.appendChild(s);
-  });
-}
-
-function QRCard({ pid }) {
-  const [st, set] = useState({ loading: true });
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      let url = '', keep = 60;
-      for (; keep >= 0; keep = keep > 10 ? Math.floor(keep / 2) : keep - 5) {
-        url = `${location.origin}${location.pathname}#/import?d=${await packTransfer(transferBundle(pid, Math.max(keep, 0)))}`;
-        if (url.length <= QR_MAX) break;
-      }
-      const qrcode = await loadQR();
-      const qr = qrcode(0, 'L'); qr.addData(url); qr.make();
-      alive && set({ svg: qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true }), url, keep: Math.max(keep, 0) });
-    })().catch(error => alive && set({ error }));
-    return () => { alive = false; };
-  }, [pid]);
-  if (st.loading) return html`<${Spinner} label="drawing your code…" />`;
-  if (st.error) return html`<${ErrorNote} error=${st.error} />`;
-  return html`<div class="st-qr-wrap">
-    <div class="st-qr pf-polaroid static" style="--tilt:-2deg"><span class="tape top"></span><div class="st-qr-code" dangerouslySetInnerHTML=${{ __html: st.svg }}></div><span class="type">scan me</span></div>
-    <div class="stack">
-      <p>Point your phone's camera at this. It opens Streamora there with this profile's watchlist, progress and settings.</p>
-      <p class="faint">Your Real-Debrid key is <b>not</b> included. Enter it on the new device.${st.keep < 60 ? ` Only the ${st.keep} most recent titles fit in the code. Use a backup file for everything.` : ''}</p>
-      <div><${Btn} size="sm" icon="link" onClick=${() => navigator.clipboard.writeText(st.url).then(() => toast('Link copied'), () => toast('Could not copy', { kind: 'error' }))}>Copy link instead<//></div>
+  if (!a) return null;
+  return html`<div class="panel stack st-google">
+    <div class="st-account-row">
+      ${a.picture ? html`<img class="st-gpic" src=${a.picture} alt="" referrerpolicy="no-referrer" />` : html`<${Reel} mood="love" size=${90} />`}
+      <div>
+        <div class="kicker type">saved in google drive</div>
+        <h2>${a.name || a.email}</h2>
+        <div class="type muted">${a.email}</div>
+      </div>
     </div>
+    <p class="type st-sync-status" role="status">${st.busy ? 'saving…' : st.error ? 'not saved yet' : st.last ? `in step with Drive · ${ago(st.last)}` : 'connecting…'}</p>
+    ${st.error && html`<${ErrorNote} error=${st.error} compact />`}
+    <div class="cluster">
+      <${Btn} icon="refresh" disabled=${st.busy} onClick=${() => syncNow()}>Sync now<//>
+      <${Btn} variant="ghost" icon="logout" onClick=${() => setOut(true)}>Sign out of this device<//>
+    </div>
+    <${Modal} open=${out} onClose=${() => setOut(false)} title="Sign out here?">
+      <p>This device forgets everything. Your profiles, history and key stay safe in your Drive: sign in again (here or anywhere) to get them back.</p>
+      <div class="cluster"><${Btn} variant="danger" icon="logout" disabled=${busy} onClick=${leave}>${busy ? 'Saving first…' : 'Sign out'}<//><${Btn} variant="ghost" onClick=${() => setOut(false)}>Stay<//></div>
+    <//>
   </div>`;
 }
 
-// ------------------------------------------------------------ import receiver (#/import?d=)
-function ImportView({ d }) {
-  const [st, set] = useState({ loading: true });
-  useEffect(() => { unpackTransfer(d).then(b => set({ b }), error => set({ error })); }, [d]);
-  const b = st.b;
-  const pid = b && b.data.profiles && b.data.profiles[0] && b.data.profiles[0].id;
-  const count = k => { const v = b && b.data[`p:${pid}:${k}`]; return Array.isArray(v) ? v.length : v ? Object.keys(v).length : 0; };
-  const go = () => {
-    try {
-      importAll(b);
-      if (!activeProfileId.get() && pid) activeProfileId.set(pid);
-      toast('Imported! Welcome to this device.', { icon: 'sparkle' });
-      navigate('/', { replace: true });
-    } catch (e) { set({ error: e }); }
-  };
-  return html`<main class="page center-fill"><div class="panel stack st-import">
-    <span class="tape top"></span>
-    ${st.loading ? html`<${Spinner} label="unfolding the note…" />`
-      : st.error ? html`<${Reel} mood="confused" size=${120} /><${ErrorNote} error=${st.error} /><${Btn} href="#/">Go home<//>`
-      : html`
-        <div class="cluster"><${Reel} mood="love" size=${100} />${b.data.profiles.map(p => html`<${Avatar} id=${p.avatar} ink=${p.ink} size=${80} />`)}</div>
-        <h2>Bring ${b.data.profiles.map(p => p.name).join(', ')} over?</h2>
-        <p class="muted type">${count('watchlist')} saved · ${count('progress')} in progress · ${count('follows')} followed</p>
-        <p class="faint">Existing profiles on this device stay as they are.</p>
-        <div class="cluster"><${Btn} variant="primary" icon="download" onClick=${go}>Import<//><${Btn} variant="ghost" href="#/">Not now<//></div>`}
-  </div></main>`;
-}
-
-// ------------------------------------------------------------ tabs
 function Account() {
   const me = useAsync(() => user(), []);
   const [replacing, setReplacing] = useState(false);
@@ -140,6 +86,7 @@ function Account() {
     } catch (x) { setErr(x); } finally { setBusy(false); }
   };
   return html`<div class="stack">
+    <${GoogleCard} />
     <div class="panel st-account">
       ${me.loading ? html`<${Spinner} label="asking Real-Debrid…" />` : me.error ? html`<${ErrorNote} error=${me.error} retry=${me.reload} />` : html`
         <div class="st-account-row">
@@ -158,11 +105,11 @@ function Account() {
       <div class="cluster"><${Btn} variant="primary" icon="key" type="submit" disabled=${busy || key.trim().length < 20}>${busy ? 'Checking…' : 'Save key'}<//><${Btn} variant="ghost" onClick=${() => setReplacing(false)}>Cancel<//></div>
     </form>` : html`<div class="cluster">
       <${Btn} icon="key" onClick=${() => setReplacing(true)}>Replace key<//>
-      <${Btn} variant="danger" icon="logout" onClick=${() => setConfirm(true)}>Forget key on this device<//>
+      <${Btn} variant="danger" icon="logout" onClick=${() => setConfirm(true)}>Remove key<//>
     </div>`}
-    <${Modal} open=${confirm} onClose=${() => setConfirm(false)} title="Forget the key?">
-      <p>Profiles and history stay. You'll need to paste your key again to watch anything.</p>
-      <div class="cluster"><${Btn} variant="danger" icon="logout" onClick=${() => { forgetRdKey(); navigate('/welcome', { replace: true }); }}>Forget it<//><${Btn} variant="ghost" onClick=${() => setConfirm(false)}>Keep<//></div>
+    <${Modal} open=${confirm} onClose=${() => setConfirm(false)} title="Remove the key?">
+      <p>It's removed from your Drive too, so every device asks for a key again. Profiles and history stay.</p>
+      <div class="cluster"><${Btn} variant="danger" icon="logout" onClick=${() => { forgetRdKey(true); navigate('/welcome', { replace: true }); }}>Remove it<//><${Btn} variant="ghost" onClick=${() => setConfirm(false)}>Keep<//></div>
     <//>
   </div>`;
 }
@@ -226,21 +173,7 @@ function Look() {
   </div>`;
 }
 
-// ------------------------------------------------------------ connect: sync, trakt, addons, notifications
-const ago = t => { const m = Math.round((Date.now() - t) / 6e4); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(t).toLocaleDateString(); };
-
-function SyncCard() {
-  const st = useStore(syncState);
-  return html`<div class="panel stack">
-    <h3><${Icon} name="cloud" /> Sync between devices</h3>
-    <p class="muted">Your watch data is stored on this app's server, tied to your Real-Debrid account.</p>
-    <p class="type st-sync-status">${!st.on ? 'off · turns on by itself when a Real-Debrid key is set and the server supports it'
-      : st.busy ? 'syncing…' : st.last ? `on · last synced ${ago(st.last)}` : 'on · not synced yet'}</p>
-    ${st.error && html`<${ErrorNote} error=${st.error} compact />`}
-    ${st.on && html`<div class="cluster"><${Btn} icon="refresh" disabled=${st.busy} onClick=${() => syncNow()}>Sync now<//></div>`}
-  </div>`;
-}
-
+// ------------------------------------------------------------ connect: trakt, addons, notifications
 function TraktCard() {
   const rev = useStore(traktRev);
   const avail = useAsync(() => traktAvailable(), []);
@@ -331,72 +264,42 @@ function NotifyCard() {
 }
 
 function Connect() {
-  return html`<div class="st-grid"><${SyncCard} /><${TraktCard} /><${AddonsCard} /><${NotifyCard} /></div>`;
-}
-
-function Backup() {
-  const pid = activeProfileId.get();
-  const file = useRef();
-  const [qr, setQr] = useState(false);
-  const download = () => {
-    const blob = new Blob([JSON.stringify(exportAll(), null, 1)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = `streamora-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    toast('Backup saved', { icon: 'download' });
-  };
-  const upload = async e => {
-    const f = e.currentTarget.files[0]; e.currentTarget.value = '';
-    if (!f) return;
-    try { importAll(JSON.parse(await f.text())); toast('Backup merged in', { icon: 'upload' }); }
-    catch (x) { toast(x.message || 'Not a Streamora backup', { kind: 'error' }); }
-  };
-  return html`<div class="stack">
-    <div class="st-grid">
-      <div class="panel stack"><h3><${Icon} name="download" /> Backup file</h3><p class="muted">Every profile, watchlist, diary and progress in one JSON file. Your key is never included.</p><div><${Btn} icon="download" onClick=${download}>Export backup<//></div></div>
-      <div class="panel stack"><h3><${Icon} name="upload" /> Restore</h3><p class="muted">Merge a backup into this device. Profiles you already have are kept.</p><div><${Btn} icon="upload" onClick=${() => file.current.click()}>Import backup<//></div>
-        <input ref=${file} type="file" accept="application/json,.json" hidden onChange=${upload} /></div>
-    </div>
-    <div class="panel stack">
-      <h3><${Icon} name="qr" /> Send to another device</h3>
-      ${qr ? html`<${QRCard} pid=${pid} />` : html`<p class="muted">Start on your laptop, finish on your phone. Makes a QR code for this profile.</p><div><${Btn} variant="primary" icon="qr" onClick=${() => setQr(true)}>Show QR code<//></div>`}
-    </div>
-  </div>`;
+  return html`<div class="st-grid"><${TraktCard} /><${AddonsCard} /><${NotifyCard} /></div>`;
 }
 
 function Privacy() {
   const [ask, setAsk] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
   const p = activeProfile();
   const clearHistory = () => { history.set([]); progress.set({}); hidden.set([]); setAsk(null); toast('History wiped clean', { icon: 'sparkle' }); };
-  const resetAll = async () => {
-    forgetRdKey();
-    for (const k of ls.keys()) ls.del(k);
-    try { sessionStorage.clear(); } catch {}
-    try { for (const n of await caches.keys()) await caches.delete(n); } catch {}
-    location.hash = '#/welcome'; location.reload();
+  const deleteAll = async () => {
+    setBusy(true); setErr(null);
+    try { await deleteDriveData(); } catch (x) { setBusy(false); return setErr(x); }
+    await revokeAccess();
+    await eraseDevice();
   };
   return html`<div class="stack">
     <div class="panel stack st-privacy">
       <h3>What lives where</h3>
       <ul>
-        <li><b>This browser only:</b> profiles, watchlists, progress, diary and settings (localStorage).</li>
-        <li><b>Your Real-Debrid key:</b> AES-encrypted in localStorage, and the encryption key can't be exported from the browser (IndexedDB).</li>
-        <li><b>The relay</b> (/api/rd) forwards requests to Real-Debrid and stores nothing.</li>
-        <li><b>Sync</b> (automatic when the server supports it) keeps your watch data on this app's server, tied to your Real-Debrid account. Your key is only used to check who you are, never stored. <b>Trakt</b> (optional, per profile) sees what you watch.</li>
-        <li><b>Catalog and sources</b> come from Cinemeta, Kitsu and Torrentio. Torrentio receives your key to mark cached sources.</li>
-        <li>No analytics, no accounts, no cookies.</li>
+        <li><b>Your Google Drive:</b> profiles, watchlists, progress, diary, settings, your Real-Debrid key and Trakt sign-ins, in one file in the "Streamora" folder of your Drive. Streamora can only see files it made itself, never your own. Leave that file be: deleting it removes your data from every device.</li>
+        <li><b>This device:</b> a copy of the same, so everything is instant and works offline (localStorage). Your key is AES-encrypted here with a key the browser can't export.</li>
+        <li><b>The relays</b> (/api/rd, /api/google) forward requests to Real-Debrid and Google and store nothing.</li>
+        <li><b>Catalog and sources</b> come from Cinemeta, Kitsu and Torrentio. Torrentio receives your key to mark cached sources. <b>Trakt</b> (optional, per profile) sees what you watch.</li>
+        <li>No analytics, no cookies, no Streamora accounts: your Google account is the only one.</li>
       </ul>
     </div>
     <div class="cluster">
       <${Btn} icon="trash" onClick=${() => setAsk('history')}>Clear ${p ? p.name + '\'s' : ''} watch history<//>
-      <${Btn} variant="danger" icon="refresh" onClick=${() => setAsk('all')}>Reset everything<//>
+      <${Btn} variant="danger" icon="trash" onClick=${() => setAsk('all')}>Delete everything from Drive<//>
     </div>
-    <${Modal} open=${!!ask} onClose=${() => setAsk(null)} title=${ask === 'all' ? 'Reset everything?' : 'Clear history?'}>
+    <${Modal} open=${!!ask} onClose=${() => setAsk(null)} title=${ask === 'all' ? 'Delete everything?' : 'Clear history?'}>
       <div class="stack">
         <${Reel} mood="sad" size=${100} />
-        <p>${ask === 'all' ? 'Every profile, watchlist, diary entry and your key will be erased from this device. This cannot be undone.' : 'Continue Watching, resume points and history for this profile will be erased.'}</p>
-        <div class="cluster"><${Btn} variant="danger" icon="trash" onClick=${ask === 'all' ? resetAll : clearHistory}>Yes, erase<//><${Btn} variant="ghost" onClick=${() => setAsk(null)}>Cancel<//></div>
+        <p>${ask === 'all' ? 'Every profile, watchlist, diary entry and your key are deleted from your Google Drive and this device, and Streamora is signed out of your Google account everywhere. This cannot be undone.' : 'Continue Watching, resume points and history for this profile will be erased on every device.'}</p>
+        ${err && html`<${ErrorNote} error=${err} compact />`}
+        <div class="cluster"><${Btn} variant="danger" icon="trash" disabled=${busy} onClick=${ask === 'all' ? deleteAll : clearHistory}>${busy ? 'Deleting…' : 'Yes, erase'}<//><${Btn} variant="ghost" onClick=${() => setAsk(null)}>Cancel<//></div>
       </div>
     <//>
   </div>`;
@@ -405,7 +308,7 @@ function Privacy() {
 function About() {
   return html`<div class="panel stack st-about">
     <div class="cluster"><${Reel} mood="popcorn" size=${110} /><div><h2>Streamora</h2><div class="type faint">version ${VERSION}</div></div></div>
-    <p>A sketchbook that plays movies. Bring your own Real-Debrid key, and everything else stays on your device.</p>
+    <p>A sketchbook that plays movies. Bring your own Real-Debrid key; everything else is kept in your own Google Drive.</p>
     <h3>Thanks to</h3>
     <ul>
       <li><b>Cinemeta</b> for movie and series catalogs and art</li>
@@ -424,15 +327,13 @@ const TABS = [
   { id: 'player', label: 'Player', icon: 'play' },
   { id: 'look', label: 'Look', icon: 'palette' },
   { id: 'connect', label: 'Connect', icon: 'cloud' },
-  { id: 'backup', label: 'Backup', icon: 'qr' },
   { id: 'privacy', label: 'Privacy', icon: 'lock' },
   { id: 'about', label: 'About', icon: 'info' },
 ];
 
 export default function Settings({ query }) {
-  if (query.d) return html`<${ImportView} d=${query.d} />`;
   const tab = TABS.some(t => t.id === query.tab) ? query.tab : 'account';
-  const View = { account: Account, player: Player, look: Look, connect: Connect, backup: Backup, privacy: Privacy, about: About }[tab];
+  const View = { account: Account, player: Player, look: Look, connect: Connect, privacy: Privacy, about: About }[tab];
   return html`<${Page} title="Settings" kicker="knobs & dials" icon="gear">
     <${Tabs} tabs=${TABS} value=${tab} onChange=${t => setQuery({ tab: t })} />
     <div class="st-body">${activeProfileId.get() || tab === 'about' ? html`<${View} />` : html`<${Empty} mood="confused" title="Pick a profile first" action=${html`<${Btn} href="#/profiles">Profiles<//>`} />`}</div>

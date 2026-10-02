@@ -24,7 +24,6 @@ export const ROUTES = [
   ['/profiles', () => import('./pages/profiles.js')],
   ['/settings', () => import('./pages/settings.js')],
   ['/welcome', () => import('./pages/welcome.js')],
-  ['/import', () => import('./pages/settings.js')],                  // #/import?d=<backup> (from a QR code)
 ];
 const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
 if (LOCAL) ROUTES.push(['/kit', () => import('./pages/kit.js')]);  // living style guide (dev only)

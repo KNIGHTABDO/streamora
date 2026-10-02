@@ -10,13 +10,14 @@ You get one URL like `https://streamora.pages.dev` that works on your iPhone, TV
    npx wrangler login                                      # opens the browser once
    npx wrangler pages deploy dist --project-name streamora
    ```
+   Do the [Google sign-in](#google-sign-in-required) setup once before the first deploy.
    Run this from the **Streamora folder** (not `dist`), so wrangler also uploads the `functions/` relay.
-3. Open the printed URL, paste your Real-Debrid key, and make a profile.
+3. Open the printed URL, sign in with Google, paste your Real-Debrid key (only once: it's saved in your Drive), and make a profile.
 
 To update later, run the same two commands again (`build` + `deploy`).
 
 ## Option B: from GitHub (auto-deploys on every push)
-1. Push this folder to a GitHub repo (the `.gitignore` already skips `tools/node_modules`, `tools/.rdkey` and `dist`).
+1. Push this folder to a GitHub repo (the `.gitignore` already skips `tools/node_modules`, `tools/.rdkey`, `.dev.vars` and `dist`).
 2. Go to Cloudflare dashboard → Workers & Pages → Create → Pages → Connect to Git → pick the repo.
 3. Build command: `node tools/build.mjs` · Build output directory: `dist` · Root directory: *(leave empty)*
 4. Deploy.
@@ -28,17 +29,22 @@ Open the URL in Safari → Share → **Add to Home Screen**. Streamora then laun
 - `https://<your-site>/api/rd/time` should return the Real-Debrid server time. That means the relay works.
 - If playback fails for one title, open the source picker in the player and try another `[RD+]` source.
 
+## Google sign-in (required)
+Streamora keeps everything in each user's Google Drive, so the Google OAuth app has to be set up once. The current one is the Google Cloud project **Streamora** (`streamora-510411`, account knight007youtu@gmail.com):
+- Google Drive API enabled; Google Auth Platform → **In production**, External; scopes `openid`, `email`, `profile`, `drive.file` (all non-sensitive, so no verification needed); privacy policy `https://<site>/privacy.html`.
+- Client **Streamora web** (Web application): JavaScript origins and redirect URIs `https://streamora-5w5.pages.dev` + `/` and `http://localhost:5173` + `/`.
+- Client **Streamora TV and iPhone app** (TVs and Limited Input devices): the "enter a code at google.com/device" sign-in.
+
+The client ids are public and live in `wrangler.toml` `[vars]`. The two secrets are Pages secrets. Set them (and `.dev.vars` for local dev) with:
+```bash
+node tools/google-secrets.mjs
+```
+Lost a secret? Google Auth Platform → Clients → the client → **Add secret**, then run the script again.
+A new domain (or another port locally) has to be added to the web client's origins and redirect URIs. LAN addresses like `192.168.x.x` can't be added, so phones on your Wi-Fi sign in with the code instead.
+Check: `https://<your-site>/api/google/config` shows both client ids (`null` means that client's secret is missing).
+
 ## Optional extras
-All of these are off until you set them up. The app works fine without them.
-
-### Sync between devices (Cloudflare KV)
-1. Dashboard → Storage & Databases → **KV** → Create namespace, e.g. `streamora-sync`.
-2. Your Pages project → Settings → **Bindings** → Add → KV namespace. Variable name **`SYNC`**, pick the namespace. Redeploy.
-3. Recommended: Settings → **Variables and Secrets** → add a secret **`SYNC_SECRET`** (any long random string). Blobs are then AES-GCM encrypted at rest with a per-user key derived from it. Without it, blobs are stored as plain JSON (still only readable with that account's RD key). Optional `SYNC_SALT` changes how KV keys are derived from RD user ids. Don't change either later, or existing blobs can't be found or read.
-4. That's it: every device with a Real-Debrid key set syncs automatically (Settings → Connect shows the status).
-
-The server checks each request's RD key against Real-Debrid `/user` and stores one blob per RD account (512 KB max). The RD key itself is never stored or synced.
-Check: `https://<your-site>/api/sync` returns `{"error":"unauthorized"}` (and `sync_not_configured` if the binding is missing).
+These are off until you set them up. The app works fine without them.
 
 ### Trakt (scrobbling + history import)
 1. Go to https://trakt.tv/oauth/applications → **New application**. Name: Streamora. Redirect URI: `urn:ietf:wg:oauth:2.0:oob`. Save.

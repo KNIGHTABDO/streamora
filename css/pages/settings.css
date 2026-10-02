@@ -31,13 +31,7 @@
 .st-privacy ul, .st-about ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
 .st-about .sticky-note { margin-top: 10px; }
 
-.st-qr-wrap { display: flex; gap: 26px; align-items: center; flex-wrap: wrap; }
-.st-qr { width: 240px; align-items: center; }
-.st-qr-code { width: 210px; height: 210px; background: #fff; }
-.st-qr-code svg { width: 100%; height: 100%; display: block; }
-.st-qr-wrap .stack { flex: 1; min-width: 220px; }
 
-.st-import { max-width: 520px; align-items: center; text-align: center; }
 
 /* connect tab */
 .st-sync-status { font-size: 14px; }
@@ -46,3 +40,4 @@
 .st-addons li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0 6px 10px; border-left: 3px solid var(--a2); }
 .st-addons li > div { min-width: 0; }
 .st-addon-url { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-gpic { width: 84px; height: 84px; border-radius: 50%; border: 3px solid var(--line); object-fit: cover; background: var(--paper-2); }

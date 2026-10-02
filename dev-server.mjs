@@ -2,6 +2,7 @@
 // Run: node dev-server.mjs   (listens on all interfaces so your phone on the same Wi-Fi can open it)
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { networkInterfaces } from 'node:os';
@@ -13,21 +14,25 @@ const TYPES = {
   '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png',
   '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
 };
-const FILES = new Set(['index.html', 'manifest.webmanifest', 'sw.js']);
+const FILES = new Set(['index.html', 'privacy.html', 'manifest.webmanifest', 'sw.js']);
 const DIRS = new Set(['css', 'js', 'vendor', 'art']);
 
 // [url prefix, function file, param name, catch-all?]
 const FUNCS = [
   ['/api/rd/', 'functions/api/rd/[[path]].js', 'path', true],
-  ['/api/sync', 'functions/api/sync.js', 'x', false],
+  ['/api/google/', 'functions/api/google/[[path]].js', 'path', true],
   ['/api/trakt/', 'functions/api/trakt/[[path]].js', 'path', true],
   ['/api/addon', 'functions/api/addon.js', 'x', false],
 ];
-const kv = new Map(); // in-memory stand-in for the SYNC KV namespace
-const env = {
-  ...process.env,
-  SYNC: { get: async k => (kv.has(k) ? kv.get(k) : null), put: async (k, v) => { kv.set(k, String(v)); }, delete: async k => { kv.delete(k); } },
+// same variables the functions get on Cloudflare: [vars] from wrangler.toml, secrets from .dev.vars (gitignored)
+const vars = file => {
+  try {
+    const t = readFileSync(join(ROOT, file), 'utf8');
+    const body = file.endsWith('.toml') ? (t.split(/^\[vars\]\s*$/m)[1] || '').split(/^\[/m)[0] : t;
+    return Object.fromEntries([...body.matchAll(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"\n]*)"?\s*$/gm)].map(m => [m[1], m[2]]));
+  } catch { return {}; }
 };
+const env = { ...vars('wrangler.toml'), ...vars('.dev.vars'), ...process.env };
 
 async function runFunction(req, res, [prefix, file, name, all], u) {
   let mod;

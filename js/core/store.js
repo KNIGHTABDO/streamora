@@ -1,4 +1,4 @@
-// Persistence + tiny reactive stores. Everything lives in this browser only.
+// Persistence + tiny reactive stores. localStorage is the instant local copy; js/core/sync.js mirrors it to Google Drive.
 // - store(key, init): global value persisted in localStorage
 // - pstore(bucket, init): per-profile value, swaps automatically when the active profile changes
 // - useStore(s): Preact hook that re-renders on change
@@ -40,6 +40,8 @@ function makeStore(keyFn, init) {
       cacheKey = k; cache = v = fresh(v);
       if (k) ls.set(k, v);
       subs.forEach(f => f(v));
+      // sync.js listens to this to know what to save to Drive (merges from Drive use _refresh, not set)
+      if (k) try { dispatchEvent(new CustomEvent('streamora:changed', { detail: k })); } catch {}
     },
     update(fn) { const cur = s.get(); const next = fn(cur); s.set(next === undefined ? cur : next); },
     subscribe(f) { subs.add(f); return () => subs.delete(f); },
@@ -129,8 +131,10 @@ const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 
 let keyMem = null;
 export const keyStore = store('rdkey-state', { set: false }); // reactive "is a key saved" flag
-export async function saveRdKey(plain) {
+// `rdkey-at` = when the key last changed, so sync.js knows which device's key (or removal) is newest.
+export async function saveRdKey(plain, at = Date.now()) {
   keyMem = plain;
+  ls.set('rdkey-at', at);
   try {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await vaultKey(), new TextEncoder().encode(plain));
@@ -151,16 +155,18 @@ export async function getRdKey() {
     return (keyMem = new TextDecoder().decode(pt));
   } catch { forgetRdKey(); return null; } // vault key lost (cleared site data / other browser): ask again
 }
-export function forgetRdKey() {
-  keyMem = null; ls.del('rdkey'); keyStore.set({ set: false });
+/** everywhere=true: the removal syncs to every device. false: only this device forgets (sync brings it back). */
+export function forgetRdKey(everywhere = false) {
+  keyMem = null; ls.del('rdkey');
+  if (everywhere) ls.set('rdkey-at', Date.now()); else ls.del('rdkey-at');
+  keyStore.set({ set: false });
   try { indexedDB.deleteDatabase(IDB); } catch {}
 }
 if (ls.get('rdkey', null)) keyStore.set({ set: true });
 
-// ---- backup / sync: everything except the key ----
+// ---- snapshot / merge-in of everything except the key (js/core/sync.js relies on both) ----
 // exportAll({onlyProfile}) -> {app:'streamora', v:1, at, data:{[lsKey]: value}}
 // importAll(bundle, {merge=true}): merge=true merges per key (see mergeValue); merge=false overwrites.
-// js/core/sync.js relies on both signatures.
 const isKeyKey = k => k.startsWith('rdkey');
 export const allDataKeys = () => ls.keys().filter(k => !isKeyKey(k));
 

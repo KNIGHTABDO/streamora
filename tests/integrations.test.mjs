@@ -1,9 +1,9 @@
-// node tests/integrations.test.mjs  — merge logic, RD-keyed sync function on a Map KV, trakt/addon helpers.
+// node tests/integrations.test.mjs  — Drive sync merge logic, the Google sign-in relay, trakt/addon helpers.
 import assert from 'node:assert/strict';
-import { merge } from '../js/core/sync.js';
+import { merge, mergeSecrets, syncable } from '../js/core/sync.js';
 import { foldWatched, scrobbleBody } from '../js/core/trakt.js';
 import { normalizeStream, checkManifest, manifestUrl } from '../js/core/addons.js';
-import { onRequest as syncFn } from '../functions/api/sync.js';
+import { onRequest as googleFn } from '../functions/api/google/[[path]].js';
 import { allowedUrl } from '../functions/api/addon.js';
 
 // ---- merge
@@ -33,42 +33,48 @@ assert.deepEqual(m2[P + 'watchlist'].map(x => x.id).sort(), ['tt1', 'tt2', 'tt4'
 const h = merge({ at: 1, data: { [P + 'history']: [{ id: 'a', at: 1 }, { id: 'b', at: 3 }] } }, { at: 2, data: { [P + 'history']: [{ id: 'a', at: 1 }, { id: 'c', at: 2 }] } });
 assert.deepEqual(h[P + 'history'].map(x => x.id), ['b', 'c', 'a'], 'history union sorted newest first');
 
-// ---- sync function on a Map-backed KV, RD /user mocked
-let rdCalls = 0;
+assert.ok(syncable('profiles') && syncable('addons') && syncable('p:a:mood'), 'profiles, addons, per-profile buckets sync');
+for (const k of ['rdkey', 'rdkey-at', 'google', 'gd-ver', 'sync-base', 'rt', 'resolved', 'app-banner-off', 'oauth-pending']) assert.ok(!syncable(k), k + ' stays on the device');
+
+// ---- secrets: newest wins per entry, ties go to Drive's copy
+let sm = mergeSecrets({ rd: { v: 'A', at: 5 }, trakt: { p1: { access_token: 'x', at: 1 } } }, { rd: { v: 'B', at: 3 }, trakt: { p1: { off: true, at: 2 }, p2: { access_token: 'y', at: 1 } } });
+assert.equal(sm.rd.v, 'A', 'newer local key wins');
+assert.ok(sm.trakt.p1.off && sm.trakt.p2.access_token === 'y', 'newer disconnect wins, remote-only kept');
+sm = mergeSecrets({ rd: { v: 'A', at: 1 } }, { rd: { v: 'B', at: 1 } });
+assert.equal(sm.rd.v, 'B', 'tie -> Drive');
+sm = mergeSecrets({ rd: { v: 'A', at: 1 } }, undefined);
+assert.equal(sm.rd.v, 'A', 'empty Drive takes the local key');
+sm = mergeSecrets({ rd: { v: null, at: 9 } }, { rd: { v: 'B', at: 3 } });
+assert.equal(sm.rd.v, null, 'a newer removal sticks');
+
+// ---- Google relay (Google mocked)
 const realFetch = globalThis.fetch;
+const seen = [];
 globalThis.fetch = async (u, init) => {
-  if (String(u) !== 'https://api.real-debrid.com/rest/1.0/user') return realFetch(u, init);
-  rdCalls++;
-  const tok = init.headers.Authorization.slice(7);
-  return tok.startsWith('good') ? new Response(JSON.stringify({ id: tok === 'good2' ? 2 : 1 })) : new Response('{"error":"bad_token"}', { status: 401 });
+  const form = Object.fromEntries(new URLSearchParams(init.body));
+  seen.push([String(u), form]);
+  if (form.grant_type === 'urn:ietf:params:oauth:grant-type:device_code') return new Response('{"error":"authorization_pending"}', { status: 428 });
+  return new Response(JSON.stringify({ ok: true }), { status: 200 });
 };
-for (const secret of [undefined, 's3cret']) {
-  const kv = new Map();
-  const env = { SYNC: { get: async k => kv.get(k) ?? null, put: async (k, v) => void kv.set(k, v) }, SYNC_SECRET: secret };
-  const call = (method, { body, ifMatch, origin, tok = 'good1' } = {}) => syncFn({ env,
-    request: new Request('https://s.test/api/sync', { method, body, headers: { ...(tok && { Authorization: 'Bearer ' + tok }), ...(ifMatch != null && { 'If-Match': String(ifMatch) }), ...(origin && { Origin: origin }) } }) });
-  const blob = JSON.stringify({ data: { at: 5, data: { k: 'hello' } } });
-  assert.equal((await call('GET', { tok: null })).status, 401);
-  assert.equal((await call('GET', { tok: 'bad' })).status, 401);
-  assert.equal((await call('GET')).status, 404);
-  assert.equal((await call('GET', { origin: 'https://evil.test' })).status, 403);
-  assert.equal((await call('PUT', { body: blob })).status, 428);
-  let r = await call('PUT', { body: blob, ifMatch: 0 });
-  assert.equal(r.status, 200); assert.equal((await r.json()).ver, 1);
-  r = await call('PUT', { body: blob, ifMatch: 0 });
-  assert.equal(r.status, 409); assert.deepEqual(await r.json(), { ver: 1, data: { at: 5, data: { k: 'hello' } } }, '409 returns current');
-  assert.equal((await call('PUT', { body: blob, ifMatch: 1 })).status, 200);
-  const g = await (await call('GET')).json();
-  assert.equal(g.ver, 2); assert.equal(g.data.data.k, 'hello');
-  assert.equal((await call('GET', { tok: 'good2' })).status, 404, 'other account sees nothing');
-  assert.equal((await call('PUT', { body: 'x'.repeat(600 * 1024), ifMatch: 2 })).status, 413);
-  const [key] = kv.keys();
-  assert.match(key, /^u:[0-9a-f]{64}$/);
-  assert.equal(kv.get(key).includes('hello'), !secret, secret ? 'encrypted at rest' : 'plaintext without secret');
-}
-assert.ok(rdCalls <= 4, 'token -> id cached (' + rdCalls + ' RD calls)');
+const genv = { GOOGLE_CLIENT_ID: 'web-id', GOOGLE_CLIENT_SECRET: 'web-s', GOOGLE_TV_CLIENT_ID: 'tv-id', GOOGLE_TV_CLIENT_SECRET: 'tv-s' };
+const gcall = (path, body, { env = genv, origin, method = body ? 'POST' : 'GET' } = {}) => googleFn({ env, params: { path: path.split('/') },
+  request: new Request('https://s.test/api/google/' + path, { method, body: body && JSON.stringify(body), headers: origin ? { Origin: origin } : {} }) });
+let gr = await (await gcall('config')).json();
+assert.deepEqual([gr.web, gr.tv], ['web-id', 'tv-id']);
+assert.match(gr.scope, /drive\.file/);
+assert.deepEqual(await (await gcall('config', null, { env: {} })).json().then(j => [j.web, j.tv]), [null, null], 'no secrets -> not configured');
+assert.equal((await gcall('config', null, { origin: 'https://evil.test' })).status, 403);
+assert.equal((await gcall('token', { code: 'c', redirect_uri: 'https://evil.test/' })).status, 400, 'code only comes back to this site');
+assert.equal((await gcall('token', { code: 'c', redirect_uri: 'https://s.test/', code_verifier: 'v' })).status, 200);
+assert.deepEqual(seen.at(-1)[1], { grant_type: 'authorization_code', code: 'c', redirect_uri: 'https://s.test/', code_verifier: 'v', client_id: 'web-id', client_secret: 'web-s' });
+await gcall('refresh', { refresh_token: 'r', client: 'tv' });
+assert.equal(seen.at(-1)[1].client_id, 'tv-id', 'tv tokens refresh with the tv client');
+await gcall('device/code', {});
+assert.equal(seen.at(-1)[0], 'https://oauth2.googleapis.com/device/code');
+assert.equal((await gcall('device/token', { device_code: 'd' })).status, 428, 'pending passes through');
+assert.equal((await gcall('refresh', { refresh_token: 'r' }, { env: {} })).status, 501);
+assert.equal((await gcall('nope', {})).status, 404);
 globalThis.fetch = realFetch;
-assert.equal((await syncFn({ env: {}, request: new Request('https://s.test/') })).status, 501);
 
 // ---- trakt
 const fw = foldWatched({ tt5: { id: 'tt5', eps: { 'tt5:1:1': { done: true, at: 1 } }, last: 'tt5:1:1', updated: 1 } },

@@ -13,7 +13,7 @@ const wait = +flag('wait', 3500);
 const out = flag('out', (hash.replace(/[^a-z0-9]+/gi, '_') || 'home') + (phone ? '_phone' : tv ? '_tv' : ''));
 const base = 'http://localhost:' + (process.env.PORT || 5173);
 const KEY = readFileSync(new URL('./.rdkey', import.meta.url), 'utf8').trim();
-const exe = process.env.CHROME || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
+const exe = process.env.CHROME || (process.platform === 'win32' ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : '/usr/bin/google-chrome');
 
 const browser = await puppeteer.launch({ executablePath: exe, headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
 const page = await browser.newPage();
@@ -25,7 +25,7 @@ if (phone) await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like
 const errors = [];
 page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`[${m.type()}] ${m.text()}`); });
 page.on('pageerror', e => errors.push('[pageerror] ' + e.message));
-page.on('requestfailed', r => { const u = r.url(); if (!/fonts\.g|metahub|m\.media-amazon|kitsu\.app|\.ts$|\.m3u8/.test(u)) errors.push('[reqfail] ' + u + ' ' + (r.failure() && r.failure().errorText)); });
+page.on('requestfailed', r => { const u = r.url(); if (!/googleapis|fonts\.g|metahub|m\.media-amazon|kitsu\.app|\.ts$|\.m3u8/.test(u)) errors.push('[reqfail] ' + u + ' ' + (r.failure() && r.failure().errorText)); });
 
 await page.goto(base + '/#/welcome', { waitUntil: 'domcontentloaded' });
 if (!flag('fresh', false)) {
@@ -38,6 +38,10 @@ if (!flag('fresh', false)) {
     s.activeProfileId.set('test1');
     s.settings.update(x => ({ ...x, nightAuto: theme === 'blueprint' }));
     await s.saveRdKey(KEY);
+    // pretend to be signed in to Google (Drive calls just fail quietly), so the sign-in gate lets us through
+    const { idbSet } = await import('/js/core/idb.js');
+    await idbSet('google', { refresh_token: 'shot', client: 'web', access_token: 'shot', exp: Date.now() + 36e5 });
+    (await import('/js/core/google.js')).account.set({ sub: 'shot', email: 'tester@example.com', name: 'Tester', picture: '' });
   }, KEY, theme);
   if (flag('seed-demo', false)) {
     // demo watch history / diary / watchlist / follows (for Diary, Wrapped, Watchlist, Calendar)

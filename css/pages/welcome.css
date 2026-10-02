@@ -54,6 +54,20 @@
 .welcome-stamp small { font-size: 14px; }
 @keyframes w-stamp { from { opacity: 0; transform: rotate(-20deg) scale(2); } }
 
+/* Google sign-in */
+.welcome-google { align-items: stretch; }
+.welcome-google h2 { text-align: center; }
+.welcome-gbtn { align-self: center; }
+.welcome-gbtn span { display: inline-flex; align-items: center; gap: 10px; }
+.welcome-g { width: 22px; height: 22px; flex: none; background: #fff; border-radius: 50%; padding: 2px; }
+.welcome-device { align-items: center; text-align: center; }
+.welcome-code {
+  font-size: clamp(30px, 8vw, 44px); letter-spacing: .12em; padding: 6px 18px;
+  border: 3px dashed var(--a1); border-radius: 14px 18px 12px 20px; background: var(--paper); user-select: all;
+}
+.welcome-qr { width: 150px; height: 150px; background: #fff; padding: 4px; border: 2px solid var(--line); border-radius: 10px; }
+.welcome-qr svg { width: 100%; height: 100%; display: block; }
+
 @media (max-width: 520px) {
   .welcome-page { padding: 22px 16px 18px 20px; }
   .welcome-page::before { left: 12px; }

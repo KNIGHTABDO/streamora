@@ -1,40 +1,32 @@
-// Zero-setup sync: whenever a Real-Debrid key is set, this device shares one blob in /api/sync with every
-// other device signed in to the same RD account. The server checks the key with RD and keys the blob by the RD user id
-// (encrypted at rest when the server has SYNC_SECRET). No KV on the server (501) -> sync quietly stays off.
-// The RD key, Trakt tokens and this device's active profile never sync.
-import {
-  store, ls, exportAll, importAll, profiles, watchlist, progress, history, diary, follows, hidden, settings, getRdKey, keyStore,
-} from './store.js';
+// Everything Streamora remembers lives in one file, "Streamora/streamora-data", in the signed-in Google account's Drive.
+// Scope drive.file: Streamora only ever sees files it created (found by appProperties, so renaming/moving is fine),
+// and every client of the Google project (web, TV/iPhone app) shares them. localStorage stays the instant
+// local copy, so the UI never waits for the network:
+// - a change is pushed ~1.5 s later (several quick changes go up together, at most ~8 s apart);
+// - other devices' changes come in on start, when the tab comes back, every 45 s while visible, and when back online;
+// - "did anything change?" is a tiny metadata call (Drive's file `version`); the file is only downloaded when it did,
+//   and only uploaded when something here changed. The file is gzipped JSON.
+// Lists and progress merge item by item (newest wins; deletions stick thanks to `sync-base`), see merge().
+// Secrets (Real-Debrid key, Trakt tokens) travel in the same private file; newest change wins.
+// The active profile, caches and this device's sign-in never sync.
+import { store, ls, exportAll, importAll, profiles, settings, getRdKey, saveRdKey, forgetRdKey } from './store.js';
 import { addons } from './addons.js';
+import { account, accessToken, SignedOut } from './google.js';
+import { idbGet, idbSet } from './idb.js';
 
-export const syncState = store('sync-status', { on: false, ver: 0, last: 0, error: null, busy: false });
-const PUSH_DELAY = 30e3;
-
-// ------------------------------------------------------------ tiny IndexedDB (also used by trakt.js)
-const DB = 'streamora-integrations';
-function idb(mode, fn) {
-  return new Promise((res, rej) => {
-    const open = indexedDB.open(DB, 1);
-    open.onupgradeneeded = () => open.result.createObjectStore('k');
-    open.onerror = () => rej(open.error);
-    open.onsuccess = () => {
-      const tx = open.result.transaction('k', mode);
-      const req = fn(tx.objectStore('k'));
-      tx.oncomplete = () => { open.result.close(); res(req && req.result); };
-      tx.onerror = () => rej(tx.error);
-    };
-  });
-}
-export const idbGet = k => idb('readonly', s => s.get(k)).catch(() => null);
-export const idbSet = (k, v) => idb('readwrite', s => s.put(v, k));
-export const idbDel = k => idb('readwrite', s => s.delete(k)).catch(() => {});
+export const syncState = store('sync-status', { busy: false, last: 0, error: null });
+if (syncState.get().busy) syncState.set({ ...syncState.get(), busy: false });
+const DEBOUNCE = 1500, MAX_WAIT = 8000, POLL = 45e3, NAME = 'streamora-data';
+const TAG = (v) => encodeURIComponent(`appProperties has { key='streamora' and value='${v}' } and trashed=false`);
+const API = 'https://www.googleapis.com/drive/v3', UP = 'https://www.googleapis.com/upload/drive/v3';
 
 // ------------------------------------------------------------ merge (pure, tested in tests/integrations.test.mjs)
-export const syncable = k => !(k === 'activeProfile' || k.startsWith('rdkey') || k.startsWith('sync') || k.startsWith('trakt'));
+// what syncs: profiles, addons and every per-profile bucket. Everything else in localStorage is this device's own.
+export const syncable = k => k === 'profiles' || k === 'addons' || k.startsWith('p:');
 const bucketOf = k => (k.startsWith('p:') ? k.split(':')[2] : k);
 // how to identify items of list-like buckets (for union + deletion detection)
 const ITEM_KEY = {
-  profiles: x => x.id, watchlist: x => x.id, follows: x => x.id, hidden: x => x,
+  profiles: x => x.id, watchlist: x => x.id, follows: x => x.id, hidden: x => x, addons: x => x.url,
   history: x => `${x.id}|${x.videoId || ''}|${x.at}`, diary: x => `${x.id}|${x.at}`,
   progress: null, // object keyed by meta id, handled separately
 };
@@ -72,9 +64,9 @@ function mergeList(a = [], b = [], keyOf, base, preferB) {
 export function merge(local, remote, base = null) {
   const out = {};
   const remoteNewer = (remote.at || 0) > (local.at || 0);
-  for (const k of new Set([...Object.keys(local.data), ...Object.keys(remote.data)])) {
+  for (const k of new Set([...Object.keys(local.data), ...Object.keys(remote.data || {})])) {
     if (!syncable(k)) continue;
-    const a = local.data[k], b = remote.data[k];
+    const a = local.data[k], b = (remote.data || {})[k];
     if (a === undefined || b === undefined) { out[k] = structuredClone(a === undefined ? b : a); continue; }
     const bk = bucketOf(k), known = base && base[k] ? new Set(base[k]) : null;
     if (bk === 'progress') out[k] = mergeProgress(a, b, known);
@@ -86,96 +78,203 @@ export function merge(local, remote, base = null) {
   }
   return out;
 }
+
+/**
+ * Secrets: { rd: {v: key|null, at}, trakt: {profileId: token|{off:true}, with `at`} }. Newest `at` wins per entry;
+ * a tie goes to b (Drive's copy), so two devices that never stamped their key settle on one instead of ping-ponging.
+ */
+export function mergeSecrets(a = {}, b = {}) {
+  const pick = (x, y) => (!x ? y : !y ? x : (y.at || 0) >= (x.at || 0) ? y : x);
+  const ta = a.trakt || {}, tb = b.trakt || {}, trakt = {};
+  for (const id of new Set([...Object.keys(ta), ...Object.keys(tb)])) trakt[id] = pick(ta[id], tb[id]);
+  return { rd: pick(a.rd, b.rd) || { v: null, at: 0 }, trakt };
+}
 const baseOf = data => Object.fromEntries(Object.entries(data).map(([k, v]) => [k, idsOf(k, v)]).filter(([, v]) => v));
-const canon = d => JSON.stringify(Object.keys(d).sort().map(k => [k, d[k]]));
+const canon = d => JSON.stringify(Object.keys(d || {}).sort().map(k => [k, d[k]]));
 
-// ------------------------------------------------------------ push / pull
-const URL_ = '/api/sync';
-let off = false; // server has no KV: stop trying until reload
+// ------------------------------------------------------------ local side
 const localBundle = () => ({ at: ls.get('sync-changed', 0), data: Object.fromEntries(Object.entries(exportAll().data).filter(([k]) => syncable(k))) });
+async function localSecrets() {
+  const v = await getRdKey();
+  const trakt = {};
+  for (const p of profiles.get()) { const t = await idbGet(`trakt:${p.id}`); if (t) trakt[p.id] = t; }
+  if (v && !ls.get('rdkey-at', 0)) ls.set('rdkey-at', 1); // key from before Drive: older than any real change
+  return { rd: { v: v || null, at: ls.get('rdkey-at', 0) }, trakt };
+}
 
-let applying = false;
+let applying = 0; // remote changes being written locally: don't count them as local edits
+// `data` is already the merged result, so it overwrites (a union here would bring deleted items back)
 function apply(data) {
-  applying = true;
-  try { importAll({ app: 'streamora', data }, { merge: true }); addons._refresh(); settings._refresh(); } finally { applying = false; }
+  applying++;
+  try { importAll({ app: 'streamora', data }, { merge: false }); addons._refresh(); settings._refresh(); } finally { applying--; }
 }
-class Off extends Error {}
-function explain(r) {
-  if (r.status === 501) return new Off();
-  if (r.status === 401) return new Error('Real-Debrid did not accept your key, so sync is paused.');
-  if (r.status === 413) return new Error('Too much data to sync (512 KB max).');
-  return new Error(`Sync server said ${r.status}`);
-}
-const auth = key => ({ Authorization: `Bearer ${key}` });
-async function pull(key) {
-  const r = await fetch(URL_, { cache: 'no-store', headers: auth(key) });
-  if (r.status === 404) return null;
-  if (!r.ok) throw explain(r);
-  const j = await r.json();
-  return { ver: j.ver, ...j.data };
-}
-function put(key, ver, bundle, keepalive = false) {
-  const body = JSON.stringify({ data: bundle });
-  return fetch(URL_, { method: 'PUT', headers: { ...auth(key), 'Content-Type': 'application/json', 'If-Match': String(ver) }, body, keepalive: keepalive && body.length < 60e3 });
-}
-
-async function run() {
-  const c = !off && await getRdKey();
-  if (!c) return syncState.set({ ...syncState.get(), on: false, busy: false });
-  syncState.set({ ...syncState.get(), on: true, busy: true });
+async function applySecrets(next, cur) {
+  applying++;
   try {
-    for (let tries = 0; ; tries++) {
-      const remote = await pull(c);
-      const local = localBundle();
-      let data = local.data;
-      if (remote) {
-        data = merge(local, remote, ls.get('sync-base', null));
-        if (canon(data) !== canon(local.data)) apply(data);
-      }
-      const at = Math.max(local.at || 0, (remote && remote.at) || 0);
-      let ver = remote ? remote.ver : 0;
-      if (!remote || canon(data) !== canon(remote.data)) {
-        const r = await put(c, ver, { at, data });
-        if (r.status === 409 && tries < 3) continue; // someone pushed in between: pull, merge, push again
-        if (!r.ok) throw await explain(r);
-        ver = (await r.json()).ver;
-      }
-      ls.set('sync-base', baseOf(data));
-      syncState.set({ on: true, ver, last: Date.now(), error: null, busy: false });
-      return;
+    if (next.rd.v !== cur.rd.v) {
+      if (next.rd.v) await saveRdKey(next.rd.v, next.rd.at);
+      else if (next.rd.at) { forgetRdKey(true); ls.set('rdkey-at', next.rd.at); }
     }
-  } catch (e) {
-    if (e instanceof Off) { off = true; return syncState.set({ on: false, ver: 0, last: 0, error: null, busy: false }); }
-    syncState.set({ ...syncState.get(), busy: false, error: e.message || String(e) });
-  }
+    let traktChanged = false;
+    for (const [pid, t] of Object.entries(next.trakt)) {
+      if (canon(t) !== canon(cur.trakt[pid])) { await idbSet(`trakt:${pid}`, t); traktChanged = true; }
+    }
+    if (traktChanged) { const { traktRev } = await import('./trakt.js'); traktRev.set(traktRev.get() + 1); }
+  } finally { applying--; }
 }
-let running = null;
-export const syncNow = () => running || (running = run().finally(() => { running = null; }));
 
-// ------------------------------------------------------------ listeners
-const enabled = () => !off && keyStore.get().set;
-let timer = null;
+// ------------------------------------------------------------ Drive
+class HttpError extends Error { constructor(r, what) { super(`${what}: Google Drive said ${r.status}`); this.status = r.status; } }
+async function drive(url, opts = {}, tries = 0) {
+  const r = await fetch(url, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${await accessToken(tries > 0 && opts._401)}` } });
+  if (r.status === 401 && tries === 0) return drive(url, { ...opts, _401: true }, 1);
+  if ((r.status === 429 || r.status >= 500) && tries < 2) { await new Promise(res => setTimeout(res, 800 * (tries + 1))); return drive(url, opts, tries + 1); }
+  return r;
+}
+async function fileMeta() {
+  const id = ls.get('gd-file', null);
+  if (id) {
+    const r = await drive(`${API}/files/${id}?fields=id,version`);
+    if (r.ok) return r.json();
+    if (r.status !== 404) throw new HttpError(r, 'Checking for changes');
+  }
+  const r = await drive(`${API}/files?q=${TAG('data')}&orderBy=createdTime&pageSize=10&fields=files(id,version)`);
+  if (!r.ok) throw new HttpError(r, 'Looking for your data');
+  const f = (await r.json()).files[0] || null; // two devices racing to create it: everyone settles on the oldest
+  ls.set('gd-file', f && f.id);
+  return f;
+}
+
+const gz = typeof CompressionStream !== 'undefined';
+const pipe = async (bytes, stream) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+async function encode(obj) {
+  const raw = new TextEncoder().encode(JSON.stringify(obj));
+  if (gz) { try { return await pipe(raw, new CompressionStream('gzip')); } catch {} }
+  return raw;
+}
+async function decode(buf) {
+  let b = new Uint8Array(buf);
+  if (b[0] === 0x1f && b[1] === 0x8b) b = await pipe(b, new DecompressionStream('gzip'));
+  const j = JSON.parse(new TextDecoder().decode(b));
+  if (!j || j.app !== 'streamora' || typeof j.data !== 'object') throw new Error('The Streamora file in your Drive is damaged.');
+  return j;
+}
+async function download(id) {
+  const r = await drive(`${API}/files/${id}?alt=media`, { cache: 'no-store' });
+  if (!r.ok) throw new HttpError(r, 'Downloading your data');
+  return decode(await r.arrayBuffer());
+}
+/** The "Streamora" folder the data file goes in (made on first save). */
+async function folder() {
+  const r = await drive(`${API}/files?q=${TAG('folder')}&orderBy=createdTime&pageSize=1&fields=files(id)`);
+  if (!r.ok) throw new HttpError(r, 'Looking for the Streamora folder');
+  const f = (await r.json()).files[0];
+  if (f) return f.id;
+  const c = await drive(`${API}/files?fields=id`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Streamora', mimeType: 'application/vnd.google-apps.folder', appProperties: { streamora: 'folder' } }) });
+  if (!c.ok) throw new HttpError(c, 'Making the Streamora folder');
+  return (await c.json()).id;
+}
+async function upload(id, bundle) {
+  const bytes = await encode(bundle);
+  let r;
+  if (id) {
+    r = await drive(`${UP}/files/${id}?uploadType=media&fields=id,version`, { method: 'PATCH', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes });
+  } else {
+    const meta = { name: NAME, parents: [await folder()], mimeType: 'application/octet-stream', appProperties: { streamora: 'data' }, description: 'Streamora keeps your profiles, watchlists and progress here. Leave it be: deleting it removes them from every device.' };
+    const b = 'streamora' + Math.random().toString(36).slice(2);
+    const body = new Blob([`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${b}\r\nContent-Type: application/octet-stream\r\n\r\n`, bytes, `\r\n--${b}--`]);
+    r = await drive(`${UP}/files?uploadType=multipart&fields=id,version`, { method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${b}` }, body });
+  }
+  if (!r.ok) throw new HttpError(r, 'Saving to Drive');
+  return r.json();
+}
+
+/** Deletes Streamora's file from Drive (Settings → Privacy). */
+export async function deleteDriveData() {
+  const f = await fileMeta();
+  if (f) { const r = await drive(`${API}/files/${f.id}`, { method: 'DELETE' }); if (!r.ok && r.status !== 404) throw new HttpError(r, 'Deleting'); }
+  for (const k of ['gd-file', 'gd-ver', 'gd-clean', 'sync-base']) ls.del(k);
+}
+
+// ------------------------------------------------------------ one sync round
+async function run() {
+  if (!account.get()) return;
+  syncState.set({ ...syncState.get(), busy: true });
+  try {
+    const meta = await fileMeta();
+    const local = localBundle(), sLocal = await localSecrets();
+    const dirty = (local.at || 0) > ls.get('gd-clean', -1);
+    let push = !meta || dirty, data = local.data, secrets = sLocal, at = local.at || 0;
+    if (meta && meta.version !== ls.get('gd-ver', null)) {
+      // someone else saved since we last looked: bring it in, merge, and push the merge back if it differs
+      const remote = await download(meta.id);
+      // edited here while it downloaded? merge the newest local state instead
+      if (ls.get('sync-changed', 0) !== local.at) Object.assign(local, localBundle());
+      data = merge(local, remote, ls.get('sync-base', null));
+      secrets = mergeSecrets(sLocal, remote.secrets);
+      if (canon(data) !== canon(local.data)) apply(data);
+      await applySecrets(secrets, sLocal);
+      at = Math.max(at, remote.at || 0);
+      push = canon(data) !== canon(remote.data) || canon(secrets) !== canon(mergeSecrets(remote.secrets));
+    }
+    let ver = meta && meta.version;
+    if (push) {
+      const res = await upload(meta && meta.id, { app: 'streamora', v: 2, at, data, secrets });
+      ls.set('gd-file', res.id);
+      ver = res.version;
+    }
+    ls.set('gd-ver', ver);
+    ls.set('gd-clean', local.at || 0); // edits made while this ran keep it dirty, so they go up next round
+    ls.set('sync-base', baseOf(data));
+    syncState.set({ busy: false, last: Date.now(), error: null });
+  } catch (e) {
+    const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+    syncState.set({ ...syncState.get(), busy: false, error: e instanceof SignedOut ? null : offline ? 'Offline. Changes are kept here and saved when you\'re back.' : (e.message || String(e)) });
+  }
+  if (ls.get('sync-changed', 0) > ls.get('gd-clean', -1)) schedule(DEBOUNCE);
+}
+let running = null, again = false;
+/** Runs a sync round now (or right after the current one). Resolves when this device is in step with Drive. */
+export function syncNow() {
+  if (running) { again = true; return running; }
+  running = run().finally(() => { running = null; if (again) { again = false; syncNow(); } });
+  return running;
+}
+export const syncPending = () => !!timer || !!running || ls.get('sync-changed', 0) > ls.get('gd-clean', -1);
+
+// ------------------------------------------------------------ when to sync
+let timer = null, firstChange = 0;
+function schedule(ms) {
+  if (!account.get()) return;
+  const now = Date.now();
+  if (!timer) firstChange = now;
+  clearTimeout(timer);
+  timer = setTimeout(() => { timer = null; syncNow(); }, Math.max(0, Math.min(ms, firstChange + MAX_WAIT - now)));
+}
 function changed() {
   if (applying) return;
   ls.set('sync-changed', Date.now());
-  if (enabled() && !timer) timer = setTimeout(() => { timer = null; syncNow(); }, PUSH_DELAY);
+  schedule(DEBOUNCE);
 }
-async function flush() {
-  if (!timer || !enabled()) return;
-  clearTimeout(timer); timer = null;
-  // best effort while the page goes away; a 409 here is fine, the next start pulls + merges + pushes
-  try { const k = await getRdKey(); if (k) await put(k, syncState.get().ver, localBundle(), true); } catch {}
+let lastPull = 0;
+function pull() {
+  if (!account.get() || document.visibilityState !== 'visible' || Date.now() - lastPull < 5e3) return;
+  lastPull = Date.now();
+  syncNow();
 }
 
 let started = false;
 export async function initSync() {
   if (started) return;
   started = true;
-  for (const s of [profiles, watchlist, progress, history, diary, follows, hidden, settings, addons]) s.subscribe(changed);
-  addEventListener('pagehide', flush);
-  document.addEventListener('visibilitychange', () => (document.visibilityState === 'visible' ? enabled() && syncNow() : flush()));
-  // key added -> sync (a new account starts from a fresh base); key removed -> off
-  keyStore.subscribe(k => { ls.del('sync-base'); if (k.set) { off = false; syncNow(); } else syncState.set({ on: false, ver: 0, last: 0, error: null, busy: false }); });
-  if (enabled()) syncNow();
-  else if (syncState.get().on) syncState.set({ ...syncState.get(), on: false });
+  // every store write announces its key (store.js); the key and Trakt tokens count too
+  addEventListener('streamora:changed', e => (syncable(e.detail) || e.detail === 'rdkey-state' || e.detail === 'trakt-rev') && changed());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') pull();
+    else if (timer) { clearTimeout(timer); timer = null; syncNow(); } // leaving: save now while the page still runs
+  });
+  addEventListener('online', () => { lastPull = 0; pull(); });
+  setInterval(pull, POLL);
+  account.subscribe(a => { if (a) syncNow(); });
+  if (account.get()) syncNow();
 }

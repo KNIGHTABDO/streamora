@@ -1,10 +1,12 @@
-// Streamora app shell: theme, gates (key → profile), navigation chrome, lazy pages.
+// Streamora app shell: theme, gates (Google → key → profile), navigation chrome, lazy pages.
 import { html, render, useState, useEffect, useRef, useErrorBoundary } from '../vendor/preact-htm.js';
 import { installSketch } from './ui/sketch.js';
 import { Icon, Spinner, Toasts, ErrorNote, Btn, cx, toast } from './ui/components.js';
 import { Avatar } from './ui/avatars.js';
 import { useRoute, navigate, parseHash } from './router.js';
 import { useStore, keyStore, profiles, activeProfileId, settings } from './core/store.js';
+import { account } from './core/google.js';
+import { initSync } from './core/sync.js';
 import { initFocus } from './ui/focus.js';
 import { newEps, badgeCount, checkNewEpisodes, notifyNewEpisodes } from './lib/newEpisodes.js';
 import { isIOS } from './player/engine.js';
@@ -65,7 +67,7 @@ export const MORE_NAV = [
   { group: 'Tools', items: [
     { href: '#/add', label: 'Add magnet / link', icon: 'magnet', note: 'paste & play' },
     { href: '#/profiles', label: 'Profiles', icon: 'users', note: 'switch who\'s watching' },
-    { href: '#/settings', label: 'Settings', icon: 'gear', note: 'key, player, backup' },
+    { href: '#/settings', label: 'Settings', icon: 'gear', note: 'account, player, look' },
   ] },
 ];
 
@@ -176,6 +178,7 @@ function PageHost({ route }) {
 function App() {
   let route = useRoute();
   const key = useStore(keyStore);
+  const google = useStore(account);
   const list = useStore(profiles);
   const activeId = useStore(activeProfileId);
   const [more, setMore] = useState(false);
@@ -186,10 +189,11 @@ function App() {
   useEffect(() => { scrollTo(0, 0); }, [route.path, q]);
   useEffect(() => { setMore(false); }, [route.path]);
 
-  // gates: no key → welcome; no profile → profile picker
-  const open = ['/welcome', '/import'].includes(route.path);
+  // gates: not signed in to Google (everything lives in Drive) or no key → welcome; no profile → profile picker
+  const open = route.path === '/welcome';
+  const ready = google && key.set;
   // redirect by rewriting the URL quietly and rendering the target now (navigating mid-render got lost on fresh loads)
-  const gate = !key.set && !open ? '#/welcome' : key.set && !profile && !open && route.path !== '/profiles' ? '#/profiles' : null;
+  const gate = !ready && !open ? '#/welcome' : ready && !profile && !open && route.path !== '/profiles' ? '#/profiles' : null;
   if (gate) { history.replaceState(null, '', gate); route = parseHash(gate); }
   else if (route.redirect) history.replaceState(null, '', route.redirect);
 
@@ -222,9 +226,10 @@ if ('serviceWorker' in navigator && !['localhost', '127.0.0.1', '[::1]'].include
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
-// after first paint: sync/Trakt bootstrapping, then the daily new-episode check (+ one notification if allowed)
+// Drive sync starts right away (it never blocks the UI); Trakt and the daily new-episode check after first paint
+initSync().catch(() => {});
 setTimeout(() => {
-  import('./core/integrations.js').catch(() => {});
+  import('./core/trakt.js').then(m => m.initTrakt()).catch(() => {});
   const episodes = () => { if (keyStore.get().set && activeProfileId.get()) checkNewEpisodes().then(notifyNewEpisodes).catch(() => {}); };
   episodes();
   document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && episodes());
