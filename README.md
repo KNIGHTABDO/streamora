@@ -15,7 +15,7 @@ See **[DEPLOY.md](DEPLOY.md)**. It takes about 2 minutes with Cloudflare Pages.
 | Piece | What it does |
 |---|---|
 | Cinemeta + Kitsu | catalog, posters, episodes (free, no key needed) |
-| Torrentio | finds sources, marks the ones Real-Debrid already has cached `[RD+]`, and starts them: its servers add the torrent to your Real-Debrid and unlock the file, like in Stremio (`functions/api/resolve`). Real-Debrid's 2026 copyright filter refuses torrent adds from many addresses but accepts Torrentio's |
+| Torrentio | finds sources, marks the ones Real-Debrid already has cached `[RD+]`, and adds them to your Real-Debrid: the device opens the source's Torrentio link and Torrentio's servers do the adding, like in Stremio (`resolveStream` in `js/core/rd.js`). Real-Debrid's 2026 copyright filter refuses torrent adds from most addresses but accepts Torrentio's |
 | Real-Debrid | holds the file; the website plays it through RD's live transcode (HLS), the app plays the original file |
 | `functions/api/rd` | ~20-line relay, because Real-Debrid's API blocks browsers (no CORS). It stores nothing |
 | Google Drive | one gzipped file (`Streamora/streamora-data`, `drive.file` scope) holds profiles, progress, history, diary, settings, the RD key and Trakt sign-ins (`js/core/sync.js`) |
