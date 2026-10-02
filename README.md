@@ -60,9 +60,11 @@ Setup for the server side (Google sign-in, Trakt app) is in [DEPLOY.md](DEPLOY.m
 ## iPhone & iPad app
 Safari can't play mkv files, so on the web Streamora has to use Real-Debrid's live transcode, which can fall behind and buffer. The app version plays **the original file** with a built-in VLC player (mkv, HEVC, Dolby, DTS, embedded subtitles), the same way Infuse does. Everything else (profiles, Drive sync, Trakt) is the same Streamora. Inside the app you sign in with a code at google.com/device, because Google doesn't allow its sign-in page inside apps.
 
-**Install:**
-1. Download `Streamora.ipa` from the [latest release](https://github.com/KNIGHTABDO/streamora/releases/latest).
-2. Install it with [Sideloadly](https://sideloadly.io) (or AltStore) using your Apple ID. With a free Apple ID the app has to be re-signed every 7 days.
-3. On the device: Settings → General → VPN & Device Management → trust your Apple ID.
+**Install (SideStore, refreshes itself on the device):**
+1. Once per device, set up [SideStore](https://docs.sidestore.io/docs/installation/prerequisites): install LocalDevVPN from the App Store, then on the computer install `usbmuxd` and [iloader](https://github.com/nab138/iloader/releases/latest), plug the device in, and use iloader → *Install SideStore (Stable)*. Then follow the on-device steps in [their guide](https://docs.sidestore.io/docs/installation/install) (trust the profile, Developer Mode, sign in to SideStore).
+2. Download `Streamora.ipa` from the [latest release](https://github.com/KNIGHTABDO/streamora/releases/latest) on the iPhone/iPad (Safari → Files).
+3. In SideStore → My Apps → **+**, pick `Streamora.ipa`. Keep LocalDevVPN on when installing or refreshing. Free Apple IDs need a refresh every 7 days, which SideStore does on the device.
+
+Sideloadly or AltStore also work: sign the same .ipa with your Apple ID.
 
 The app loads the live site, so web updates reach it automatically; only player changes need a new .ipa. It's built by GitHub Actions (`.github/workflows/ios.yml`) from `app/`: a Capacitor shell plus the `streamora-player` plugin (`app/plugin`, Swift + MobileVLCKit). Push a tag like `v1.0.0` to publish a release.
