@@ -33,7 +33,7 @@
   <p>A copy of the same data is kept in your browser (localStorage) so the app is instant and works offline. Your Real-Debrid key is encrypted there. Sign-in tokens for Google and Trakt are kept in the browser's IndexedDB.</p>
 
   <h2>Servers in between</h2>
-  <p>Streamora's own server functions only relay requests: <code>/api/rd</code> passes requests to Real-Debrid (which blocks browsers), and <code>/api/google</code> completes the Google sign-in (which needs the app's client secret). They store and log nothing.</p>
+  <p>Streamora's own server functions only relay requests: <code>/api/rd</code> passes requests to Real-Debrid (which blocks browsers), <code>/api/resolve</code> asks Torrentio to start a source on your Real-Debrid (Torrentio receives your key for that, as in Stremio), and <code>/api/google</code> completes the Google sign-in (which needs the app's client secret). They store and log nothing.</p>
   <p>Catalogs and artwork come from Cinemeta and Kitsu, and sources come from Torrentio, which receives your Real-Debrid key to mark cached sources. If you connect Trakt, Trakt sees what you watch. Streamora has no analytics, ads or tracking cookies.</p>
 
   <h2>Deleting your data</h2>

@@ -68,7 +68,6 @@ export async function allTorrents() {
 }
 
 export const VIDEO_RE = /\.(mkv|mp4|m4v|avi|mov|webm|ts|m2ts|wmv|flv|mpg|mpeg)$/i;
-const SAMPLE_RE = /(^|[\W_])(sample|trailer|featurette|extras?)([\W_]|$)/i;
 
 // The download id is what the streaming endpoints want: https://xx.download.real-debrid.com/d/{ID}/name
 export const downloadIdFrom = unrestricted => unrestricted.id || (unrestricted.download || '').split('/d/')[1]?.split('/')[0];
@@ -91,102 +90,54 @@ function remember(k, v) {
   ls.set('resolved', c);
 }
 
-function pickFile(files, { fileIdx, filename, season, episode }) {
-  const vids = files.filter(f => VIDEO_RE.test(f.path) && !SAMPLE_RE.test(f.path));
-  const pool = vids.length ? vids : files;
-  const base = p => p.split('/').pop().toLowerCase();
-  if (filename) { const m = pool.find(f => base(f.path) === filename.toLowerCase()); if (m) return m; }
-  if (season != null && episode != null) {
-    const re = new RegExp(`s0*${season}[ ._-]?e0*${episode}(?!\\d)|\\b${season}x0*${episode}(?!\\d)`, 'i');
-    const m = pool.find(f => re.test(base(f.path)));
-    if (m) return m;
-  } else if (episode != null) {
-    // anime absolute numbering: "- 05", "E05", " 05 "
-    const re = new RegExp(`(?:e|ep|episode|[ _-])0*${episode}(?:v\\d)?(?=[ ._\\-\\[\\(]|$)`, 'i');
-    const m = pool.find(f => re.test(base(f.path).replace(VIDEO_RE, '')));
-    if (m) return m;
-  }
-  if (fileIdx != null) { const m = files[fileIdx]; if (m && VIDEO_RE.test(m.path)) return m; }
-  return pool.slice().sort((a, b) => b.bytes - a.bytes)[0];
-}
-
-const FAILED = ['error', 'magnet_error', 'virus', 'dead'];
-const failIf = info => { if (FAILED.includes(info.status)) throw new RDError(`Source failed on Real-Debrid (${info.status}).`, info.status, 0); };
+// Torrentio's explainer videos (…/videos/<reason>_v3.mp4) -> what to tell the viewer
+const TORRENTIO_REASONS = {
+  failed_infringement: ['Real-Debrid won\'t download this release (its copyright filter). Pick one marked RD+ cached.', 35],
+  downloading: ['Not cached yet: Real-Debrid is downloading it in the background. Try another source or come back later.', 'notcached'],
+  failed_download: ['Real-Debrid couldn\'t download this source.', 'failed'],
+  failed_access: ['Real-Debrid refused access. Check that your premium is active.', 8],
+  failed_rar: ['This release is a RAR archive, which can\'t be streamed.', 'failed'],
+  failed_opening: ['Real-Debrid couldn\'t open this file.', 'failed'],
+  limits_exceeded: ['Real-Debrid says you hit a limit. Try again in a while.', 21],
+  failed_too_big: ['This file is too big for Real-Debrid.', 'failed'],
+};
 
 /**
- * Resolve a torrent (by info hash) into a playable stream on Real-Debrid.
- * Reuses a torrent already in the account when possible.
- * onStep(text) reports progress for the UI ("adding", "waiting", ...).
- * Returns { downloadId, filename, filesize, direct, hls, torrentId }.
+ * Turn a source into a playable Real-Debrid file. Torrentio does the adding and unlocking from its servers, like in
+ * Stremio (Real-Debrid refuses torrent adds from many addresses; see functions/api/resolve.js). `url` is the
+ * stream's own Torrentio link when we have it; otherwise one is built from hash + file index + filename.
+ * Returns { downloadId, filename, direct, hls }. direct=true (the app's VLC player) skips RD's transcode.
  */
-export async function resolveStream({ infoHash, fileIdx, filename, season, episode, direct = false }, onStep = () => {}) {
+export async function resolveStream({ infoHash, fileIdx, filename, url, season, episode, direct = false }, onStep = () => {}) {
   infoHash = infoHash.toLowerCase();
-  const cacheKey = ['v2', infoHash, fileIdx ?? '', filename || '', season ?? '', episode ?? ''].join('|');
+  const cacheKey = ['v3', infoHash, fileIdx ?? '', filename || '', season ?? '', episode ?? ''].join('|');
   const hit = resolveCache()[cacheKey];
   if (hit && Date.now() - hit.at < 6 * 3600e3) {
-    // direct: the app's own player reads the original file, no transcode to wait for
     if (direct) return { ...hit, hls: null };
     try { return { ...hit, hls: hlsFrom(await transcode(hit.downloadId)) }; } catch {}
   }
 
-  onStep('Looking in your Real-Debrid…');
-  // any live copy already in the account (first 3 pages), so we don't add duplicates
-  let existing = null;
-  for (let page = 1; page <= 3 && !existing; page++) {
-    const batch = (await torrents(page, 100)) || [];
-    const same = batch.filter(t => t.hash.toLowerCase() === infoHash && !FAILED.includes(t.status));
-    existing = same.find(t => t.status === 'downloaded') || same[0];
-    if (batch.length < 100) break;
+  const key = await getRdKey();
+  if (!key) throw new RDError('No Real-Debrid key set.', 'nokey', 0);
+  const tio = url && /^https:\/\/torrentio\.strem\.fun\/resolve\/realdebrid\//.test(url) ? url
+    : `https://torrentio.strem.fun/resolve/realdebrid/${key}/${infoHash}/null/${fileIdx ?? 0}/${encodeURIComponent(filename || 'video')}`;
+  onStep('Unlocking it on Real-Debrid…');
+  let j;
+  try { j = await (await fetch(`/api/resolve?u=${encodeURIComponent(tio)}`)).json(); }
+  catch { throw new RDError('Could not reach Torrentio. Are you offline?', 'network', 0); }
+  if (!j.ok) {
+    const [msg, code] = TORRENTIO_REASONS[j.reason] || [`This source didn't start (${String(j.reason || j.error || 'unknown').replace(/_/g, ' ')}).`, 'failed'];
+    throw new RDError(msg, code, 0);
   }
-  let id = existing && existing.id;
-  if (!id) {
-    onStep('Adding to Real-Debrid…');
-    id = (await addMagnet(`magnet:?xt=urn:btih:${infoHash}`)).id;
-  }
-
-  let info = await torrentInfo(id);
-  for (let i = 0; info.status === 'magnet_conversion' && i < 12; i++) { await sleep(Math.min(4000, 800 * 1.3 ** i)); info = await torrentInfo(id); }
-  failIf(info);
-
-  const file = pickFile(info.files || [], { fileIdx, filename, season, episode });
-  if (!file) throw new RDError('No playable video file in this source.', 'nofile', 0);
-
-  if (info.status === 'waiting_files_selection') {
-    onStep('Picking the file…');
-    const vids = info.files.filter(f => VIDEO_RE.test(f.path) && !SAMPLE_RE.test(f.path));
-    // Select every video file so the same torrent serves the whole season later.
-    await selectFiles(id, (vids.length ? vids : [file]).map(f => f.id).join(','));
-    info = await torrentInfo(id);
-  }
-
-  for (let i = 0; info.status !== 'downloaded' && i < 8; i++) {
-    failIf(info);
-    onStep(info.status === 'downloading' ? `Not cached. Real-Debrid is downloading (${info.progress || 0}%)…` : 'Waiting for Real-Debrid…');
-    await sleep(Math.min(5000, 1000 * 1.4 ** i));
-    info = await torrentInfo(id);
-  }
-  failIf(info);
-  if (info.status !== 'downloaded') {
-    throw new RDError('This source is not cached yet. Real-Debrid keeps downloading it in the background, so try another source or come back later.', 'notcached', 0);
-  }
-
-  // links[] line up with the selected files, in file order
-  const selected = info.files.filter(f => f.selected);
-  const idx = selected.findIndex(f => f.id === file.id);
-  const link = (info.links || [])[idx >= 0 ? idx : 0];
-  if (!link) throw new RDError('Real-Debrid has no link for this file yet. Try again in a moment or pick another source.', 'nolink', 0);
-  onStep('Unlocking the stream…');
-  const un = await unrestrict(link);
-  // RD's links don't always line up with files in big packs: never play a different file than the one we picked
-  const want = file.path.split('/').pop().toLowerCase();
-  if (selected.length > 1 && un.filename && un.filename.toLowerCase() !== want) throw new RDError('This source points at a different file.', 'wrongfile', 0);
-  const downloadId = downloadIdFrom(un);
-  const out = { downloadId, filename: un.filename, filesize: un.filesize, direct: un.download, torrentId: id, mime: un.mimeType };
-  if (direct) { remember(cacheKey, out); return { ...out, hls: null }; }
-  onStep('Preparing video for your device…');
-  const tc = await transcode(downloadId);
+  const link = j.url;
+  const name = decodeURIComponent(link.split('/').pop().split('?')[0] || '') || filename || 'video';
+  const out = { downloadId: link.split('/d/')[1]?.split('/')[0], filename: name, direct: link, mime: /\.mp4$/i.test(name) ? 'video/mp4' : null };
   remember(cacheKey, out);
-  return { ...out, hls: hlsFrom(tc) };
+  if (direct) return { ...out, hls: null };
+  onStep('Preparing video for your device…');
+  let hls = null;
+  try { hls = hlsFrom(await transcode(out.downloadId)); } catch {}
+  return { ...out, hls };
 }
 
 // Play something already in the account (My Real-Debrid page): a torrent link or a hoster link.

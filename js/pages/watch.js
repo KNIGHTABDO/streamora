@@ -73,8 +73,12 @@ function Session({ params, query }) {
       // sources already in the account start instantly (no new torrent added), so they go first
       const have = new Set((mine || []).filter(t => t.status === 'downloaded').map(t => t.hash.toLowerCase()));
       list.forEach(x => { if (have.has(x.infoHash.toLowerCase())) { x.inAccount = true; x.cached = true; } });
-      const first = x => x.inAccount && !x.pack;
-      const mineFirst = l => [...l.filter(first), ...l.filter(x => !first(x))];
+      // a copy already in the account starts a little faster, but only goes first when it's as good as the best one
+      const mineFirst = l => {
+        const top = l.find(x => x.cached);
+        const first = x => x.inAccount && !x.pack && (!top || x.rank >= top.rank);
+        return [...l.filter(first), ...l.filter(x => !first(x))];
+      };
       const all = mineFirst(rankStreams(list, { ...prefs, cachedOnly: false }));
       setAll(all);
       if (query.hash) {
@@ -104,7 +108,7 @@ function Session({ params, query }) {
       try {
         // the app's VLC player plays the original file: no transcode or media info to wait for
         const app = isNative();
-        const stream = await resolveStream({ infoHash: c.infoHash, fileIdx: c.fileIdx, filename: c.filename, season: video && video.season, episode: video && video.episode, direct: app },
+        const stream = await resolveStream({ infoHash: c.infoHash, fileIdx: c.fileIdx, filename: c.filename, url: c.raw && c.raw.url, season: video && video.season, episode: video && video.episode, direct: app },
           t => me === gen.current && setStep(t));
         if (me !== gen.current) return;
         let info = null;

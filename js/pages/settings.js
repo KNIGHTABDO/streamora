@@ -288,7 +288,7 @@ function Privacy() {
         <li><b>Your Google Drive:</b> profiles, watchlists, progress, diary, settings, your Real-Debrid key and Trakt sign-ins, in one file in the "Streamora" folder of your Drive. Streamora can only see files it made itself, never your own. Leave that file be: deleting it removes your data from every device.</li>
         <li><b>This device:</b> a copy of the same, so everything is instant and works offline (localStorage). Your key is AES-encrypted here with a key the browser can't export.</li>
         <li><b>The relays</b> (/api/rd, /api/google) forward requests to Real-Debrid and Google and store nothing.</li>
-        <li><b>Catalog and sources</b> come from Cinemeta, Kitsu and Torrentio. Torrentio receives your key to mark cached sources. <b>Trakt</b> (optional, per profile) sees what you watch.</li>
+        <li><b>Catalog and sources</b> come from Cinemeta, Kitsu and Torrentio. Torrentio receives your key to mark cached sources and start them on your Real-Debrid. <b>Trakt</b> (optional, per profile) sees what you watch.</li>
         <li>No analytics, no cookies, no Streamora accounts: your Google account is the only one.</li>
       </ul>
     </div>

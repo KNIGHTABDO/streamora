@@ -4,6 +4,7 @@ import { merge, mergeSecrets, syncable } from '../js/core/sync.js';
 import { foldWatched, scrobbleBody } from '../js/core/trakt.js';
 import { normalizeStream, checkManifest, manifestUrl } from '../js/core/addons.js';
 import { onRequest as googleFn } from '../functions/api/google/[[path]].js';
+import { onRequest as resolveFn, torrentioUrl } from '../functions/api/resolve.js';
 import { allowedUrl } from '../functions/api/addon.js';
 
 // ---- merge
@@ -74,6 +75,25 @@ assert.equal(seen.at(-1)[0], 'https://oauth2.googleapis.com/device/code');
 assert.equal((await gcall('device/token', { device_code: 'd' })).status, 428, 'pending passes through');
 assert.equal((await gcall('refresh', { refresh_token: 'r' }, { env: {} })).status, 501);
 assert.equal((await gcall('nope', {})).status, 404);
+globalThis.fetch = realFetch;
+
+// ---- Torrentio resolve relay (Torrentio mocked)
+const H = 'a'.repeat(40);
+assert.ok(torrentioUrl(`https://torrentio.strem.fun/resolve/realdebrid/KEY/${H}/null/0/x.mkv`));
+for (const bad of [`http://torrentio.strem.fun/resolve/realdebrid/KEY/${H}/null/0/x`, `https://evil.test/resolve/realdebrid/KEY/${H}/null/0/x`, 'https://torrentio.strem.fun/manifest.json', `https://torrentio.strem.fun/resolve/alldebrid/KEY/${H}/null/0/x`])
+  assert.equal(torrentioUrl(bad), null, bad);
+globalThis.fetch = async u => {
+  const p = String(u);
+  if (p.includes('/cached/')) return new Response(null, { status: 302, headers: { Location: 'https://12-4.download.real-debrid.com/d/ABCDEF123/Show.S01E01.mkv' } });
+  return new Response(null, { status: 302, headers: { Location: 'https://torrentio.strem.fun/videos/failed_infringement_v3.mp4' } });
+};
+const rcall = (u, origin) => resolveFn({ request: new Request('https://s.test/api/resolve?u=' + encodeURIComponent(u), { headers: origin ? { Origin: origin, 'Sec-Fetch-Site': 'cross-site' } : {} }) });
+let rr = await (await rcall(`https://torrentio.strem.fun/resolve/realdebrid/K/${H}/cached/0/x.mkv`)).json();
+assert.deepEqual(rr, { ok: true, url: 'https://12-4.download.real-debrid.com/d/ABCDEF123/Show.S01E01.mkv' });
+rr = await (await rcall(`https://torrentio.strem.fun/resolve/realdebrid/K/${H}/null/0/x.mkv`)).json();
+assert.deepEqual(rr, { ok: false, reason: 'failed_infringement' });
+assert.equal((await rcall('https://evil.test/x')).status, 400);
+assert.equal((await rcall(`https://torrentio.strem.fun/resolve/realdebrid/K/${H}/null/0/x.mkv`, 'https://evil.test')).status, 403);
 globalThis.fetch = realFetch;
 
 // ---- trakt

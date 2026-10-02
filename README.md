@@ -15,8 +15,8 @@ See **[DEPLOY.md](DEPLOY.md)**. It takes about 2 minutes with Cloudflare Pages.
 | Piece | What it does |
 |---|---|
 | Cinemeta + Kitsu | catalog, posters, episodes (free, no key needed) |
-| Torrentio | finds sources and marks the ones Real-Debrid already has cached `[RD+]` |
-| Real-Debrid | resolves a source → converts it to HLS → streams straight to your device |
+| Torrentio | finds sources, marks the ones Real-Debrid already has cached `[RD+]`, and starts them: its servers add the torrent to your Real-Debrid and unlock the file, like in Stremio (`functions/api/resolve`). Real-Debrid's 2026 copyright filter refuses torrent adds from many addresses but accepts Torrentio's |
+| Real-Debrid | holds the file; the website plays it through RD's live transcode (HLS), the app plays the original file |
 | `functions/api/rd` | ~20-line relay, because Real-Debrid's API blocks browsers (no CORS). It stores nothing |
 | Google Drive | one gzipped file (`Streamora/streamora-data`, `drive.file` scope) holds profiles, progress, history, diary, settings, the RD key and Trakt sign-ins (`js/core/sync.js`) |
 | `functions/api/google` | finishes Google sign-in (the token calls need the client secret). It stores nothing |
@@ -27,7 +27,7 @@ The video never goes through the relay: it streams from Real-Debrid's servers di
 - Everything is saved in the signed-in Google account's Drive, in a "Streamora" folder (`drive.file` scope: Streamora only sees files it created; the hidden appdata folder isn't allowed for TV/code sign-in). Nothing is kept on Streamora's servers. Public policy page: `privacy.html`.
 - Each device keeps a local copy in `localStorage` so the app is instant and works offline; the RD key is AES-GCM encrypted there with a non-extractable key held in IndexedDB.
 - Settings → Privacy → **Delete everything from Drive** removes the file and revokes Streamora's access.
-- The key *is* sent to Torrentio, which it needs to report `[RD+]` cached status. This is the same thing Stremio does.
+- The key *is* sent to Torrentio, which needs it to report `[RD+]` cached status and to start sources on your Real-Debrid. This is the same thing Stremio does.
 - You're responsible for what you stream.
 
 ## Project map
