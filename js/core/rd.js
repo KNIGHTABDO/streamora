@@ -119,11 +119,13 @@ const failIf = info => { if (FAILED.includes(info.status)) throw new RDError(`So
  * onStep(text) reports progress for the UI ("adding", "waiting", ...).
  * Returns { downloadId, filename, filesize, direct, hls, torrentId }.
  */
-export async function resolveStream({ infoHash, fileIdx, filename, season, episode }, onStep = () => {}) {
+export async function resolveStream({ infoHash, fileIdx, filename, season, episode, direct = false }, onStep = () => {}) {
   infoHash = infoHash.toLowerCase();
   const cacheKey = ['v2', infoHash, fileIdx ?? '', filename || '', season ?? '', episode ?? ''].join('|');
   const hit = resolveCache()[cacheKey];
   if (hit && Date.now() - hit.at < 6 * 3600e3) {
+    // direct: the app's own player reads the original file, no transcode to wait for
+    if (direct) return { ...hit, hls: null };
     try { return { ...hit, hls: hlsFrom(await transcode(hit.downloadId)) }; } catch {}
   }
 
@@ -179,18 +181,19 @@ export async function resolveStream({ infoHash, fileIdx, filename, season, episo
   const want = file.path.split('/').pop().toLowerCase();
   if (selected.length > 1 && un.filename && un.filename.toLowerCase() !== want) throw new RDError('This source points at a different file.', 'wrongfile', 0);
   const downloadId = downloadIdFrom(un);
+  const out = { downloadId, filename: un.filename, filesize: un.filesize, direct: un.download, torrentId: id, mime: un.mimeType };
+  if (direct) { remember(cacheKey, out); return { ...out, hls: null }; }
   onStep('Preparing video for your device…');
   const tc = await transcode(downloadId);
-  const out = { downloadId, filename: un.filename, filesize: un.filesize, direct: un.download, torrentId: id, mime: un.mimeType };
   remember(cacheKey, out);
   return { ...out, hls: hlsFrom(tc) };
 }
 
 // Play something already in the account (My Real-Debrid page): a torrent link or a hoster link.
-export async function resolveLink(link) {
+export async function resolveLink(link, { direct = false } = {}) {
   const un = await unrestrict(link);
   const downloadId = downloadIdFrom(un);
   let hls = null;
-  try { hls = hlsFrom(await transcode(downloadId)); } catch {}
+  if (!direct) try { hls = hlsFrom(await transcode(downloadId)); } catch {}
   return { downloadId, filename: un.filename, filesize: un.filesize, direct: un.download, mime: un.mimeType, hls };
 }

@@ -2,6 +2,7 @@
 // HEVC, Dolby and DTS play without RD's live transcode. On the web isNative() is false and this is never used.
 // Same props as <Player>. The native side sends 'progress' {position, duration, paused} every few seconds,
 // 'next' when the viewer taps Next, and 'closed' {position, duration, ended} when it goes away.
+// Once playing, it gets extras: OpenSubtitles files (same source as the web player) and anime intro/credits times.
 import { html, useEffect, useRef } from '../../vendor/preact-htm.js';
 import { Reel } from '../ui/components.js';
 import { useStore, settings } from '../core/store.js';
@@ -9,6 +10,8 @@ import { saveProgress } from '../core/progress.js';
 import { watchHref } from '../lib/play.js';
 import { nextVideo } from '../core/meta.js';
 import { navigate } from '../router.js';
+import { openSubs } from './subs.js';
+import { skipTimes } from './skip.js';
 
 const plugin = () => (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.StreamoraPlayer) || null;
 export const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && plugin());
@@ -54,8 +57,17 @@ export function NativePlayer({ meta, video, stream, start = 0, source, noProgres
     });
 
     const sub = video ? `S${video.season} · E${video.episode}${video.name || video.title ? ' · ' + (video.name || video.title) : ''}` : '';
-    p.play({ url: stream.direct, title: meta ? meta.name : stream.filename || '', subtitle: sub, start: Math.max(0, Math.floor(start || 0)), hasNext: !!next })
-      .then(() => emit('start'))
+    p.play({ url: stream.direct, title: meta ? meta.name : stream.filename || '', subtitle: sub, start: Math.max(0, Math.floor(start || 0)), hasNext: !!next,
+      audioLang: s.audioLang || '', subsLang: s.subsLang || '' })
+      .then(() => {
+        emit('start');
+        if (!meta || noProgress || !p.extras) return;
+        Promise.all([openSubs(meta.type, video ? video.id : meta.id), skipTimes(meta, video)]).then(([subs, skip]) => {
+          if (done) return;
+          const label = x => (x.release ? `${x.label} · ${x.release}` : x.label).slice(0, 70);
+          p.extras({ subs: subs.map(x => ({ label: label(x), lang: x.lang, url: x.url })), intro: (skip && skip.op) || null, outro: (skip && skip.ed) || null }).catch(() => {});
+        });
+      })
       .catch(e => { done = true; onFatal ? onFatal(e, start) : onBack(); });
 
     return () => { const was = done; done = true; handles.forEach(h => h.remove()); if (!was) p.close().catch(() => {}); };

@@ -22,6 +22,9 @@ else if (tv) await page.setViewport({ width: 1920, height: 1080 });
 else await page.setViewport({ width: 1440, height: 900 });
 if (phone) await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1');
 
+// the fake Google sign-in below must not reach Google (it would be refused and sign the page out)
+await page.setRequestInterception(true);
+page.on('request', r => (/googleapis\.com|\/api\/google\/refresh/.test(r.url()) ? r.abort() : r.continue()));
 const errors = [];
 page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`[${m.type()}] ${m.text()}`); });
 page.on('pageerror', e => errors.push('[pageerror] ' + e.message));

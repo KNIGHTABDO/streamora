@@ -102,11 +102,13 @@ function Session({ params, query }) {
       tried.current.add(c.infoHash);
       setAttempt(++n);   // skipped (already tried) sources don't count toward MAX_AUTO
       try {
-        const stream = await resolveStream({ infoHash: c.infoHash, fileIdx: c.fileIdx, filename: c.filename, season: video && video.season, episode: video && video.episode },
+        // the app's VLC player plays the original file: no transcode or media info to wait for
+        const app = isNative();
+        const stream = await resolveStream({ infoHash: c.infoHash, fileIdx: c.fileIdx, filename: c.filename, season: video && video.season, episode: video && video.episode, direct: app },
           t => me === gen.current && setStep(t));
         if (me !== gen.current) return;
         let info = null;
-        try { info = await mediaInfos(stream.downloadId); } catch {}
+        if (!app) try { info = await mediaInfos(stream.downloadId); } catch {}
         if (me !== gen.current) return;
         setReady({ stream, info, source: c });
         return;
@@ -222,10 +224,10 @@ function SourcePicker({ open, onClose, list, current, onPick }) {
 function RdWatch({ link, name }) {
   const [st, setSt] = useState({ ready: null, err: null });
   useEffect(() => {
-    resolveLink(link).then(async stream => {
+    resolveLink(link, { direct: isNative() }).then(async stream => {
       let info = null;
-      try { info = await mediaInfos(stream.downloadId); } catch {}
-      if (!stream.hls && !/\.(mp4|webm|m4v)$/i.test(stream.filename || '')) throw new Error('Real-Debrid can\'t stream this file type.');
+      if (!isNative()) try { info = await mediaInfos(stream.downloadId); } catch {}
+      if (!isNative() && !stream.hls && !/\.(mp4|webm|m4v)$/i.test(stream.filename || '')) throw new Error('Real-Debrid can\'t stream this file type.');
       setSt({ ready: { stream, info } });
     }).catch(err => setSt({ err }));
   }, []);

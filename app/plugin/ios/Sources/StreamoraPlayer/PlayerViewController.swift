@@ -8,17 +8,30 @@ struct PlayerOptions {
     let subtitle: String
     let start: Double
     let hasNext: Bool
+    let audioLang: String   // ISO 639-2 (eng, fre…) from Streamora's settings
+    let subsLang: String    // ISO 639-2, or "off"
+}
+
+/// A subtitle file from OpenSubtitles (the web player's source), offered next to the file's own tracks.
+struct OnlineSub {
+    let label: String
+    let lang: String
+    let url: URL
 }
 
 // Full-screen VLC player. VLC reads RD's original file over HTTP range requests and decodes it on the device
 // (VideoToolbox for H.264/HEVC), so nothing waits on RD's live transcode.
-final class PlayerViewController: UIViewController {
+final class PlayerViewController: UIViewController, UIGestureRecognizerDelegate {
     private let opts: PlayerOptions
     private let send: (String, [String: Any]) -> Void
     private let player = VLCMediaPlayer()
 
+    // VLC adds its own tap recognizer to the drawable's superview, which used to swallow every tap (no controls).
+    // The drawable sits in a container that ignores touches, so that recognizer never fires.
+    private let videoHost = UIView()
     private let videoView = UIView()
     private let overlay = UIView()
+    private let skipBtn = UIButton(type: .system)
     private let spinner = UIActivityIndicatorView(style: .large)
     private let titleLabel = UILabel()
     private let subLabel = UILabel()
@@ -40,6 +53,11 @@ final class PlayerViewController: UIViewController {
     private var sameTicks = 0
     private var lastReport = Date.distantPast
     private var knownDuration: Double = 0
+    private var onlineSubs: [OnlineSub] = []
+    private var addedSubs: [URL: Bool] = [:]
+    private var autoSubDone = false
+    private var intro: (Double, Double)?
+    private var outro: (Double, Double)?
 
     init(options: PlayerOptions, send: @escaping (String, [String: Any]) -> Void) {
         self.opts = options
@@ -64,11 +82,15 @@ final class PlayerViewController: UIViewController {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
 
-        videoView.frame = view.bounds
+        videoHost.frame = view.bounds
+        videoHost.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        videoHost.isUserInteractionEnabled = false
+        view.addSubview(videoHost)
+        videoView.frame = videoHost.bounds
         videoView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         videoView.backgroundColor = .black
         videoView.isUserInteractionEnabled = false
-        view.addSubview(videoView)
+        videoHost.addSubview(videoView)
 
         spinner.color = .white
         spinner.hidesWhenStopped = true
@@ -81,6 +103,7 @@ final class PlayerViewController: UIViewController {
         spinner.startAnimating()
 
         buildOverlay()
+        buildSkip()
         buildGestures()
 
         let media = VLCMedia(url: opts.url)
@@ -88,6 +111,9 @@ final class PlayerViewController: UIViewController {
         media.addOption(":network-caching=10000")
         media.addOption(":http-reconnect")
         if opts.start > 1 { media.addOption(":start-time=\(Int(opts.start))") }
+        // the file's own tracks in the viewer's languages (fall back to whatever the file prefers)
+        if !opts.audioLang.isEmpty { media.addOption(":audio-language=\(opts.audioLang),any") }
+        media.addOption(opts.subsLang == "off" || opts.subsLang.isEmpty ? ":sub-language=none" : ":sub-language=\(opts.subsLang)")
         player.drawable = videoView
         player.media = media
         player.play()
@@ -125,6 +151,8 @@ final class PlayerViewController: UIViewController {
             lastTime = t; sameTicks = 0
             if t > 0 && !everPlayed { everPlayed = true; scheduleHide() }
         } else { sameTicks += 1 }
+        if everPlayed { autoSub() }
+        updateSkip()
         // spinner only when we mean to play and the picture hasn't moved for a second
         let stuck = player.state != .paused && sameTicks >= 2
         if stuck || !everPlayed { spinner.startAnimating() } else { spinner.stopAnimating() }
@@ -173,6 +201,79 @@ final class PlayerViewController: UIViewController {
             send("closed", data)
         }
         dismiss(animated: true)
+    }
+
+    // MARK: - extras from the web side (online subtitles, intro times); they can arrive after playback starts
+
+    func setExtras(subs: [OnlineSub], intro: (Double, Double)?, outro: (Double, Double)?) {
+        onlineSubs = subs
+        self.intro = intro
+        self.outro = outro
+        autoSubDone = false
+    }
+
+    // The file has no subtitle track in the viewer's language (VLC picked none): use the best online one.
+    private func autoSub() {
+        guard !autoSubDone, sameTicks == 0 else { return }
+        if opts.subsLang == "off" || opts.subsLang.isEmpty { autoSubDone = true; return }
+        guard !onlineSubs.isEmpty else { return }
+        autoSubDone = true
+        if player.currentVideoSubTitleIndex >= 0 { return }
+        if let s = onlineSubs.first(where: { $0.lang == opts.subsLang }) { useOnline(s) }
+    }
+
+    private func useOnline(_ s: OnlineSub) {
+        if addedSubs[s.url] == nil {
+            addedSubs[s.url] = true
+            _ = player.addPlaybackSlave(s.url, type: .subtitle, enforce: true)
+        } else if let i = ((player.videoSubTitlesNames as? [String]) ?? []).lastIndex(where: { $0.contains(s.url.lastPathComponent) }),
+                  let ids = player.videoSubTitlesIndexes as? [NSNumber], i < ids.count {
+            player.currentVideoSubTitleIndex = ids[i].int32Value
+        } else {
+            _ = player.addPlaybackSlave(s.url, type: .subtitle, enforce: true)
+        }
+    }
+
+    private func buildSkip() {
+        skipBtn.setTitle("Skip intro", for: .normal)
+        skipBtn.setImage(UIImage(systemName: "forward.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)), for: .normal)
+        skipBtn.tintColor = .black
+        skipBtn.backgroundColor = UIColor.white.withAlphaComponent(0.92)
+        skipBtn.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
+        skipBtn.layer.cornerRadius = 22
+        skipBtn.contentEdgeInsets = UIEdgeInsets(top: 0, left: 18, bottom: 0, right: 20)
+        skipBtn.addTarget(self, action: #selector(tapSkip), for: .touchUpInside)
+        skipBtn.alpha = 0
+        skipBtn.isHidden = true
+        skipBtn.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(skipBtn)
+        let g = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            skipBtn.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -20),
+            skipBtn.bottomAnchor.constraint(equalTo: g.bottomAnchor, constant: -96),
+            skipBtn.heightAnchor.constraint(equalToConstant: 44)
+        ])
+    }
+
+    private var skipTarget: Double? {
+        let p = position
+        if let i = intro, p >= i.0, p < i.1 - 1 { return i.1 }
+        if let o = outro, p >= o.0, p < o.1 - 1, !opts.hasNext { return o.1 }
+        return nil
+    }
+
+    private func updateSkip() {
+        let on = everPlayed && skipTarget != nil
+        if on == !skipBtn.isHidden { return }
+        if let o = outro, position >= o.0 { skipBtn.setTitle("Skip credits", for: .normal) } else { skipBtn.setTitle("Skip intro", for: .normal) }
+        if on { skipBtn.isHidden = false }
+        UIView.animate(withDuration: 0.2, animations: { self.skipBtn.alpha = on ? 1 : 0 }) { _ in if !on { self.skipBtn.isHidden = true } }
+    }
+
+    @objc private func tapSkip() {
+        guard let t = skipTarget else { return }
+        player.time = VLCTime(int: Int32(t * 1000))
+        sameTicks = 0
     }
 
     // MARK: - UI
@@ -283,8 +384,19 @@ final class PlayerViewController: UIViewController {
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
         for r in [dbl, single, pinch] as [UIGestureRecognizer] {
             r.cancelsTouchesInView = false
+            r.delegate = self
             view.addGestureRecognizer(r)
         }
+    }
+
+    // never let some other recognizer (VLC's, the system's) block ours
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        other.view !== view
+    }
+
+    // taps on buttons go to the buttons
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        !(touch.view is UIControl)
     }
 
     private func showOverlay(_ on: Bool) {
@@ -303,14 +415,13 @@ final class PlayerViewController: UIViewController {
     }
 
     @objc private func toggleOverlay(_ r: UITapGestureRecognizer) {
-        // taps on the controls themselves shouldn't hide them
-        if overlay.alpha > 0, let hit = overlay.hitTest(r.location(in: overlay), with: nil), hit is UIControl { return }
         showOverlay(overlay.alpha < 0.5)
     }
 
     @objc private func doubleTap(_ r: UITapGestureRecognizer) {
-        if overlay.alpha > 0, overlay.hitTest(r.location(in: overlay), with: nil) is UIControl { return }
         if r.location(in: view).x < view.bounds.width / 2 { player.jumpBackward(10) } else { player.jumpForward(10) }
+        sameTicks = 0
+        if overlay.alpha > 0.5 { scheduleHide() }
     }
 
     @objc private func pinched(_ r: UIPinchGestureRecognizer) {
@@ -367,15 +478,27 @@ final class PlayerViewController: UIViewController {
     @objc private func tapSubs() {
         let names = (player.videoSubTitlesNames as? [String]) ?? []
         let ids = (player.videoSubTitlesIndexes as? [NSNumber]) ?? []
-        menu("Subtitles", names, ids, player.currentVideoSubTitleIndex, subsBtn) { [weak self] i in self?.player.currentVideoSubTitleIndex = i }
+        // online ones (OpenSubtitles), the viewer's language first, a handful per language
+        var online: [OnlineSub] = []
+        var perLang: [String: Int] = [:]
+        for s in onlineSubs.sorted(by: { ($0.lang == opts.subsLang ? 0 : 1) < ($1.lang == opts.subsLang ? 0 : 1) }) {
+            let n = perLang[s.lang, default: 0]
+            if n < 3 && online.count < 12 { online.append(s); perLang[s.lang] = n + 1 }
+        }
+        let extra = online.map { s in ("🌐 " + s.label, { [weak self] in self?.useOnline(s) }) }
+        menu("Subtitles", names, ids, player.currentVideoSubTitleIndex, subsBtn, extra: extra) { [weak self] i in self?.player.currentVideoSubTitleIndex = i }
     }
 
-    private func menu(_ title: String, _ names: [String], _ ids: [NSNumber], _ current: Int32, _ from: UIView, _ pick: @escaping (Int32) -> Void) {
+    private func menu(_ title: String, _ names: [String], _ ids: [NSNumber], _ current: Int32, _ from: UIView,
+                      extra: [(String, () -> Void)] = [], _ pick: @escaping (Int32) -> Void) {
         hideWork?.cancel()
-        let sheet = UIAlertController(title: title, message: names.isEmpty ? "No tracks in this file" : nil, preferredStyle: .actionSheet)
+        let sheet = UIAlertController(title: title, message: names.isEmpty && extra.isEmpty ? "No tracks in this file" : nil, preferredStyle: .actionSheet)
         for (name, id) in zip(names, ids) {
             let on = id.int32Value == current
             sheet.addAction(UIAlertAction(title: (on ? "✓ " : "") + name, style: .default) { [weak self] _ in pick(id.int32Value); self?.scheduleHide() })
+        }
+        for (name, run) in extra {
+            sheet.addAction(UIAlertAction(title: name, style: .default) { [weak self] _ in run(); self?.scheduleHide() })
         }
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in self?.scheduleHide() })
         if let pop = sheet.popoverPresentationController {
