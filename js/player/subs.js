@@ -14,13 +14,22 @@ const LANG_NAMES = {
 };
 export const langName = code => LANG_NAMES[code] || (code || '?').toUpperCase();
 
-/** [{ id, lang, label, url }] for a movie id or an episode video id */
-export async function openSubs(type, id) {
+// "Show.S01E02.1080p.WEB-DL.x264-GRP.mkv" and "Show S01E02 1080p WEB DL x264 GRP [TGx]" are the same release
+const relKey = s => String(s || '').toLowerCase().replace(/\.(mkv|mp4|m4v|avi|webm)$/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const sameRelease = (a, b) => { a = relKey(a); b = relKey(b); return a.length > 8 && b.length > 8 && (a.includes(b) || b.includes(a)); };
+
+/** [{ id, lang, label, url, release, match }] for a movie id or an episode video id. With the release filename
+ *  being played, subtitles of that release come first (match: true). */
+export async function openSubs(type, id, filename) {
   try {
-    const r = await fetch(`${OPENSUBS}/subtitles/${type}/${encodeURIComponent(id)}.json`);
+    const extra = filename ? `/filename=${encodeURIComponent(filename)}` : '';
+    const r = await fetch(`${OPENSUBS}/subtitles/${type}/${encodeURIComponent(id)}${extra}.json`);
     if (!r.ok) return [];
     const j = await r.json();
-    return (j.subtitles || []).map(s => ({ id: 'os:' + s.id, lang: s.lang, label: langName(s.lang), release: s.movieReleaseName || s.subtitleFileName || '', url: s.url }));
+    return (j.subtitles || []).map(s => {
+      const release = s.movieReleaseName || s.subtitleFileName || '';
+      return { id: 'os:' + s.id, lang: s.lang, label: langName(s.lang), release, match: !!filename && sameRelease(release, filename), url: s.url };
+    }).sort((a, b) => b.match - a.match);
   } catch { return []; }
 }
 

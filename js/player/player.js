@@ -1,7 +1,8 @@
 // The Streamora player: a <video> wrapped in hand-drawn controls.
 // Props:
 //   meta, video (episode or null), stream {hls, direct, downloadId, filename}, info (mediaInfos or null),
-//   start (seconds), source {infoHash, fileIdx, binge, release, quality} | null, noProgress,
+//   start (seconds), source {infoHash, fileIdx, binge, release, quality, filename} | null, noProgress,
+//   live (a ref: gets the current position in seconds, so a source switch can resume there),
 //   onFatal(err, pos) (stream died or stalled; pos = real seconds to resume at: parent tries another source), onPickSource(), onBack()
 //   engine: 'web' (a <video>) | 'vlc' (iPhone/iPad app: VLC draws behind the transparent page, see vlc.js; same controls)
 // Emits window 'streamora:playback' events (see emit()).
@@ -25,6 +26,7 @@ registerIcons({
   episodes: { d: 'M3.6 5.2h11.6M3.5 10.1h11.7M3.6 15h7.9M17.2 12.6l3.6 2.4-3.6 2.5zM3.5 19.8h7.9' },
   moon2: { d: 'M18.6 14.4c-4.6 1.2-9-2.2-9-7 0-1.2.3-2.3.8-3.3-3.6 1-6.1 4.3-6 8.1.1 4.6 3.9 8.3 8.5 8.2 3.2 0 5.9-2 7.1-4.8zM16.4 3.9h3.2l-3.2 3.6h3.3', fill: 'M18.6 14.4c-4.6 1.2-9-2.2-9-7 0-1.2.3-2.3.8-3.3-3.6 1-6.1 4.3-6 8.1.1 4.6 3.9 8.3 8.5 8.2 3.2 0 5.9-2 7.1-4.8z' },
   source: { d: 'M4.1 5.1h15.8M4.1 12h15.8M4.1 18.9h15.8M8.2 3.2v3.9M15.6 10.1v3.9M10.4 17v3.8' },
+  fit: { d: 'M3.9 6.1h16.2v11.8H3.9zM7.8 12h8.4M10.2 9.8 7.8 12l2.4 2.2M13.8 9.8l2.4 2.2-2.4 2.2' },
 });
 
 // consecutive auto-played episodes without any input; after STILL_AFTER we ask "Still watching?"
@@ -34,6 +36,7 @@ const resetAutoRuns = () => { try { sessionStorage.removeItem(AUTO_KEY); } catch
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 const SLEEP = [{ id: 'off', label: 'Off' }, { id: 'end', label: 'End of this episode' }, { id: '15', label: '15 minutes' }, { id: '30', label: '30 minutes' }, { id: '60', label: '1 hour' }];
+const levelFrame = roughRect(30, 150, 5, { inset: 3, sw: 2.2 });   // the volume bar's hand-drawn frame
 
 const vidCodec = { h264: 'avc1.640028', avc: 'avc1.640028', hevc: 'hvc1.1.6.L120.90', h265: 'hvc1.1.6.L120.90' };
 const audCodec = { aac: 'mp4a.40.2', mp3: 'mp4a.6B', ac3: 'ac-3', eac3: 'ec-3' };
@@ -68,8 +71,9 @@ function trackLabels(tracks) {
   });
 }
 
-export function Player({ meta, video, stream, info, start = 0, source, noProgress, onFatal, onPickSource, onBack, engine = 'web' }) {
+export function Player({ meta, video, stream, info, start = 0, source, noProgress, live, onFatal, onPickSource, onBack, engine = 'web' }) {
   const s = useStore(settings);
+  const fitCover = s.videoFit === 'cover';   // fill the frame (cropped) instead of letterboxing; remembered in settings
   // VLC mode: a stand-in for the <video> element (same properties and events), so everything below works on both
   const vlc = useMemo(() => (engine === 'vlc' ? new VlcVideo() : null), []);
   const vRef = useRef(vlc), boxRef = useRef();
@@ -162,8 +166,10 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
 
   useEffect(() => {
     const v = vRef.current;
+    if (live) live.current = start;
     const up = () => {
       const dur = realDur(v);
+      if (live) live.current = realNow(v);
       if (dur && v.currentTime > 0) pctRef.current = Math.min(100, realNow(v) / dur * 100);
       setSt(x => ({ ...x, t: realNow(v), dur: dur || x.dur, buf: offRef.current + (v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0) }));
     };
@@ -235,6 +241,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   }, [st.playing]);
   const next = useMemo(() => (video && meta ? nextVideo(meta, video.id) : null), [meta, video]);
   const title = meta ? meta.name : stream.filename;
+  const release = (source && source.filename) || stream.filename || '';   // subtitles are matched against this
   const sub = video ? `S${video.season} · E${video.episode}${video.name || video.title ? ' · ' + (video.name || video.title) : ''}` : '';
   // keep the same release for the next episode (watch falls back to ranked sources if it lacks that episode)
   const goNext = useCallback(auto => {
@@ -293,12 +300,12 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     if (inFile) { autoSubbed.current = true; vlc.setSub(inFile.id); return; }
     if (!extDone) return;
     autoSubbed.current = true;
-    const hit = ext.find(x => x.lang === want);
+    const hit = ext.find(x => x.lang === want && x.match) || ext.find(x => x.lang === want);
     if (hit) chooseExt(hit);
   }, [vt, extDone]);
   useEffect(() => {
     if (!meta || String(meta.id).startsWith('rd:')) return;
-    openSubs(meta.type, video ? video.id : meta.id).then(list => {
+    openSubs(meta.type, video ? video.id : meta.id, release).then(list => {
       setExt(list);
       // auto-pick: this show's remembered language, else the preferred one when the audio isn't in it
       // (unknown / 'und' audio counts as "not in it")
@@ -309,7 +316,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       const aud = info && info.details && info.details.audio && audio && info.details.audio[audio];
       const same = aud && aud.lang_iso && !/^(und|unk)$/i.test(aud.lang_iso) && aud.lang_iso === want;
       if (mem.subLang || !same) {
-        const hit = list.find(x => x.lang === want);
+        const hit = list.find(x => x.lang === want && x.match) || list.find(x => x.lang === want);
         if (hit) chooseExt(hit);
       }
     });
@@ -422,6 +429,10 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const seekRef = useRef(seekTo);
   seekRef.current = seekTo;
   const setVol = val => { const x = v(); if (!x) return; x.volume = Math.max(0, Math.min(1, val)); x.muted = x.volume === 0; };
+  // audio delay (seconds) on elements that have one (the VLC engine); a plain <video> has none
+  const [ad, setAd] = useState(0);
+  const setAudioDelay = sec => { const x = v(); if (!x || !('audioDelay' in x)) return; const val = Math.round(sec * 1000) / 1000; x.audioDelay = val; setAd(val); };
+  const toggleFit = () => settings.update(x => ({ ...x, videoFit: x.videoFit === 'cover' ? 'contain' : 'cover' }));
   const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
   const fullscreen = () => {
     const box = boxRef.current, x = v();
@@ -502,6 +513,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     else if (k === 'f') fullscreen();
     else if (k === 'm') { v().muted = !v().muted; poke(); }
     else if (k === 'c') { setMenu(m => (m === 'subs' ? null : 'subs')); poke(); }
+    else if (k === 'z' && !vlc) { toggleFit(); poke(); }
     else if (k === 'n' && next) goNext();
     else if (k === 'MediaFastForward') { e.preventDefault(); seekBy(30); }
     else if (k === 'MediaRewind') { e.preventDefault(); seekBy(-30); }
@@ -553,6 +565,41 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       toggle(); poke();
     }
   };
+  // touch gestures: a vertical drag on the right half = volume; holding still = 2× while the finger is down
+  const [gest, setGest] = useState(null);      // { kind: 'vol', level } | { kind: 'hold' }
+  const touchG = useRef(null);
+  const onDown = e => {
+    if (e.pointerType !== 'touch' || !v()) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const g = { x: e.clientX, y: e.clientY, h: r.height, right: (e.clientX - r.left) / r.width > .5, vol: v().volume, mode: null };
+    g.timer = setTimeout(() => { if (!v()) return; g.mode = 'hold'; g.rate = v().playbackRate; v().playbackRate = 2; setGest({ kind: 'hold' }); }, 450);
+    touchG.current = g;
+  };
+  const onMove = e => {
+    const g = touchG.current;
+    if (!g || g.mode === 'hold') return;
+    if (!g.mode) {
+      if (Math.hypot(e.clientX - g.x, e.clientY - g.y) < 12) return;
+      clearTimeout(g.timer);
+      if (!g.right || Math.abs(e.clientY - g.y) < Math.abs(e.clientX - g.x)) { g.mode = 'off'; return; }
+      g.mode = 'vol';
+    }
+    if (g.mode !== 'vol') return;
+    const level = Math.max(0, Math.min(1, g.vol + (g.y - e.clientY) / (g.h * .6)));
+    setVol(level); setGest({ kind: 'vol', level });
+  };
+  // returns true when the touch was a gesture (so it is not also a tap)
+  const endGesture = () => {
+    const g = touchG.current;
+    touchG.current = null;
+    if (!g) return false;
+    clearTimeout(g.timer);
+    if (g.mode === 'hold' && v()) v().playbackRate = g.rate;
+    if (g.mode !== 'hold' && g.mode !== 'vol') return false;
+    setGest(null);
+    return true;
+  };
+  const onUp = e => { if (!endGesture()) onSurface(e); };
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 600); return () => clearTimeout(t); }, [flash]);
 
   // ------------------------------------------------ render
@@ -585,7 +632,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const inIntro = op ? st.t >= op[0] && st.t < op[1] - 1 : !!video && st.t > 5 && st.t < 180 && st.dur > 600;
   const skipIntro = () => (op ? seekTo(op[1]) : seekBy(s.skipIntroSec || 85));
 
-  return html`<div class=${cx('player', ui ? 'show-ui' : 'hide-ui', st.waiting && 'is-waiting', vlc && 'pl-vlc')} ref=${boxRef} data-own-arrows data-focus-scope
+  return html`<div class=${cx('player', ui ? 'show-ui' : 'hide-ui', st.waiting && 'is-waiting', vlc && 'pl-vlc', fitCover && 'pl-cover')} ref=${boxRef} data-own-arrows data-focus-scope
       onPointerMove=${e => e.pointerType === 'mouse' && poke()} onPointerDown=${resetAutoRuns} style=${subStyle}>
     ${vlc ? (!started && html`<div class="pl-poster" style=${meta && meta.background ? `background-image:url("${meta.background}")` : ''}></div>`)
       : html`<video ref=${vRef} class="pl-video" playsinline webkit-playsinline autopictureinpicture preload="auto" crossorigin="anonymous" x-webkit-airplay="allow"
@@ -593,11 +640,14 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       ${trackUrl && html`<track kind="subtitles" src=${trackUrl} srclang=${s.subsLang || 'en'} label=${cur && cur.label} default />`}
     </video>`}
 
-    <div class="pl-surface" onPointerUp=${onSurface}></div>
+    <div class="pl-surface" onPointerDown=${onDown} onPointerMove=${onMove} onPointerUp=${onUp} onPointerCancel=${endGesture}></div>
 
     ${line.length > 0 && html`<div class="pl-subs" aria-live="off">${line.map(l => html`<span dangerouslySetInnerHTML=${{ __html: l.replace(/\n/g, '<br>') }}></span>`)}</div>`}
 
     ${flash && html`<div class=${'pl-flash ' + flash.side} key=${flash.k}><${Icon} name=${flash.side === 'left' ? 'rewind' : 'forward'} size=${38} /><span>10s</span></div>`}
+    ${gest && (gest.kind === 'hold'
+      ? html`<div class="pl-gest hold"><span class="display">2×</span></div>`
+      : html`<div class="pl-gest vol"><svg viewBox="0 0 30 150" class="pl-level" aria-hidden="true"><path d=${levelFrame} /><rect x="9" y=${144 - gest.level * 132} width="12" height=${gest.level * 132} rx="3" /></svg><span class="type">${Math.round(gest.level * 100)}</span></div>`)}
     ${st.waiting && !blocked && html`<div class="pl-buffer" aria-label="Buffering"><${Reel} mood="think" size=${96} /></div>`}
     ${blocked && html`<button type="button" class="pl-bigplay" onClick=${toggle} aria-label="Play"><${Icon} name="play" size=${54} /><span class="display">tap to play</span></button>`}
 
@@ -640,6 +690,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
           ${audios.length > 1 && html`<button type="button" class=${cx('pl-btn hide-phone', menu === 'audio' && 'on')} onClick=${() => setMenu(m => (m === 'audio' ? null : 'audio'))} aria-label="Audio"><${Icon} name="audio" /></button>`}
           <button type="button" class=${cx('pl-btn', menu === 'settings' && 'on', sleep.id !== 'off' && 'lit')} onClick=${() => setMenu(m => (m === 'settings' ? null : 'settings'))} aria-label="Settings"><${Icon} name="gear" /></button>
           ${canPip && html`<button type="button" class="pl-btn hide-phone" onClick=${pip} aria-label="Picture in picture"><${Icon} name="pip" /></button>`}
+          ${!vlc && html`<button type="button" class=${cx('pl-btn hide-phone', fitCover && 'on')} onClick=${toggleFit} aria-pressed=${fitCover} aria-label="Fill the screen" title="Fill the screen (z)"><${Icon} name="fit" /></button>`}
           ${!vlc && html`<button type="button" class="pl-btn" onClick=${fullscreen} aria-label="Fullscreen"><${Icon} name=${isFs ? 'exitFullscreen' : 'fullscreen'} /></button>`}
         </div>
       </div>
@@ -652,6 +703,12 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
         <button type="button" class="pl-chip" onClick=${() => setDelay(d => +(d - .25).toFixed(2))}>−¼s</button>
         <span class="type">${delay > 0 ? '+' : ''}${delay.toFixed(2)}s</span>
         <button type="button" class="pl-chip" onClick=${() => setDelay(d => +(d + .25).toFixed(2))}>+¼s</button>
+      </div>`}
+      ${!!v() && 'audioDelay' in v() && html`<div class="pl-delay"><span>Audio delay</span>
+        <button type="button" class="pl-chip" onClick=${() => setAudioDelay(ad - .05)}>−50ms</button>
+        <span class="type">${ad > 0 ? '+' : ''}${Math.round(ad * 1000)}ms</span>
+        <button type="button" class="pl-chip" onClick=${() => setAudioDelay(ad + .05)}>+50ms</button>
+        <button type="button" class="pl-chip" onClick=${() => setAudioDelay(0)}>Reset</button>
       </div>`}
       ${embedded.length > 0 && html`<div class="pl-menu-kicker kicker type">${vlc ? 'in the file' : 'in the file (burned in)'}</div>`}
       ${embedded.map(x => html`<${Item} key=${x.key} on=${x.on} onClick=${x.pick}>${x.label}${x.extra && html` <span class="faint type">${x.extra}</span>`}<//>`)}
@@ -684,6 +741,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
         ${!vlc && html`<button type="button" class="pl-chip" onClick=${still}><${Icon} name="camera" size=${16} /> Save a still</button>`}
         ${canPip && html`<button type="button" class="pl-chip" onClick=${pip}><${Icon} name="pip" size=${16} /> Picture in picture</button>`}
         ${onPickSource && html`<button type="button" class="pl-chip" onClick=${() => { setMenu(null); onPickSource(); }}><${Icon} name="source" size=${16} /> Change source</button>`}
+        ${!vlc && html`<button type="button" class=${cx('pl-chip', fitCover && 'on')} onClick=${toggleFit} aria-pressed=${fitCover}><${Icon} name="fit" size=${16} /> Fill the screen</button>`}
       </div>
       ${source && source.release && html`<p class="faint type pl-release">${source.release}</p>`}
     <//>`}
