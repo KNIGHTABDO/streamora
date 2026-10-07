@@ -48,35 +48,91 @@ function mergeProgress(a = {}, b = {}, base) {
   }
   return out;
 }
-function mergeList(a = [], b = [], keyOf, base, preferB) {
+function mergeList(a = [], b = [], keyOf, base, preferB, pickB) {
   const m = new Map();
   const [first, second] = preferB ? [b, a] : [a, b];
   for (const x of first) m.set(keyOf(x), x);
   const inA = new Set(a.map(keyOf)), inB = new Set(b.map(keyOf));
-  for (const x of second) if (!m.has(keyOf(x))) m.set(keyOf(x), x);
+  for (const x of second) {
+    const k = keyOf(x);
+    if (!m.has(k)) m.set(k, x);
+    else if (pickB) m.set(k, (pickB(String(k)) ? b : a).find(y => keyOf(y) === k)); // on both sides: the newer edit of this item wins
+  }
   return [...m.entries()].filter(([k]) => (inA.has(k) && inB.has(k)) || !(base && base.has(k))).map(([, x]) => x);
 }
 
-/**
- * local/remote = { at: last change time, data: {lsKey: value} }; base = {lsKey: [ids]} from the last sync (or null).
- * Lists and progress merge item by item (newest wins, deletions since `base` stick); anything else: newer bundle wins.
- */
-export function merge(local, remote, base = null) {
-  const out = {};
+// Per-item edit times ("stamps") so a later change to one item/setting on another device can't undo this one.
+// A bundle carries stamps: {lsKey: {itemId | settingName: at}}; bundles saved before this have none and fall back to the bundle's `at`.
+const hash = v => { const s = JSON.stringify(v) ?? ''; let h = 5381; for (let i = 0; i < s.length; i++) h = (h * 33 ^ s.charCodeAt(i)) | 0; return h; };
+const stamped = k => syncable(k) && !['progress', 'history', 'diary', 'hidden'].includes(bucketOf(k));
+const plain = v => !!v && typeof v === 'object' && !Array.isArray(v);
+const parts = (k, v) => {
+  if (Array.isArray(v) && ITEM_KEY[bucketOf(k)]) return v.map(x => [String(ITEM_KEY[bucketOf(k)](x)), x]);
+  return plain(v) ? Object.entries(v) : [['', v]];
+};
+const stampOf = (bundle, k, id) => (bundle.stamps ? (bundle.stamps[k] || {})[id] || 0 : bundle.at || 0);
+
+/** Like merge(), also returning the merged per-item stamps: { data, stamps }. */
+export function mergeFull(local, remote, base = null) {
+  const out = {}, stamps = {};
   const remoteNewer = (remote.at || 0) > (local.at || 0);
   for (const k of new Set([...Object.keys(local.data), ...Object.keys(remote.data || {})])) {
     if (!syncable(k)) continue;
     const a = local.data[k], b = (remote.data || {})[k];
-    if (a === undefined || b === undefined) { out[k] = structuredClone(a === undefined ? b : a); continue; }
-    const bk = bucketOf(k), known = base && base[k] ? new Set(base[k]) : null;
-    if (bk === 'progress') out[k] = mergeProgress(a, b, known);
-    else if (ITEM_KEY[bk] && Array.isArray(a) && Array.isArray(b)) {
-      let list = mergeList(a, b, ITEM_KEY[bk], known, remoteNewer);
-      if (bk === 'history' || bk === 'diary') list = list.sort((x, y) => (y.at || 0) - (x.at || 0)).slice(0, 2000);
-      out[k] = structuredClone(list);
-    } else out[k] = structuredClone(remoteNewer ? b : a);
+    if (a === undefined || b === undefined) out[k] = structuredClone(a === undefined ? b : a);
+    else {
+      const bk = bucketOf(k), known = base && base[k] ? new Set(base[k]) : null;
+      const pickB = id => { const la = stampOf(local, k, id), ra = stampOf(remote, k, id); return ra !== la ? ra > la : remoteNewer; };
+      if (bk === 'progress') out[k] = mergeProgress(a, b, known);
+      else if (ITEM_KEY[bk] && Array.isArray(a) && Array.isArray(b)) {
+        let list = mergeList(a, b, ITEM_KEY[bk], known, remoteNewer, stamped(k) ? pickB : null);
+        if (bk === 'history' || bk === 'diary') list = list.sort((x, y) => (y.at || 0) - (x.at || 0)).slice(0, 2000);
+        out[k] = structuredClone(list);
+      } else if (stamped(k) && plain(a) && plain(b)) {
+        const o = {};
+        for (const f of new Set([...Object.keys(a), ...Object.keys(b)])) o[f] = structuredClone(!(f in b) ? a[f] : !(f in a) ? b[f] : pickB(f) ? b[f] : a[f]);
+        out[k] = o;
+      } else out[k] = structuredClone(pickB('') ? b : a);
+    }
+    if (stamped(k)) {
+      const st = {};
+      for (const [id] of parts(k, out[k])) { const t = Math.max(stampOf(local, k, id), stampOf(remote, k, id)); if (t) st[id] = t; }
+      if (Object.keys(st).length) stamps[k] = st;
+    }
+  }
+  return { data: out, stamps };
+}
+
+/**
+ * local/remote = { at: last change time, data: {lsKey: value}, stamps? }; base = {lsKey: [ids]} from the last sync (or null).
+ * Lists and progress merge item by item (newest wins, deletions since `base` stick); profile/addon items, settings fields and
+ * other values are resolved per item/field by their own edit time (stamps), falling back to the newer bundle.
+ */
+export function merge(local, remote, base = null) { return mergeFull(local, remote, base).data; }
+
+// This device's own stamps, kept in ls 'sync-stamps' as {key: {id: {h: hash, at}}}: an item whose hash changed was edited now.
+function stampKey(k, v, stored, at) {
+  if (!stamped(k) || v === undefined || v === null) return;
+  const cur = stored[k], next = {};
+  for (const [id, x] of parts(k, v)) { const h = hash(x), o = cur && cur[id]; next[id] = !o ? { h, at: cur ? at : 0 } : o.h === h ? o : { h, at }; }
+  stored[k] = next;
+}
+function stampsOf(stored) {
+  const out = {};
+  for (const [k, items] of Object.entries(stored)) {
+    const st = {};
+    for (const [id, o] of Object.entries(items)) if (o.at) st[id] = o.at;
+    if (Object.keys(st).length) out[k] = st;
   }
   return out;
+}
+function adoptStamps(data, stamps) { // after a merge was written locally: the winners keep their times
+  const stored = ls.get('sync-stamps', {});
+  for (const [k, v] of Object.entries(data)) {
+    if (!stamped(k)) continue;
+    stored[k] = Object.fromEntries(parts(k, v).map(([id, x]) => [id, { h: hash(x), at: (stamps[k] || {})[id] || 0 }]));
+  }
+  ls.set('sync-stamps', stored);
 }
 
 /**
@@ -93,7 +149,13 @@ const baseOf = data => Object.fromEntries(Object.entries(data).map(([k, v]) => [
 const canon = d => JSON.stringify(Object.keys(d || {}).sort().map(k => [k, d[k]]));
 
 // ------------------------------------------------------------ local side
-const localBundle = () => ({ at: ls.get('sync-changed', 0), data: Object.fromEntries(Object.entries(exportAll().data).filter(([k]) => syncable(k))) });
+const localBundle = () => {
+  const at = ls.get('sync-changed', 0), data = Object.fromEntries(Object.entries(exportAll().data).filter(([k]) => syncable(k)));
+  const stored = ls.get('sync-stamps', {});
+  for (const [k, v] of Object.entries(data)) stampKey(k, v, stored, at || Date.now());
+  ls.set('sync-stamps', stored);
+  return { at, data, stamps: stampsOf(stored) };
+};
 async function localSecrets() {
   const v = await getRdKey();
   const trakt = {};
@@ -204,22 +266,23 @@ async function run() {
     const meta = await fileMeta();
     const local = localBundle(), sLocal = await localSecrets();
     const dirty = (local.at || 0) > ls.get('gd-clean', -1);
-    let push = !meta || dirty, data = local.data, secrets = sLocal, at = local.at || 0;
+    let push = !meta || dirty, data = local.data, secrets = sLocal, at = local.at || 0, stamps = local.stamps;
     if (meta && meta.version !== ls.get('gd-ver', null)) {
       // someone else saved since we last looked: bring it in, merge, and push the merge back if it differs
       const remote = await download(meta.id);
       // edited here while it downloaded? merge the newest local state instead
       if (ls.get('sync-changed', 0) !== local.at) Object.assign(local, localBundle());
-      data = merge(local, remote, ls.get('sync-base', null));
+      ({ data, stamps } = mergeFull(local, remote, ls.get('sync-base', null)));
       secrets = mergeSecrets(sLocal, remote.secrets);
       if (canon(data) !== canon(local.data)) apply(data);
+      adoptStamps(data, stamps);
       await applySecrets(secrets, sLocal);
       at = Math.max(at, remote.at || 0);
       push = canon(data) !== canon(remote.data) || canon(secrets) !== canon(mergeSecrets(remote.secrets));
     }
     let ver = meta && meta.version;
     if (push) {
-      const res = await upload(meta && meta.id, { app: 'streamora', v: 2, at, data, secrets });
+      const res = await upload(meta && meta.id, { app: 'streamora', v: 2, at, data, secrets, stamps });
       ls.set('gd-file', res.id);
       ver = res.version;
     }
@@ -251,9 +314,11 @@ function schedule(ms) {
   clearTimeout(timer);
   timer = setTimeout(() => { timer = null; syncNow(); }, Math.max(0, Math.min(ms, firstChange + MAX_WAIT - now)));
 }
-function changed() {
+function changed(key) {
   if (applying) return;
-  ls.set('sync-changed', Date.now());
+  const now = Date.now();
+  if (key && stamped(key)) { const stored = ls.get('sync-stamps', {}); stampKey(key, ls.get(key, null), stored, now); ls.set('sync-stamps', stored); }
+  ls.set('sync-changed', now);
   schedule(DEBOUNCE);
 }
 let lastPull = 0;
@@ -268,7 +333,7 @@ export async function initSync() {
   if (started) return;
   started = true;
   // every store write announces its key (store.js); the key and Trakt tokens count too
-  addEventListener('streamora:changed', e => (syncable(e.detail) || e.detail === 'rdkey-state' || e.detail === 'trakt-rev') && changed());
+  addEventListener('streamora:changed', e => (syncable(e.detail) || e.detail === 'rdkey-state' || e.detail === 'trakt-rev') && changed(e.detail));
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') pull();
     else if (timer) { clearTimeout(timer); timer = null; syncNow(); } // leaving: save now while the page still runs

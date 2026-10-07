@@ -1,5 +1,6 @@
 // Real-Debrid client. All calls go through our same-origin relay (/api/rd/*).
 import { getRdKey, ls } from './store.js';
+import { fetchT } from './net.js';
 
 export class RDError extends Error {
   constructor(msg, code, status) { super(msg); this.code = code; this.status = status; }
@@ -27,8 +28,8 @@ export async function rd(path, { method = 'GET', body, key, retry = true } = {})
     init.headers['Content-Type'] = 'application/x-www-form-urlencoded';
   }
   let r;
-  try { r = await fetch(`/api/rd/${path}`, init); }
-  catch { throw new RDError('Could not reach the relay. Are you offline?', 'network', 0); }
+  try { r = await fetchT(`/api/rd/${path}`, init, 15000, 'Real-Debrid'); }
+  catch (e) { throw e.code === 'timeout' ? new RDError(e.message, 'timeout', 0) : new RDError('Could not reach the relay. Are you offline?', 'network', 0); }
   if (r.status === 429 && retry) {
     await sleep(Math.min(10, +r.headers.get('Retry-After') || 2) * 1000);
     return rd(path, { method, body, key, retry: false });
