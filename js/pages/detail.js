@@ -5,9 +5,11 @@ import { hash, tiltOf } from '../ui/sketch.js';
 import { useStore, progress, watchlist, follows, diary, settings } from '../core/store.js';
 import { meta as getMeta, castPhotos, catalog, seasonsOf, isReleased } from '../core/meta.js';
 import { streams, rankStreams, fmtSize, isPhone, noMkv } from '../core/sources.js';
-import { epState, markWatched, resumeAt } from '../core/progress.js';
+import { epState, markWatched, markUnwatched, markSeasonWatched, markSeasonUnwatched, resumeAt } from '../core/progress.js';
+import { addHistory, removeHistory } from '../core/trakt.js';
 import { navigate } from '../router.js';
 import { watchHref, nextUp, playAction, inWatchlist, toggleWatchlist } from '../lib/play.js';
+import { getMoreLikeThis } from './detail/related.js';
 
 loadCSS('css/pages/detail.css');
 
@@ -93,15 +95,58 @@ function Episodes({ meta, onSources }) {
   useEffect(() => setSeason(start), [meta.id]);
   const eps = (seasons.find(s => s[0] === season) || [, []])[1];
   if (!seasons.length) return null;
-  const markSeason = () => {
-    const rel = eps.filter(isReleased);
-    rel.forEach(v => markWatched(meta, v));
-    toast(`Marked ${plural(rel.length, 'episode')} watched`, { icon: 'check' });
+  const rel = eps.filter(isReleased);
+  const allWatched = rel.length > 0 && rel.every(v => epState(meta.id, v.id)?.done);
+
+  const toggleSeason = () => {
+    if (allWatched) {
+      markSeasonUnwatched(meta, rel);
+      removeHistory(meta, rel).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+      toast(html`<span>Marked season unwatched <button type="button" class="det-undo-btn" onClick=${() => {
+        markSeasonWatched(meta, rel);
+        addHistory(meta, rel).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+        toast('Marked season watched', { icon: 'check' });
+      }}>Undo</button></span>`, { icon: 'undo' });
+    } else {
+      markSeasonWatched(meta, rel);
+      addHistory(meta, rel).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+      toast(html`<span>Marked ${plural(rel.length, 'episode')} watched <button type="button" class="det-undo-btn" onClick=${() => {
+        markSeasonUnwatched(meta, rel);
+        removeHistory(meta, rel).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+        toast('Marked season unwatched', { icon: 'undo' });
+      }}>Undo</button></span>`, { icon: 'check' });
+    }
   };
+
+  const toggleEp = (v, e) => {
+    e && (e.preventDefault(), e.stopPropagation());
+    const st = epState(meta.id, v.id);
+    const isDone = !!(st && st.done);
+    if (isDone) {
+      markUnwatched(meta, v);
+      removeHistory(meta, v).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+      toast(html`<span>Marked E${v.episode} unwatched <button type="button" class="det-undo-btn" onClick=${() => {
+        markWatched(meta, v);
+        addHistory(meta, v).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+        toast(`Marked E${v.episode} watched`, { icon: 'check' });
+      }}>Undo</button></span>`, { icon: 'undo' });
+    } else {
+      markWatched(meta, v);
+      addHistory(meta, v).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+      toast(html`<span>Marked E${v.episode} watched <button type="button" class="det-undo-btn" onClick=${() => {
+        markUnwatched(meta, v);
+        removeHistory(meta, v).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+        toast(`Marked E${v.episode} unwatched`, { icon: 'undo' });
+      }}>Undo</button></span>`, { icon: 'check' });
+    }
+  };
+
   return html`<section class="det-eps">
     <div class="spread">
       <h2>Episodes</h2>
-      <${Btn} size="sm" variant="ghost" icon="check" onClick=${markSeason}>Mark season watched<//>
+      <${Btn} size="sm" variant="ghost" icon=${allWatched ? 'undo' : 'check'} onClick=${toggleSeason}>
+        ${allWatched ? 'Mark season unwatched' : 'Mark season watched'}
+      <//>
     </div>
     <${Tabs} class="det-seasons" value=${season} onChange=${setSeason}
       tabs=${seasons.map(([s, list]) => ({ id: s, label: s === 0 ? 'Specials' : `Season ${s}`, count: list.length }))} />
@@ -116,7 +161,12 @@ function Episodes({ meta, onSources }) {
             <span class="det-ep-thumb">
               <${Img} src=${v.thumbnail} alt="" fallback=${html`<span class="det-ep-num display">${v.episode}</span>`} />
               ${out && html`<span class="det-ep-play"><${Icon} name="play" size=${22} /></span>`}
-              ${st && st.done && html`<span class="det-ep-check" title="Watched"><${Icon} name="check" size=${18} /></span>`}
+              ${out && html`<button type="button" class=${cx('det-ep-check', st && st.done && 'done')}
+                aria-label=${st && st.done ? `Mark E${v.episode} unwatched` : `Mark E${v.episode} watched`}
+                title=${st && st.done ? 'Mark unwatched' : 'Mark watched'}
+                onClick=${e => toggleEp(v, e)}>
+                <span class="det-ep-check-mark"><${Icon} name="check" size=${18} /></span>
+              </button>`}
             </span>
             <span class="det-ep-body">
               <span class="det-ep-title"><b class="type">E${v.episode}</b> ${title}</span>
@@ -144,11 +194,7 @@ export default function Detail({ params }) {
 
   const m = q.data;
   const g0 = m && (m.genres || [])[0];
-  const similar = useAsync(async () => {
-    if (!m || !g0) return [];
-    const list = m.anime ? await catalog('anime', 'kitsu-anime-popular', { genre: g0 }) : await catalog(m.type, 'top', { genre: g0 });
-    return list.filter(x => x.id !== m.id).slice(0, 20);
-  }, [m && m.id]);
+  const similar = useAsync(() => getMoreLikeThis(m), [m && m.id]);
   const photos = useAsync(() => castPhotos((m && m.cast || []).slice(0, 16)), [m && m.id]);
 
   if (q.loading) return html`<${Page} bleed><${Hero} /><div class="center-fill det-wait"><${Spinner} label="unrolling the film…" /></div><//>`;
@@ -173,7 +219,26 @@ export default function Detail({ params }) {
       else { await navigator.clipboard.writeText(url); toast('Link copied', { icon: 'link' }); }
     } catch {}
   };
-  const watched = () => { markWatched(m, null); toast('Marked as watched', { icon: 'check' }); };
+  const movieDone = !series && !!(epState(m.id, null)?.done);
+  const toggleMovieWatched = () => {
+    if (movieDone) {
+      markUnwatched(m, null);
+      removeHistory(m, null).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+      toast(html`<span>Marked unwatched <button type="button" class="det-undo-btn" onClick=${() => {
+        markWatched(m, null);
+        addHistory(m, null).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+        toast('Marked as watched', { icon: 'check' });
+      }}>Undo</button></span>`, { icon: 'undo' });
+    } else {
+      markWatched(m, null);
+      addHistory(m, null).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+      toast(html`<span>Marked as watched <button type="button" class="det-undo-btn" onClick=${() => {
+        markUnwatched(m, null);
+        removeHistory(m, null).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+        toast('Marked unwatched', { icon: 'undo' });
+      }}>Undo</button></span>`, { icon: 'check' });
+    }
+  };
 
   return html`<${Page} bleed class="detail">
     <${Hero} item=${m} tall kicker=${m.anime ? 'anime' : series ? 'series' : 'movie'} actions=${html`
@@ -186,7 +251,7 @@ export default function Detail({ params }) {
       ${series && html`<${IconBtn} class=${cx('det-round', followed && 'on')} icon="bell" label=${followed ? 'Unfollow' : 'Follow new episodes'} onClick=${follow} />`}
       ${trailer && html`<${IconBtn} class="det-round" icon="film" label="Watch trailer" onClick=${() => setModal({ kind: 'trailer', id: trailer.source })} />`}
       <${IconBtn} class="det-round" icon="starFill" label="Rate & log" onClick=${() => setModal({ kind: 'rate' })} />
-      ${!series && html`<${IconBtn} class="det-round" icon="check" label="Mark watched" onClick=${watched} />`}
+      ${!series && html`<${IconBtn} class=${cx('det-round', movieDone && 'on')} icon="check" label=${movieDone ? 'Mark unwatched' : 'Mark watched'} onClick=${toggleMovieWatched} />`}
       <${IconBtn} class="det-round" icon="share" label="Share" onClick=${share} />
     `}>
       ${m.imdbRating && html`<div class="det-stamp" aria-label=${`IMDb ${m.imdbRating}`}><small class="type">IMDb</small><b class="display">${m.imdbRating}</b></div>`}
@@ -213,7 +278,11 @@ export default function Detail({ params }) {
 
       ${series && html`<${Episodes} meta=${m} onSources=${v => setModal({ kind: 'src', video: v })} />`}
 
-      <${Row} title="More like this" kicker=${g0 ? `more ${g0.toLowerCase()}` : ''} icon="sparkle" items=${similar.data} loading=${similar.loading} />
+      <${Row} title="More like this"
+        kicker=${similar.data?.source === 'trakt' ? 'trakt recommended' : (g0 ? `more ${g0.toLowerCase()}` : '')}
+        icon="sparkle"
+        items=${similar.data?.items}
+        loading=${similar.loading} />
     </div>
 
     ${modal && modal.kind === 'src' && html`<${SourcesModal} meta=${m} video=${modal.video} onClose=${() => setModal(null)} />`}

@@ -85,3 +85,77 @@ export function markWatched(meta, video) {
 export function clearProgress(metaId) {
   progress.update(p => { delete p[metaId]; return p; });
 }
+
+export function markUnwatched(meta, video) {
+  if (!meta) return;
+  const k = keyOf(video);
+  progress.update(p => {
+    const cur = p[meta.id];
+    if (!cur || !cur.eps) return p;
+    delete cur.eps[k];
+    const remaining = Object.entries(cur.eps);
+    if (!remaining.length) {
+      delete p[meta.id];
+    } else {
+      remaining.sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
+      const lastKey = remaining[0][0];
+      cur.last = lastKey === '_' ? null : lastKey;
+      const lastVid = meta.videos ? meta.videos.find(v => v.id === cur.last) : null;
+      const nv = lastVid ? nextVideo(meta, lastVid.id) : null;
+      cur.next = nv ? { id: nv.id, season: nv.season, episode: nv.episode, title: nv.name || nv.title, released: nv.released } : null;
+      cur.updated = Date.now();
+    }
+    return p;
+  });
+  history.update(h => h.filter(x => !(x.id === meta.id && (video ? x.videoId === video.id : !x.videoId))));
+}
+
+export function markSeasonWatched(meta, videos) {
+  if (!meta || !videos || !videos.length) return;
+  const now = Date.now();
+  const dur = 100;
+  progress.update(p => {
+    const cur = p[meta.id] || { eps: {} };
+    for (const v of videos) {
+      cur.eps[v.id] = { t: dur, dur, done: true, at: now, season: v.season, episode: v.episode, title: v.name || v.title };
+    }
+    const lastV = videos[videos.length - 1];
+    const nv = lastV ? nextVideo(meta, lastV.id) : null;
+    Object.assign(cur, {
+      id: meta.id, type: meta.type, name: meta.name, poster: meta.poster, background: meta.background, anime: !!meta.anime,
+      updated: now, last: lastV ? lastV.id : cur.last,
+      next: nv ? { id: nv.id, season: nv.season, episode: nv.episode, title: nv.name || nv.title, released: nv.released } : null,
+    });
+    p[meta.id] = cur;
+    return p;
+  });
+  const newHist = videos.map(v => ({
+    id: meta.id, type: meta.type, name: meta.name, poster: meta.poster, videoId: v.id, season: v.season, episode: v.episode, at: now
+  }));
+  history.update(h => [...newHist, ...h].slice(0, 2000));
+}
+
+export function markSeasonUnwatched(meta, videos) {
+  if (!meta || !videos || !videos.length) return;
+  const ids = new Set(videos.map(v => v.id));
+  progress.update(p => {
+    const cur = p[meta.id];
+    if (!cur || !cur.eps) return p;
+    for (const id of ids) delete cur.eps[id];
+    const remaining = Object.entries(cur.eps);
+    if (!remaining.length) {
+      delete p[meta.id];
+    } else {
+      remaining.sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
+      const lastKey = remaining[0][0];
+      cur.last = lastKey === '_' ? null : lastKey;
+      const lastVid = meta.videos ? meta.videos.find(v => v.id === cur.last) : null;
+      const nv = lastVid ? nextVideo(meta, lastVid.id) : null;
+      cur.next = nv ? { id: nv.id, season: nv.season, episode: nv.episode, title: nv.name || nv.title, released: nv.released } : null;
+      cur.updated = Date.now();
+    }
+    return p;
+  });
+  history.update(h => h.filter(x => !(x.id === meta.id && ids.has(x.videoId))));
+}
+

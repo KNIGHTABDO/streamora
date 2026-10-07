@@ -171,3 +171,49 @@ export function initTrakt() {
   started = true;
   addEventListener('streamora:playback', onPlayback);
 }
+
+export function syncBody(meta, videoOrVideos) {
+  const imdb = imdbOf(meta);
+  if (!imdb) return null;
+  if (meta.type === 'movie' || (!videoOrVideos && !meta.videos)) {
+    return { movies: [{ ids: { imdb } }] };
+  }
+  const vids = Array.isArray(videoOrVideos) ? videoOrVideos : (videoOrVideos ? [videoOrVideos] : []);
+  if (!vids.length) {
+    return { shows: [{ ids: { imdb } }] };
+  }
+  const bySeason = new Map();
+  for (const v of vids) {
+    const s = +(v.season ?? 1);
+    const ep = +(v.episode ?? v.number);
+    if (!bySeason.has(s)) bySeason.set(s, []);
+    if (!isNaN(ep)) bySeason.get(s).push({ number: ep });
+  }
+  const seasons = [...bySeason.entries()].map(([number, episodes]) => ({ number, episodes }));
+  return { shows: [{ ids: { imdb }, seasons }] };
+}
+
+export async function addHistory(meta, videoOrVideos) {
+  const acct = await traktAccount().catch(() => null);
+  if (!acct) return null;
+  const body = syncBody(meta, videoOrVideos);
+  if (!body) return null;
+  return api('/sync/history', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function removeHistory(meta, videoOrVideos) {
+  const acct = await traktAccount().catch(() => null);
+  if (!acct) return null;
+  const body = syncBody(meta, videoOrVideos);
+  if (!body) return null;
+  return api('/sync/history/remove', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function related(type, imdbId) {
+  if (!imdbId) return [];
+  const acct = await traktAccount().catch(() => null);
+  if (!acct) return [];
+  const seg = type === 'movie' ? 'movies' : 'shows';
+  return api(`/${seg}/${encodeURIComponent(imdbId)}/related`);
+}
+
