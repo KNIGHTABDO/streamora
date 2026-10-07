@@ -40,8 +40,12 @@ public class StreamoraPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             self.engine?.close()
             guard let web = self.bridge?.webView,
                   let e = VlcEngine(webView: web, url: url, start: start, audioLang: audioLang, send: { [weak self] ev, data in self?.notifyListeners(ev, data: data) })
-            else { return call.reject("No view to play in") }
+            else {
+                self.setStatusBarHidden(false)
+                return call.reject("No view to play in")
+            }
             self.engine = e
+            self.setStatusBarHidden(true)
             call.resolve()
         }
     }
@@ -52,6 +56,7 @@ public class StreamoraPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve()
         }
     }
+    private func setStatusBarHidden(_ hidden: Bool) { bridge?.statusBarVisible = !hidden }
     @objc func enginePlay(_ call: CAPPluginCall) { onEngine(call) { $0.play() } }
     @objc func enginePause(_ call: CAPPluginCall) { onEngine(call) { $0.pause() } }
     @objc func engineSeek(_ call: CAPPluginCall) { let t = call.getDouble("time") ?? 0; onEngine(call) { $0.seek(t) } }
@@ -66,6 +71,7 @@ public class StreamoraPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async {
             self.engine?.close()
             self.engine = nil
+            self.setStatusBarHidden(false)
             call.resolve()
         }
     }
