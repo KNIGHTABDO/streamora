@@ -86,7 +86,7 @@ export const follows   = pstore('follows', []);     // [{id,type,name,poster}] s
 export const hidden    = pstore('hidden', []);      // meta ids removed from Continue Watching
 export const settings  = pstore('settings', {
   quality: 'auto',          // auto | original | high | high_low | medium | medium_low | low | low_low
-  subsLang: 'eng', subsSize: 100, subsColor: '#fffbe8', subsBg: .35,
+  subsLang: 'eng', videoFit: 'contain', subsSize: 100, subsColor: '#fffbe8', subsBg: .35,
   audioLang: 'eng',
   autoNext: true, autoPlay: true, skipIntroSec: 85,
   nightAuto: true,          // switch to blueprint theme after sunset

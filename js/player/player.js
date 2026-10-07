@@ -153,6 +153,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     offRef.current = o; setOff(o);
     const src = o > 0 ? `${url}${url.includes('?') ? '&' : '?'}t=${o}` : url;
     setSt(x => ({ ...x, waiting: true }));
+    if (vlc) vlc.setMeta({ title, subtitle: sub, poster: meta && meta.poster });   // lock screen / Now Playing
     (vlc ? vlc.open(src, { start: posRef.current, audioLang: mem.audioLang || s.audioLang, onFatal: (e, p) => !dead && fatal(e, p) })
       : attach(v, src, { start: isTc ? 0 : posRef.current, onFatal: (e, p) => !dead && (src === stream.direct && info && info.modelUrl ? (posRef.current = p || posRef.current, setDirect(false)) : fatal(e, offRef.current + (p || 0))) })).then(d => {
       if (dead) return d();

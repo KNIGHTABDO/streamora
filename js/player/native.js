@@ -87,7 +87,7 @@ export function NativePlayer({ meta, video, stream, start = 0, source, noProgres
       .then(() => {
         emit('start');
         if (!meta || noProgress || !p.extras) return;
-        Promise.all([openSubs(meta.type, video ? video.id : meta.id), skipTimes(meta, video)]).then(([subs, skip]) => {
+        Promise.all([openSubs(meta.type, video ? video.id : meta.id, (source && source.filename) || stream.filename || ''), skipTimes(meta, video)]).then(([subs, skip]) => {
           if (done) return;
           const label = x => (x.release ? `${x.label} · ${x.release}` : x.label).slice(0, 70);
           p.extras({ subs: subs.map(x => ({ label: label(x), lang: x.lang, url: x.url })), intro: (skip && skip.op) || null, outro: (skip && skip.ed) || null }).catch(() => {});
