@@ -30,6 +30,8 @@
 .st-themes { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
 .st-privacy ul, .st-about ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
 .st-about .sticky-note { margin-top: 10px; }
+.st-diag { margin: 6px 0 4px; }
+.st-diag-text { width: 100%; min-height: 120px; resize: vertical; padding: 8px 10px; border: 2px dashed var(--line); border-radius: 8px; background: var(--paper-2); color: var(--ink); font: 12px/1.45 var(--font-type); }
 
 
 
