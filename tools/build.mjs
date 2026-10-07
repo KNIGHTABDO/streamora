@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const dist = root + 'dist';
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist);
-for (const p of ['index.html', 'privacy.html', 'manifest.webmanifest', 'sw.js', 'css', 'js', 'vendor', 'art']) {
+for (const p of ['index.html', 'privacy.html', '_headers', 'manifest.webmanifest', 'sw.js', 'css', 'js', 'vendor', 'art']) {
   if (existsSync(root + p)) cpSync(root + p, `${dist}/${p}`, { recursive: true });
 }
 const hash = createHash('sha256');

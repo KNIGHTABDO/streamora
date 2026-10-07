@@ -20,7 +20,7 @@
 </head>
 <body>
 <main>
-  <div class="kicker">last updated 2 October 2026</div>
+  <div class="kicker">last updated 7 October 2026</div>
   <h1>Streamora privacy</h1>
   <p>Streamora is a web app that plays movies and shows from your own Real-Debrid account. It has no accounts or servers that keep your data. This page explains what it stores and where.</p>
 
@@ -35,6 +35,25 @@
   <h2>Servers in between</h2>
   <p>Streamora's own server functions only relay requests: <code>/api/rd</code> passes requests to Real-Debrid (which blocks browsers), and <code>/api/google</code> completes the Google sign-in (which needs the app's client secret). They store and log nothing.</p>
   <p>Catalogs and artwork come from Cinemeta and Kitsu, and sources come from Torrentio, which receives your Real-Debrid key to mark cached sources and to add the one you play to your Real-Debrid (as in Stremio). If you connect Trakt, Trakt sees what you watch. Streamora has no analytics, ads or tracking cookies.</p>
+
+  <h2>Third-party services</h2>
+  <p>The app contacts these services directly from your browser. Here is what each one receives.</p>
+  <ul>
+    <li><b>Cinemeta</b> (v3-cinemeta.strem.io): the titles you browse and the words you search for.</li>
+    <li><b>Kitsu</b> (anime-kitsu.strem.fun): the same, for anime.</li>
+    <li><b>Torrentio</b> (torrentio.strem.fun): the title you open, and your Real-Debrid key, to find sources and add the one you play to your account.</li>
+    <li><b>Real-Debrid</b> (real-debrid.com, through our <code>/api/rd</code> relay; video streams from *.download.real-debrid.com): your API key and the torrents and links the app manages in your account.</li>
+    <li><b>OpenSubtitles</b> (opensubtitles-v3.strem.io): the title and episode you are watching, to find subtitles.</li>
+    <li><b>Kitsu mappings and AniSkip</b> (kitsu.io, api.aniskip.com): for anime, the MyAnimeList id and episode number, to find intro and outro times.</li>
+    <li><b>Metahub</b> (images.metahub.space): posters, backdrops and logos. The image addresses show which titles you see.</li>
+    <li><b>Wikipedia</b> (en.wikipedia.org): cast names, to fetch their photos.</li>
+    <li><b>Google</b> (accounts.google.com, googleapis.com): sign-in, and your Streamora data file in Drive (see above).</li>
+    <li><b>Trakt</b> (api.trakt.tv, only if you connect it): what you watch and the history you import. Sign-in goes through our <code>/api/trakt</code> relay.</li>
+    <li><b>Google Fonts</b> (fonts.googleapis.com, fonts.gstatic.com): your IP address and browser, when the fonts load.</li>
+    <li><b>YouTube</b> (youtube-nocookie.com): the trailer's video id, when you open a trailer.</li>
+    <li><b>Add-ons you add</b> (Settings → Connect): the title and episode you ask for, sent to that add-on's own address.</li>
+    <li><b>GitHub</b> (github.com): only if you tap the link to download the iOS app. The app doesn't contact GitHub on its own.</li>
+  </ul>
 
   <h2>Deleting your data</h2>
   <p>In Streamora, go to <b>Settings → Privacy → Delete everything from Drive</b>. This removes the file from your Drive, removes the copy on that device and revokes Streamora's access to your Google account. You can also remove Streamora at any time at <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener">myaccount.google.com/connections</a>.</p>
