@@ -8,3 +8,6 @@ app/node_modules/
 app/ios/
 app/android/
 .dev.vars
+.gemini-tasks/
+.claude/worktrees/
+.gemini-tasks-*.out
