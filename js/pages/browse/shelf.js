@@ -1,14 +1,21 @@
 // Shared browse page for Movies / Shows / Anime: themed header, sort tabs, genre chips, infinite grid.
-import { html, useRef } from '../../../vendor/preact-htm.js';
-import { Grid, usePaged, Tabs, Chip, Btn, Empty, ErrorNote, loadCSS, hrefTitle, cx } from '../../ui/components.js';
+import { html, useRef, useMemo, useEffect } from '../../../vendor/preact-htm.js';
+import { Grid, usePaged, Tabs, Chip, Btn, Toggle, Empty, ErrorNote, loadCSS, hrefTitle, cx } from '../../ui/components.js';
 import { catalog, MOVIE_GENRES, SERIES_GENRES, ANIME_GENRES } from '../../core/meta.js';
-import { activeProfile } from '../../core/store.js';
+import { activeProfile, useStore, history, progress, diary } from '../../core/store.js';
 import { setQuery, navigate } from '../../router.js';
 
 loadCSS('css/pages/browse.css');
 
 const YEAR = new Date().getFullYear();
 const YEARS = Array.from({ length: 8 }, (_, i) => String(YEAR - i));
+
+const RATINGS = [
+  { id: '', label: 'Any rating' },
+  { id: '6', label: '6+' },
+  { id: '7', label: '7+' },
+  { id: '8', label: '8+' },
+];
 
 export const SHELVES = {
   movie: {
@@ -41,12 +48,72 @@ export function BrowsePage({ type, query, header }) {
   const sort = cfg.sorts.some(s => s.id === query.sort) ? query.sort : cfg.sorts[0].id;
   const byYear = sort === 'year';
   const options = byYear ? YEARS : kids ? cfg.kids : cfg.genres;
-  const genre = options.includes(query.genre) ? query.genre : byYear ? String(YEAR) : kids ? cfg.kids[0] : '';
-  const paged = usePaged(skip => fetchShelf(type, sort, genre || undefined, skip), [type, sort, genre]);
+
+  // Multi-genre selection (AND)
+  const selectedGenres = useMemo(() => {
+    if (byYear) return [];
+    const raw = (query.genre || query.genres || '').split(',').map(s => s.trim()).filter(Boolean);
+    const valid = raw.filter(g => options.includes(g));
+    if (!valid.length && kids) return [cfg.kids[0]];
+    return valid;
+  }, [byYear, query.genre, query.genres, options, kids]);
+
+  const selectedYear = byYear ? (options.includes(query.genre) ? query.genre : String(YEAR)) : '';
+  const primaryGenre = byYear ? selectedYear : (selectedGenres[0] || (kids ? cfg.kids[0] : ''));
+  const paged = usePaged(skip => fetchShelf(type, sort, primaryGenre || undefined, skip), [type, sort, primaryGenre]);
   const top = useRef();
 
+  // Hide watched toggle
+  const hideWatched = query.hideWatched === '1' || query.hideWatched === 'true';
+  const hist = useStore(history);
+  const prog = useStore(progress);
+  const dia = useStore(diary);
+  const watchedIds = useMemo(() => {
+    const ids = new Set((hist || []).map(x => x.id));
+    for (const e of Object.values(prog || {})) {
+      if (Object.values(e.eps || {}).some(ep => ep.done)) ids.add(e.id);
+    }
+    for (const d of dia || []) ids.add(d.id);
+    return ids;
+  }, [hist, prog, dia]);
+
+  // Minimum rating filter
+  const minRating = parseFloat(query.minRating) || 0;
+
+  // Apply filters client-side on loaded items
+  const filteredItems = useMemo(() => {
+    return paged.items.filter(item => {
+      if (hideWatched && watchedIds.has(item.id)) return false;
+      if (minRating > 0) {
+        const r = parseFloat(item.imdbRating);
+        if (!r || r < minRating) return false;
+      }
+      if (!byYear && selectedGenres.length > 0) {
+        const itGenres = item.genres || [];
+        if (!selectedGenres.every(g => itGenres.some(ig => ig.toLowerCase() === g.toLowerCase()))) return false;
+      }
+      return true;
+    });
+  }, [paged.items, hideWatched, minRating, byYear, selectedGenres, watchedIds]);
+
+  // Keep paging working (load more when filtered list is short)
+  useEffect(() => {
+    if (filteredItems.length < 18 && !paged.done && !paged.loading && paged.items.length > 0) {
+      paged.more();
+    }
+  }, [filteredItems.length, paged.done, paged.loading, paged.items.length]);
+
+  const toggleGenre = g => {
+    if (selectedGenres.includes(g)) {
+      const next = selectedGenres.filter(x => x !== g);
+      setQuery({ genre: next.join(',') });
+    } else {
+      setQuery({ genre: [...selectedGenres, g].join(',') });
+    }
+  };
+
   const surprise = () => {
-    const pool = paged.items;
+    const pool = filteredItems.length ? filteredItems : paged.items;
     if (pool.length) navigate(hrefTitle(pool[Math.floor(Math.random() * pool.length)]));
   };
 
@@ -62,15 +129,22 @@ export function BrowsePage({ type, query, header }) {
 
     <${Tabs} class="browse-tabs" tabs=${cfg.sorts} value=${sort} onChange=${id => setQuery({ sort: id, genre: '' })} />
 
+    <div class="browse-filter-bar">
+      <${Toggle} checked=${hideWatched} onChange=${v => setQuery({ hideWatched: v ? '1' : '' })} label="Hide watched" />
+      <div class="chips browse-ratings" role="group" aria-label="Minimum rating">
+        ${RATINGS.map(r => html`<${Chip} key=${r.id} active=${(query.minRating || '') === r.id} onClick=${() => setQuery({ minRating: (query.minRating || '') === r.id ? '' : r.id })}>${r.label}<//>`)}
+      </div>
+    </div>
+
     <div class="chips scroll browse-chips" role="group" aria-label=${byYear ? 'Year' : 'Genre'}>
-      ${!byYear && !kids && html`<${Chip} active=${!genre} onClick=${() => setQuery({ genre: '' })}>Everything<//>`}
-      ${options.map(g => html`<${Chip} key=${g} active=${g === genre} onClick=${() => setQuery({ genre: g })}>${g}<//>`)}
+      ${!byYear && !kids && html`<${Chip} active=${selectedGenres.length === 0} onClick=${() => setQuery({ genre: '' })}>Everything<//>`}
+      ${options.map(g => html`<${Chip} key=${g} active=${byYear ? g === selectedYear : selectedGenres.includes(g)} onClick=${() => byYear ? setQuery({ genre: g }) : toggleGenre(g)}>${g}<//>`)}
     </div>
 
     ${kids && html`<p class="browse-kids type">✎ kids profile: only family-friendly shelves</p>`}
     ${paged.error && !paged.items.length ? html`<${ErrorNote} error=${paged.error} retry=${paged.reload} />` : html`
-      <${Grid} items=${paged.items} loading=${paged.loading} done=${paged.done} onMore=${paged.more}
-        empty=${html`<${Empty} mood="binoculars" title="Nothing on this shelf" text="Try another genre, or spin the mood wheel." action=${html`<${Btn} href="#/mood" icon="wheel">Mood wheel<//>`} />`} />`}
+      <${Grid} items=${filteredItems} loading=${paged.loading && !filteredItems.length} done=${paged.done} onMore=${paged.more}
+        empty=${html`<${Empty} mood="binoculars" title="Nothing on this shelf" text="Try another genre or clearing your filters, or spin the mood wheel." action=${html`<${Btn} href="#/mood" icon="wheel">Mood wheel<//>`} />`} />`}
   </main>`;
 }
 
