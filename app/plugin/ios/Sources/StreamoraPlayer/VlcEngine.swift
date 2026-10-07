@@ -1,11 +1,13 @@
 import UIKit
 import WebKit
 import AVFoundation
+import MediaPlayer
 import MobileVLCKit
 
 // VLC drawing *behind* the web view: the web page turns transparent and keeps its own player controls on top
 // (js/player/vlc.js drives this). The same trick camera-preview plugins use. VLC decodes on the device
 // (VideoToolbox for H.264/HEVC) and reads RD's original file directly, so nothing waits on a transcode.
+// Lock screen / Control Center: MPNowPlayingInfoCenter + MPRemoteCommandCenter (acts on VLC directly, then tells the page with a 'remote' {action, time?} event).
 // Events: 'engine' {time, duration, playing, buffering, rate, width, height, ended?, error?} ~4×/s,
 //         'tracks' {audio: [{id, name}], subs: [{id, name}], audioId, subId} when they change.
 final class VlcEngine: NSObject {
@@ -25,8 +27,14 @@ final class VlcEngine: NSObject {
     private var done = false
     private var knownDuration: Double = 0
     private var tracksKey = ""
+    private var metaTitle = "", metaSubtitle = ""
+    private var artwork: MPMediaItemArtwork?
+    private var artworkURL: String?
+    private var commandTargets: [(MPRemoteCommand, Any)] = []
+    private var infoTicks = 0
+    private var lastPlaying = false
 
-    init?(webView: WKWebView, url: URL, start: Double, audioLang: String, send: @escaping (String, [String: Any]) -> Void) {
+    init?(webView: WKWebView, url: URL, start: Double, audioLang: String, title: String = "", subtitle: String = "", poster: String = "", send: @escaping (String, [String: Any]) -> Void) {
         guard let parent = webView.superview else { return nil }
         self.webView = webView
         self.send = send
@@ -70,7 +78,87 @@ final class VlcEngine: NSObject {
         player.play()
 
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
+        setMeta(title: title, subtitle: subtitle, poster: poster)
+        setupRemote()
     }
+
+    // MARK: - lock screen
+
+    func setMeta(title: String, subtitle: String, poster: String) {
+        guard !done else { return }
+        metaTitle = title; metaSubtitle = subtitle
+        if poster != artworkURL {
+            artworkURL = poster; artwork = nil
+            if !poster.isEmpty, let u = URL(string: poster) {
+                URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
+                    guard let data = data, let img = UIImage(data: data) else { return }
+                    DispatchQueue.main.async {
+                        guard let self = self, !self.done, self.artworkURL == poster else { return }
+                        self.artwork = MPMediaItemArtwork(boundsSize: img.size) { _ in img }
+                        self.updateNowPlaying()
+                    }
+                }.resume()
+            }
+        }
+        updateNowPlaying()
+    }
+
+    private func updateNowPlaying() {
+        guard !done else { return }
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: metaTitle,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: Double(max(0, player.time.intValue)) / 1000,
+            MPNowPlayingInfoPropertyPlaybackRate: player.isPlaying ? Double(player.rate) : 0.0,
+            MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0
+        ]
+        if !metaSubtitle.isEmpty { info[MPMediaItemPropertyArtist] = metaSubtitle }
+        if duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = duration }
+        if let a = artwork { info[MPMediaItemPropertyArtwork] = a }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    private func setupRemote() {
+        let c = MPRemoteCommandCenter.shared()
+        func add(_ cmd: MPRemoteCommand, _ f: @escaping (MPRemoteCommandEvent) -> Void) {
+            cmd.isEnabled = true
+            let t = cmd.addTarget { [weak self] e in
+                guard let self = self, !self.done else { return .commandFailed }
+                f(e)
+                return .success
+            }
+            commandTargets.append((cmd, t))
+        }
+        add(c.playCommand) { [weak self] _ in self?.remotePlay() }
+        add(c.pauseCommand) { [weak self] _ in self?.remotePause() }
+        add(c.togglePlayPauseCommand) { [weak self] _ in
+            guard let self = self else { return }
+            if self.player.isPlaying { self.remotePause() } else { self.remotePlay() }
+        }
+        c.skipForwardCommand.preferredIntervals = [10]
+        c.skipBackwardCommand.preferredIntervals = [10]
+        add(c.skipForwardCommand) { [weak self] _ in self?.remoteSkip(10) }
+        add(c.skipBackwardCommand) { [weak self] _ in self?.remoteSkip(-10) }
+        add(c.changePlaybackPositionCommand) { [weak self] e in
+            guard let self = self, let pe = e as? MPChangePlaybackPositionCommandEvent else { return }
+            self.remoteSeek(pe.positionTime)
+        }
+    }
+
+    private func remotePlay() { play(); send("remote", ["action": "play"]); updateNowPlaying() }
+    private func remotePause() { pause(); send("remote", ["action": "pause"]); updateNowPlaying() }
+    private func remoteSkip(_ d: Double) {
+        let now = Double(max(0, player.time.intValue)) / 1000
+        var t = max(0, now + d)
+        if duration > 0 { t = min(t, max(0, duration - 1)) }
+        remoteSeek(t)
+    }
+    private func remoteSeek(_ t: Double) {
+        seek(t)
+        send("remote", ["action": "seek", "time": t])
+        updateNowPlaying()
+    }
+
+    func setAudioDelay(_ seconds: Double) { player.currentAudioPlaybackDelay = Int(seconds * 1_000_000) }
 
     // MARK: - controls (from JS)
 
@@ -95,6 +183,11 @@ final class VlcEngine: NSObject {
         guard !done else { return }
         done = true
         timer?.invalidate()
+        for (cmd, t) in commandTargets { cmd.removeTarget(t) }
+        commandTargets = []
+        let c = MPRemoteCommandCenter.shared()
+        for cmd in [c.playCommand, c.pauseCommand, c.togglePlayPauseCommand, c.skipForwardCommand, c.skipBackwardCommand, c.changePlaybackPositionCommand] { cmd.isEnabled = false }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         player.stop()
         host.removeFromSuperview()
         if let w = webView {
@@ -140,6 +233,9 @@ final class VlcEngine: NSObject {
         }
         send("engine", d)
         sendTracks()
+        infoTicks += 1
+        let playing = player.isPlaying
+        if infoTicks % 8 == 0 || playing != lastPlaying { lastPlaying = playing; updateNowPlaying() }
     }
 
     private func sendTracks() {
