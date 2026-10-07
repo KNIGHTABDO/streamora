@@ -101,19 +101,19 @@ function Episodes({ meta, onSources }) {
   const toggleSeason = () => {
     if (allWatched) {
       markSeasonUnwatched(meta, rel);
-      removeHistory(meta, rel).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+      removeHistory(meta, rel).catch(() => {});
       toast(html`<span>Marked season unwatched <button type="button" class="det-undo-btn" onClick=${() => {
         markSeasonWatched(meta, rel);
-        addHistory(meta, rel).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+        addHistory(meta, rel).catch(() => {});
         toast('Marked season watched', { icon: 'check' });
-      }}>Undo</button></span>`, { icon: 'undo' });
+      }}>Undo</button></span>`, { icon: 'refresh' });
     } else {
       markSeasonWatched(meta, rel);
-      addHistory(meta, rel).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+      addHistory(meta, rel).catch(() => {});
       toast(html`<span>Marked ${plural(rel.length, 'episode')} watched <button type="button" class="det-undo-btn" onClick=${() => {
         markSeasonUnwatched(meta, rel);
-        removeHistory(meta, rel).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
-        toast('Marked season unwatched', { icon: 'undo' });
+        removeHistory(meta, rel).catch(() => {});
+        toast('Marked season unwatched', { icon: 'refresh' });
       }}>Undo</button></span>`, { icon: 'check' });
     }
   };
@@ -124,19 +124,19 @@ function Episodes({ meta, onSources }) {
     const isDone = !!(st && st.done);
     if (isDone) {
       markUnwatched(meta, v);
-      removeHistory(meta, v).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+      removeHistory(meta, v).catch(() => {});
       toast(html`<span>Marked E${v.episode} unwatched <button type="button" class="det-undo-btn" onClick=${() => {
         markWatched(meta, v);
-        addHistory(meta, v).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+        addHistory(meta, v).catch(() => {});
         toast(`Marked E${v.episode} watched`, { icon: 'check' });
-      }}>Undo</button></span>`, { icon: 'undo' });
+      }}>Undo</button></span>`, { icon: 'refresh' });
     } else {
       markWatched(meta, v);
-      addHistory(meta, v).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+      addHistory(meta, v).catch(() => {});
       toast(html`<span>Marked E${v.episode} watched <button type="button" class="det-undo-btn" onClick=${() => {
         markUnwatched(meta, v);
-        removeHistory(meta, v).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
-        toast(`Marked E${v.episode} unwatched`, { icon: 'undo' });
+        removeHistory(meta, v).catch(() => {});
+        toast(`Marked E${v.episode} unwatched`, { icon: 'refresh' });
       }}>Undo</button></span>`, { icon: 'check' });
     }
   };
@@ -144,7 +144,7 @@ function Episodes({ meta, onSources }) {
   return html`<section class="det-eps">
     <div class="spread">
       <h2>Episodes</h2>
-      <${Btn} size="sm" variant="ghost" icon=${allWatched ? 'undo' : 'check'} onClick=${toggleSeason}>
+      <${Btn} size="sm" variant="ghost" icon=${allWatched ? 'refresh' : 'check'} onClick=${toggleSeason}>
         ${allWatched ? 'Mark season unwatched' : 'Mark season watched'}
       <//>
     </div>
@@ -223,19 +223,19 @@ export default function Detail({ params }) {
   const toggleMovieWatched = () => {
     if (movieDone) {
       markUnwatched(m, null);
-      removeHistory(m, null).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+      removeHistory(m, null).catch(() => {});
       toast(html`<span>Marked unwatched <button type="button" class="det-undo-btn" onClick=${() => {
         markWatched(m, null);
-        addHistory(m, null).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+        addHistory(m, null).catch(() => {});
         toast('Marked as watched', { icon: 'check' });
-      }}>Undo</button></span>`, { icon: 'undo' });
+      }}>Undo</button></span>`, { icon: 'refresh' });
     } else {
       markWatched(m, null);
-      addHistory(m, null).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
+      addHistory(m, null).catch(() => {});
       toast(html`<span>Marked as watched <button type="button" class="det-undo-btn" onClick=${() => {
         markUnwatched(m, null);
-        removeHistory(m, null).catch(() => toast('Trakt sync failed', { kind: 'warn' }));
-        toast('Marked unwatched', { icon: 'undo' });
+        removeHistory(m, null).catch(() => {});
+        toast('Marked unwatched', { icon: 'refresh' });
       }}>Undo</button></span>`, { icon: 'check' });
     }
   };

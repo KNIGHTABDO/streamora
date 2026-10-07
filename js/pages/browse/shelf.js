@@ -98,7 +98,7 @@ export function BrowsePage({ type, query, header }) {
 
   // Keep paging working (load more when filtered list is short)
   useEffect(() => {
-    if (filteredItems.length < 18 && !paged.done && !paged.loading && paged.items.length > 0) {
+    if (filteredItems.length < 18 && !paged.done && !paged.loading && paged.items.length > 0 && !paged.error) {
       paged.more();
     }
   }, [filteredItems.length, paged.done, paged.loading, paged.items.length]);

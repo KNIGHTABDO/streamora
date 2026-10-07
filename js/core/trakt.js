@@ -179,6 +179,7 @@ export function syncBody(meta, videoOrVideos) {
     return { movies: [{ ids: { imdb } }] };
   }
   const vids = Array.isArray(videoOrVideos) ? videoOrVideos : (videoOrVideos ? [videoOrVideos] : []);
+  if (Array.isArray(videoOrVideos) && !vids.length) return null; // empty selection (e.g. a season with nothing released yet): never push the whole show
   if (!vids.length) {
     return { shows: [{ ids: { imdb } }] };
   }
