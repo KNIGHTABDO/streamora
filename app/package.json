@@ -1,5 +1,6 @@
 {
   "name": "streamora-app",
+  "version": "2.0.0",
   "private": true,
   "description": "iOS app shell for Streamora: loads the live site and adds a native VLC player (see README)",
   "dependencies": {

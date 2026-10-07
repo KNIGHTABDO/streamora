@@ -43,6 +43,14 @@ jobs:
           sips -z 1024 1024 ../art/icon-maskable-512.png --out ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png
           npx cap sync ios
 
+      - name: Version from the tag
+        if: github.ref_type == 'tag'
+        working-directory: app
+        run: |
+          PLIST=ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${GITHUB_REF_NAME#v}" $PLIST
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" $PLIST
+
       - name: Build
         run: |
           VERSION="${GITHUB_REF_NAME#v}"

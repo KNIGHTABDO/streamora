@@ -14,10 +14,13 @@ const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform 
 import { syncState, syncNow, syncPending, deleteDriveData } from '../core/sync.js';
 import { traktRev, traktAvailable, traktAccount, startConnect, finishConnect, disconnect as traktDisconnect, importHistory, importWatchlist } from '../core/trakt.js';
 import { addons, addAddon, removeAddon } from '../core/addons.js';
+import { VERSION } from '../version.js';
+import { diagnostics, copyText, clearDiag } from '../lib/diag.js';
+import { nativeVersion } from '../lib/update.js';
 
 loadCSS('css/pages/settings.css');
 
-export const VERSION = '1.0.0';
+export { VERSION };
 
 // ------------------------------------------------------------ tabs
 const ago = t => { const m = Math.round((Date.now() - t) / 6e4); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(t).toLocaleDateString(); };
@@ -307,10 +310,32 @@ function Privacy() {
   </div>`;
 }
 
+function Diagnostics() {
+  const [dump, setDump] = useState(null);
+  const [native, setNative] = useState(null);
+  useEffect(() => { nativeVersion().then(setNative); }, []);
+  // the clipboard call must come straight from the click, so the version is already known by then
+  const copy = async () => {
+    const text = diagnostics(native);
+    if (await copyText(text)) { setDump(null); toast('Diagnostics copied'); }
+    else setDump(text);
+  };
+  return html`<div class="stack st-diag">
+    <h3>Diagnostics</h3>
+    <p class="type muted">If something breaks, copy this and send it along. It has the version, device and recent errors, with keys and tokens removed.</p>
+    <div class="cluster">
+      <${Btn} icon="download" onClick=${copy}>Copy diagnostics<//>
+      <${Btn} variant="ghost" icon="trash" onClick=${() => { clearDiag(); setDump(null); toast('Diagnostics cleared'); }}>Clear<//>
+    </div>
+    ${dump && html`<textarea class="st-diag-text" readonly rows="8" aria-label="Diagnostics" value=${dump} onFocus=${e => e.currentTarget.select()}></textarea>`}
+  </div>`;
+}
+
 function About() {
   return html`<div class="panel stack st-about">
     <div class="cluster"><${Reel} mood="popcorn" size=${110} /><div><h2>Streamora</h2><div class="type faint">version ${VERSION}</div></div></div>
     <p>A sketchbook that plays movies. Bring your own Real-Debrid key; everything else is kept in your own Google Drive.</p>
+    <${Diagnostics} />
     <h3>Thanks to</h3>
     <ul>
       <li><b>Cinemeta</b> for movie and series catalogs and art</li>

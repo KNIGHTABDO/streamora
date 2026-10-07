@@ -1,4 +1,5 @@
 // Streamora app shell: theme, gates (Google → key → profile), navigation chrome, lazy pages.
+import './lib/diag.js'; // first, so its error hooks see the modules below too
 import { html, render, useState, useEffect, useRef, useErrorBoundary } from '../vendor/preact-htm.js';
 import { installSketch } from './ui/sketch.js';
 import { Icon, Spinner, Toasts, ErrorNote, Btn, cx, toast } from './ui/components.js';
@@ -9,11 +10,36 @@ import { account } from './core/google.js';
 import { initSync } from './core/sync.js';
 import { initFocus } from './ui/focus.js';
 import { newEps, badgeCount, checkNewEpisodes, notifyNewEpisodes } from './lib/newEpisodes.js';
+import { checkForUpdate } from './lib/update.js';
 import { isIOS } from './player/engine.js';
 import { isNative } from './player/native.js';
 
 installSketch();
 initFocus();
+
+// small CSS for the shell's own strips (offline, update notice), injected here so no page file owns them
+document.head.append(Object.assign(document.createElement('style'), { textContent: `
+.shell-offline { position: fixed; z-index: 48; left: 50%; top: calc(var(--nav-h) + var(--safe-t) + var(--appbar-h, 0px) + 8px);
+  transform: translateX(-50%) rotate(-.5deg); max-width: calc(100vw - 32px); display: flex; align-items: center; gap: 8px; padding: 6px 16px;
+  background: var(--paper-3); color: var(--ink); font: 17px/1.2 var(--font-hand); border: 2px solid var(--line);
+  border-radius: 14px 6px 16px 5px / 6px 15px 5px 14px; box-shadow: var(--shadow); }
+.shell-update { position: fixed; z-index: 200; left: 50%; transform: translateX(-50%); bottom: calc(var(--tab-h) + var(--safe-b) + 14px); max-width: calc(100vw - 32px); width: max-content; }
+@media (min-width: 761px) { .shell-update { bottom: 28px; } }
+.shell-update .toast a { display: inline-flex; align-items: center; min-height: 44px; color: var(--a1); font-weight: 600; }
+.shell-update .toast button { display: grid; place-items: center; width: 44px; height: 44px; margin: -12px -14px -12px 0; background: none; border: 0; color: var(--ink-2); cursor: pointer; }
+` }));
+
+// "You're offline" strip: the app still works on what's saved, so say so
+function Offline() {
+  const [off, setOff] = useState(() => navigator.onLine === false);
+  useEffect(() => {
+    const on = () => setOff(false), down = () => setOff(true);
+    addEventListener('online', on);
+    addEventListener('offline', down);
+    return () => { removeEventListener('online', on); removeEventListener('offline', down); };
+  }, []);
+  return off ? html`<div class="shell-offline" role="status"><${Icon} name="warn" size=${18} /><span>You're offline: showing what's saved</span></div>` : null;
+}
 
 // ------------------------------------------------------------ theme
 export function applyTheme() {
@@ -199,6 +225,7 @@ function App() {
 
   const chromeless = ['/watch', '/welcome'].some(p => route.path.startsWith(p)) || (route.path === '/profiles' && !profile);
   return html`
+    <${Offline} />
     ${!chromeless && html`<${TopNav} route=${route} profile=${profile} onMore=${() => setMore(true)} moreOpen=${more} badge=${badge} />`}
     ${!chromeless && html`<${AppBanner} />`}
     <${PageHost} route=${route} />
@@ -230,6 +257,7 @@ if ('serviceWorker' in navigator && !['localhost', '127.0.0.1', '[::1]'].include
 initSync().catch(() => {});
 setTimeout(() => {
   import('./core/trakt.js').then(m => m.initTrakt()).catch(() => {});
+  checkForUpdate().catch(() => {});
   const episodes = () => { if (keyStore.get().set && activeProfileId.get()) checkNewEpisodes().then(notifyNewEpisodes).catch(() => {}); };
   episodes();
   document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && episodes());
