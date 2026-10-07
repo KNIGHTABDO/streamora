@@ -1,7 +1,7 @@
 // #/watch/{type}/{id}?v=&t=&hash=&file=&fn=   and   #/watch/rd/{link}?name=
 // Finds a source, resolves it on Real-Debrid (auto-retrying the next source), asks to resume, then hands off to <Player>.
 import { html, useState, useEffect, useRef } from '../../vendor/preact-htm.js';
-import { Btn, Icon, Reel, Img, Modal, Chip, cx, fmtTime, loadCSS } from '../ui/components.js';
+import { Btn, Icon, Reel, Img, Modal, Chip, cx, fmtTime, loadCSS, toast } from '../ui/components.js';
 import { meta as getMeta, backdropOf } from '../core/meta.js';
 import { streams, rankStreams, fmtSize, isPhone, noMkv } from '../core/sources.js';
 import { resolveStream, resolveLink, mediaInfos, torrents } from '../core/rd.js';
@@ -23,10 +23,14 @@ export default function Watch({ params, query }) {
 
 const backTo = (type, id) => () => navigate(`#/title/${type}/${encodeURIComponent(id)}`, { replace: true });
 
+// a request that never got an answer (offline, server down, blocked): never show the browser's raw wording
+const netFail = e => !!e && (e.code === 'network' || /failed to fetch|networkerror|load failed/i.test(e.message || ''));
+
 function friendly(e) {
   const code = e && e.code;
   if (code === 'nokey' || code === 8 || (e && e.status === 401)) return { mood: 'sad', title: 'Your Real-Debrid key stopped working', text: 'It may have expired or been reset. Paste a fresh one in Settings.', key: true };
-  if (code === 'network') return { mood: 'sad', title: 'Can\'t reach Real-Debrid', text: 'Looks like you\'re offline, or the relay is down. Try again in a moment.' };
+  if (netFail(e)) return { mood: 'sad', title: 'Can\'t reach Real-Debrid', text: 'Looks like you\'re offline, or the relay is down. Try again in a moment.' };
+  if (code === 'sources') return { mood: 'binoculars', title: 'The sources didn\'t answer', text: 'They are slow or down right now. Try again in a moment.' };
   if (code === 'notcached') return { mood: 'sleep', title: 'Not cached yet', text: e.message };
   if (code === 'nosources') return { mood: 'binoculars', title: 'Nothing cached for this one', text: 'Real-Debrid doesn\'t have a ready copy. Open the source list to try an uncached one (it downloads in the background).' };
   return { mood: 'confused', title: 'That reel got tangled', text: (e && e.message) || 'Something went wrong while starting playback.' };
@@ -46,6 +50,7 @@ function Session({ params, query }) {
   const [ask, setAsk] = useState(0);              // resume seconds to ask about
   const tried = useRef(new Set());
   const gen = useRef(0);
+  const live = useRef(null);      // the player's position (s), kept current by <Player>: a source switch resumes there
   const s = settings.get();
 
   // 1. meta + resume question
@@ -70,6 +75,7 @@ function Session({ params, query }) {
     // transcodes top out at 1080p unless "original" is chosen, so 4K files only cost start-up time
     const prefs = { cachedOnly: s.cachedOnly !== false, preferSmall: isPhone(), preferMp4: noMkv(), preferBinge: binge, audioLang: s.audioLang, maxQuality: s.quality === 'original' ? '2160p' : '1080p' };
     Promise.all([streams(meta.type, id), torrents(1, 100).catch(() => [])]).then(([list, mine]) => {
+      if (list.failed && list.failed.length && list.length) toast(`${list.failed.join(', ')} didn't answer. Showing the rest.`, { kind: 'warn', icon: 'warn' });
       // sources already in the account start instantly (no new torrent added), so they go first
       const have = new Set((mine || []).filter(t => t.status === 'downloaded').map(t => t.hash.toLowerCase()));
       list.forEach(x => { if (have.has(x.infoHash.toLowerCase())) { x.inAccount = true; x.cached = true; } });
@@ -88,11 +94,11 @@ function Session({ params, query }) {
       } else {
         const ranked = mineFirst(rankStreams(list, prefs));
         setCands(ranked);
-        if (!ranked.length) setErr(Object.assign(new Error('No cached sources'), { code: 'nosources' }));
+        if (!ranked.length) setErr(Object.assign(new Error('No cached sources'), { code: !list.length && list.failed && list.failed.length ? 'sources' : 'nosources' }));
       }
     }, e => {
       if (query.hash) setCands([{ infoHash: query.hash, fileIdx: query.file != null ? +query.file : undefined, filename: query.fn || null, release: query.fn || 'Chosen source', quality: '?' }]);
-      else setErr(Object.assign(new Error('Couldn\'t search for sources: ' + e.message), { code: 'network' }));
+      else setErr(Object.assign(new Error('Couldn\'t search for sources: ' + e.message), { code: navigator.onLine === false ? 'network' : 'sources' }));
     });
   }, [meta, video]);
 
@@ -118,7 +124,7 @@ function Session({ params, query }) {
         return;
       } catch (e) {
         if (me !== gen.current) return;
-        if (e.code === 'nokey' || e.code === 8 || e.code === 'network' || manual) { setErr(e); return; }
+        if (e.code === 'nokey' || e.code === 8 || netFail(e) || manual) { setErr(e); return; }
         setStep(`That one didn't work (${e.message.split('.')[0].toLowerCase()}). Trying another…`);
       }
     }
@@ -126,7 +132,12 @@ function Session({ params, query }) {
   };
   useEffect(() => { if (cands && cands.length) tryFrom(cands, 0); }, [cands]);
 
-  const pick = c => { setPicker(false); tried.current.delete(c.infoHash); tryFrom([c], 0, true); };
+  // switching source keeps the place: the new copy starts where the old one was (no player yet = keep startAt)
+  const pick = c => {
+    setPicker(false);
+    if (live.current != null) setStartAt(Math.floor(live.current));
+    tried.current.delete(c.infoHash); tryFrom([c], 0, true);
+  };
   const onFatal = (e, pos) => {
     // the resolved stream died while playing → move to the next untried source, resuming where it stopped
     if (pos > 0) setStartAt(Math.floor(pos));
@@ -142,7 +153,7 @@ function Session({ params, query }) {
   return html`<div class="watch" data-no-paper>
     ${showPlayer
       ? html`<${isNative() ? AppPlayer : Player} meta=${meta} video=${video} stream=${ready.stream} info=${ready.info} start=${startAt} source=${ready.source}
-          onFatal=${onFatal} onPickSource=${() => setPicker(true)} onBack=${onBack} />`
+          live=${live} onFatal=${onFatal} onPickSource=${() => setPicker(true)} onBack=${onBack} />`
       : html`<${Loading} bg=${bg} meta=${meta} video=${video} step=${step} attempt=${attempt} err=${err}
           onBack=${onBack} onPick=${allCands ? () => setPicker(true) : null}
           onRetry=${() => { tried.current.clear(); cands && cands.length ? tryFrom(cands, 0) : location.reload(); }} />`}
