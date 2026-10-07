@@ -35,6 +35,17 @@ assert.deepEqual(h[P + 'history'].map(x => x.id), ['b', 'c', 'a'], 'history unio
 
 assert.ok(syncable('profiles') && syncable('addons') && syncable('p:a:mood'), 'profiles, addons, per-profile buckets sync');
 for (const k of ['rdkey', 'rdkey-at', 'google', 'gd-ver', 'sync-base', 'rt', 'resolved', 'app-banner-off', 'oauth-pending']) assert.ok(!syncable(k), k + ' stays on the device');
+// per-item/per-key stamps: an unrelated later change on another device must not overwrite this one
+const S = { 'p:a:settings': { quality: 'high', lang: 'en' }, profiles: [{ id: 'a', name: 'Old' }, { id: 'b', name: 'Bee' }] };
+const devA = { at: 100, stamps: { 'p:a:settings': { quality: 100, lang: 10 }, profiles: { a: 100, b: 10 } }, data: { 'p:a:settings': { quality: 'low', lang: 'en' }, profiles: [{ id: 'a', name: 'Renamed' }, { id: 'b', name: 'Bee' }] } };
+const devB = { at: 200, stamps: { 'p:a:settings': { quality: 10, lang: 200 }, profiles: { a: 10, b: 200 } }, data: { 'p:a:settings': { quality: 'high', lang: 'fr' }, profiles: [{ id: 'a', name: 'Old' }, { id: 'b', name: 'Bea' }] } };
+const pk = merge(devA, devB);
+assert.deepEqual(pk['p:a:settings'], { quality: 'low', lang: 'fr' }, 'settings merge per key by own time');
+assert.deepEqual(pk.profiles.map(x => x.name), ['Renamed', 'Bea'], 'profile edits merge per item');
+assert.deepEqual(merge(devB, devA)['p:a:settings'], { quality: 'low', lang: 'fr' }, 'same result either direction');
+const legacy = merge(devA, { at: 50, data: S });
+assert.equal(legacy.profiles[0].name, 'Renamed', 'old bundle without stamps: local newer wins');
+assert.equal(merge({ at: 1, data: S }, { at: 2, data: { ...S, profiles: [{ id: 'a', name: 'New' }, { id: 'b', name: 'Bee' }] } }).profiles[0].name, 'New', 'legacy bundles still newest-bundle-wins');
 
 // ---- secrets: newest wins per entry, ties go to Drive's copy
 let sm = mergeSecrets({ rd: { v: 'A', at: 5 }, trakt: { p1: { access_token: 'x', at: 1 } } }, { rd: { v: 'B', at: 3 }, trakt: { p1: { off: true, at: 2 }, p2: { access_token: 'y', at: 1 } } });

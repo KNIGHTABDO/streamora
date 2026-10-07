@@ -1,6 +1,7 @@
 // Finding sources for a title via Torrentio, marked [RD+] when Real-Debrid already has them cached.
 // Real-Debrid's own "instantAvailability" endpoint is disabled, so Torrentio's flag is the cache check.
 import { getRdKey } from './store.js';
+import { fetchT } from './net.js';
 
 export const TORRENTIO = 'https://torrentio.strem.fun';
 
@@ -54,11 +55,21 @@ export async function streams(type, id) {
   const key = await getRdKey();
   const cfg = key ? `/sort=qualitysize|realdebrid=${key}` : '/sort=qualitysize';
   const extraP = import('./addons.js').then(m => m.addonStreams(type, id)).catch(() => []);
-  const r = await fetch(`${TORRENTIO}${cfg}/stream/${type}/${encodeURIComponent(id)}.json`);
-  if (!r.ok) throw new Error(`Source search failed (${r.status})`);
-  const j = await r.json();
-  const extra = await extraP, seen = new Set((j.streams || []).map(s => s.infoHash));
-  return [...(j.streams || []), ...extra.filter(s => !seen.has(s.infoHash))].map(parseStream).filter(s => s.infoHash);
+  const load = async () => {
+    const r = await fetchT(`${TORRENTIO}${cfg}/stream/${type}/${encodeURIComponent(id)}.json`, {}, 12000, 'Torrentio');
+    if (!r.ok) throw new Error(`Source search failed (${r.status})`);
+    return r.json();
+  };
+  let j, err;
+  try { j = await load(); }
+  catch { try { await new Promise(r => setTimeout(r, 600)); j = await load(); } catch (e) { err = e; } } // one retry
+  const extra = await extraP;
+  // Torrentio down: the other addons' sources still count; only when nothing answered is it an error
+  if (err && !extra.length) throw err;
+  const base = err ? [] : j.streams || [], seen = new Set(base.map(s => s.infoHash));
+  const out = [...base, ...extra.filter(s => !seen.has(s.infoHash))].map(parseStream).filter(s => s.infoHash);
+  if (err) Object.defineProperty(out, 'failed', { value: ['Torrentio'], enumerable: false }); // sources that didn't answer
+  return out;
 }
 
 // Torrentio tags non-English releases with flag emojis. A release flagged only with other languages

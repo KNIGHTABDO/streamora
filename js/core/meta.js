@@ -4,6 +4,7 @@
 // Anime items additionally get `anime: true`.
 
 import { activeProfile, ls } from './store.js';
+import { fetchT } from './net.js';
 
 export const CINEMETA = 'https://v3-cinemeta.strem.io';
 export const KITSU = 'https://anime-kitsu.strem.fun';
@@ -17,7 +18,7 @@ const CACHE = 'streamora-json-v1';
 const CACHE_MAX = 300;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const net = async (url, retry = true) => {
-  const r = await fetch(url);
+  const r = await fetchT(url, {}, 10000, 'The catalog');
   if (r.status === 429 && retry) { await sleep(Math.min(10, +r.headers.get('Retry-After') || 2) * 1000); return net(url, false); }
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r;
@@ -96,6 +97,21 @@ export async function meta(type, id) {
   return m;
 }
 
+// Title match quality: exact > starts with > every word of the query is a word of the title > the rest. Ties keep the source's own (popularity) order.
+const fold = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9Ѐ-ӿ぀-鿿]+/g, ' ').trim();
+function rankSearch(list, q) {
+  const nq = fold(q), words = nq.split(' ').filter(Boolean);
+  const tier = m => {
+    const t = fold(m.name);
+    if (!nq || !t) return 3;
+    if (t === nq) return 0;
+    if (t.startsWith(nq)) return 1;
+    const tw = new Set(t.split(' '));
+    return words.every(w => tw.has(w)) ? 2 : 3;
+  };
+  return list.map((m, i) => [tier(m), i, m]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(x => x[2]);
+}
+
 /** search('dune', 'movie' | 'series' | 'anime' | 'all') */
 /** onPart(results so far) fires as each source lands, so the fastest one shows right away. */
 export async function search(q, type = 'all', onPart) {
@@ -105,9 +121,9 @@ export async function search(q, type = 'all', onPart) {
   if (type === 'all' || type === 'series') jobs.push(catalog('series', 'top', { search: q }));
   if (type === 'all' || type === 'anime') jobs.push(getJSON(`${KITSU}/catalog/anime/kitsu-anime-list/search=${encodeURIComponent(q)}.json`).then(j => (j.metas || []).map(m => norm(m, true))));
   const got = jobs.map(() => []);
-  jobs.forEach((j, i) => j.then(v => { got[i] = v; onPart && onPart(forProfile(got.flat())); }, () => {}));
+  jobs.forEach((j, i) => j.then(v => { got[i] = v; onPart && onPart(rankSearch(forProfile(got.flat()), q)); }, () => {}));
   const res = await Promise.allSettled(jobs);
-  return forProfile(res.flatMap(r => (r.status === 'fulfilled' ? r.value : [])));
+  return rankSearch(forProfile(res.flatMap(r => (r.status === 'fulfilled' ? r.value : []))), q);
 }
 
 /**
