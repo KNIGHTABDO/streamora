@@ -264,11 +264,22 @@ export function Spinner({ label = 'sketching…', size = 64 }) {
   </div>`;
 }
 
+// Raw technical errors become plain words; the raw text stays one click away under "details".
+const rawError = error => (error && (error.message || String(error))) || 'Something smudged.';
+function friendlyError(error) {
+  const raw = rawError(error), name = error && error.name;
+  if (name === 'AbortError' || name === 'TimeoutError' || /timeout|timed out/i.test(raw)) return 'That took too long. Try again.';
+  if (/failed to fetch|networkerror|load failed/i.test(raw) || (name === 'TypeError' && /fetch/i.test(raw))) return "Couldn't reach the server. Check your connection and try again.";
+  return raw;
+}
+
 export function ErrorNote({ error, retry, compact }) {
-  const msg = (error && (error.message || String(error))) || 'Something smudged.';
+  const raw = rawError(error), msg = friendlyError(error);
   return html`<div class=${cx('error-note', compact && 'compact')}>
     <${Icon} name="warn" size=${22} />
-    <span>${msg}</span>
+    <div class="error-msg">${msg}
+      ${msg !== raw && html`<details class="error-details"><summary tabindex="0">details</summary><code>${raw}</code></details>`}
+    </div>
     ${retry && html`<${Btn} size="sm" icon="refresh" onClick=${retry}>Try again<//>`}
   </div>`;
 }
@@ -287,17 +298,31 @@ export function Empty({ mood = 'confused', title, text, action }) {
 }
 
 // ------------------------------------------------------------------ modal / sheet
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
 /** Centered card on desktop, bottom sheet on phones. */
 export function Modal({ open, onClose, title, children, wide, class: cls }) {
   const ref = useRef();
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement;
-    const onKey = e => e.key === 'Escape' && onClose && onClose();
+    const inside = () => [...ref.current.querySelectorAll(FOCUSABLE)].filter(el => el.getClientRects().length);
+    const onKey = e => {
+      if (e.key === 'Escape') return close.current && close.current();
+      if (e.key !== 'Tab' || !ref.current) return;
+      // Tab and Shift+Tab cycle inside the dialog (arrow keys are left to focus.js)
+      const f = inside(), first = f[0], last = f[f.length - 1], cur = document.activeElement;
+      if (!first) { e.preventDefault(); return; }
+      if (e.shiftKey ? (cur === first || !ref.current.contains(cur)) : (cur === last || !ref.current.contains(cur))) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      }
+    };
     document.addEventListener('keydown', onKey);
     document.documentElement.classList.add('modal-open');
-    setTimeout(() => { const f = ref.current && ref.current.querySelector('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'); f && f.focus(); }, 30);
-    return () => { document.removeEventListener('keydown', onKey); document.documentElement.classList.remove('modal-open'); prev && prev.focus && prev.focus(); };
+    const t = setTimeout(() => { const f = ref.current && inside()[0]; f && f.focus(); }, 30);
+    return () => { clearTimeout(t); document.removeEventListener('keydown', onKey); document.documentElement.classList.remove('modal-open'); prev && prev.focus && prev.focus(); };
   }, [open]);
   if (!open) return null;
   return html`<div class="modal-scrim" onClick=${e => e.target === e.currentTarget && onClose && onClose()}>

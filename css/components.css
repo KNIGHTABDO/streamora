@@ -257,6 +257,10 @@ h1 .st-underline { bottom: -4px; height: 14px; }
 /* ---------------------------------------------------------- error / empty */
 .error-note { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 18px; background: var(--paper-3); border: 2px dashed var(--a1); border-radius: 12px; }
 .error-note.compact { padding: 8px 12px; font-size: 16px; }
+.error-msg { min-width: 0; flex: 1 1 auto; }
+.error-details { margin-top: 2px; color: var(--ink-2); font-size: 15px; }
+.error-details summary { display: inline-block; padding: 6px 0; cursor: pointer; }
+.error-details code { display: block; font: 14px/1.4 var(--font-type); word-break: break-word; }
 .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 40px 16px 50px; max-width: 480px; margin: 0 auto; }
 .empty h3 { margin-top: 4px; }
 .empty .reel { animation: float 3s ease-in-out infinite; }
@@ -328,3 +332,15 @@ h1 .st-underline { bottom: -4px; height: 14px; }
 .spread { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .hero-mono { background: var(--paper-3) center 25% / cover no-repeat; background-blend-mode: luminosity; }
 #main:focus { outline: none; }
+
+/* ---------------------------------------------------------- tablet tier (iPad, 761-1100px): smaller cards, gutters clear the safe areas */
+@media (min-width: 761px) and (max-width: 1100px) {
+  .poster-card { --w: 142px; }
+  .pc-sm { --w: 108px; } .pc-lg { --w: 176px; }
+  .pc-wide { --w: 256px; } .pc-sm.pc-wide { --w: 206px; }
+  .pc-title { font-size: 16px; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
+  .grid-sm { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+  .grid-lg { grid-template-columns: repeat(auto-fill, minmax(164px, 1fr)); }
+  .page { padding-left: max(var(--gutter), env(safe-area-inset-left, 0px)); padding-right: max(var(--gutter), env(safe-area-inset-right, 0px)); }
+}

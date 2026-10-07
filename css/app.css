@@ -125,3 +125,16 @@
 }
 .appbar a { color: var(--a1); font-weight: 600; }
 .appbar button { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: none; border: 0; color: var(--ink-2); padding: 8px; cursor: pointer; }
+
+/* ---------------------------------------------------------- tablet tier (iPad, 761-1100px): five links and the tools fit without the desktop sizes */
+@media (min-width: 761px) and (max-width: 1100px) {
+  .topnav {
+    gap: 14px;
+    padding-left: max(var(--gutter), env(safe-area-inset-left, 0px)); padding-right: max(var(--gutter), env(safe-area-inset-right, 0px));
+  }
+  .logo-reel { width: 30px; height: 30px; }
+  .logo-word { font-size: 24px; }
+  .topnav-links { gap: 2px; }
+  .topnav-link { font-size: 18px; padding: 6px 7px; }
+  .topnav-tools { gap: 2px; }
+}
