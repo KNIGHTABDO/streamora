@@ -54,6 +54,30 @@ export function topGenres(history, genreMap, year, n = 6) {
   return byCount(m).slice(0, n);
 }
 
+/** Weighted genre taste computed from history and diary.
+ * Returns [['Drama', weight], ['Comedy', weight], ...] top n genres. */
+export function genreTaste(history = [], diary = [], genreMap = {}, n = 2) {
+  let hist = history;
+  let dia = diary;
+  let gm = genreMap;
+  let count = n;
+  if (!Array.isArray(history) && history && typeof history === 'object') {
+    hist = history.history || [];
+    dia = history.diary || [];
+    gm = diary && typeof diary === 'object' && !Array.isArray(diary) ? diary : {};
+    count = typeof genreMap === 'number' ? genreMap : n;
+  }
+  const m = new Map();
+  for (const x of hist || []) {
+    for (const g of (gm || {})[x.id] || []) bump(m, g, 1);
+  }
+  for (const d of dia || []) {
+    const w = d.rating && d.rating > 0 ? d.rating : 1;
+    for (const g of (gm || {})[d.id] || []) bump(m, g, w);
+  }
+  return byCount(m).slice(0, count);
+}
+
 /** { longest, current } consecutive days with any watching. */
 export function streak(evts, now = Date.now()) {
   const days = [...new Set(evts.map(e => dayKey(e.at)))].sort();
@@ -209,6 +233,7 @@ if (typeof process !== 'undefined' && process.argv && process.argv[1] && process
   assert.deepEqual(counts(history, 2025), { movies: 1, episodes: 4, titles: 3 });
   assert.equal(topTitles(history, 2025)[0].id, 'a');
   assert.deepEqual(topGenres(history, { a: ['Drama'], m: ['Drama', 'Comedy'] }, 2025)[0], ['Drama', 4]);
+  assert.equal(genreTaste(history, diary, { a: ['Drama'], m: ['Drama', 'Comedy'] }, 2)[0][0], 'Drama');
   assert.equal(streak(events(progress, history, 2025), t0 + DAY).longest, 2);
   assert.equal(streak(events(progress, history, 2025), t0 + DAY).current, 2);
   assert.deepEqual([longestBinge(history, 2025).id, longestBinge(history, 2025).count], ['a', 3]);

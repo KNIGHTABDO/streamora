@@ -1,6 +1,5 @@
-// #/search?q= : big hand-drawn search field, live results in tabs, recent searches, voice, people.
-import { html, useState, useEffect, useRef } from '../../vendor/preact-htm.js';
-import { Page, Grid, Tabs, Chip, Row, Empty, ErrorNote, IconBtn, Icon, loadCSS, useAsync, toast, cx } from '../ui/components.js';
+import { html, useState, useEffect, useRef, useMemo } from '../../vendor/preact-htm.js';
+import { Page, Grid, Chip, Row, Empty, ErrorNote, IconBtn, Icon, loadCSS, useAsync, toast, cx } from '../ui/components.js';
 import { pstore, useStore } from '../core/store.js';
 import { search, catalog } from '../core/meta.js';
 import { setQuery } from '../router.js';
@@ -12,10 +11,28 @@ const remember = q => searches.update(l => [q, ...l.filter(x => x.toLowerCase() 
 const Speech = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
 const isPhone = () => matchMedia('(max-width: 760px)').matches;
 
+const TYPE_FILTERS = [
+  { id: 'all', label: 'All', icon: 'sparkle' },
+  { id: 'movie', label: 'Movies', icon: 'film' },
+  { id: 'series', label: 'Shows', icon: 'tv' },
+  { id: 'anime', label: 'Anime', icon: 'anime' },
+];
+
+const DECADE_FILTERS = [
+  { id: '', label: 'Any year' },
+  { id: '2020', label: '2020s' },
+  { id: '2010', label: '2010s' },
+  { id: '2000', label: '2000s' },
+  { id: '1990', label: '1990s' },
+  { id: '1980', label: '1980s' },
+  { id: 'classic', label: 'Pre-1980' },
+];
+
 export default function Search({ query }) {
   const q = (query.q || '').trim();
   const [text, setText] = useState(query.q || '');
-  const [tab, setTab] = useState('all');
+  const typeFilter = query.t || 'all';
+  const yearFilter = query.y || '';
   const [listening, setListening] = useState(false);
   const input = useRef();
   const recent = useStore(searches);
@@ -48,18 +65,34 @@ export default function Search({ query }) {
   const trending = useAsync(() => Promise.all([catalog('movie', 'top'), catalog('series', 'top')]).then(([m, s]) => ({ m: m.slice(0, 12), s: s.slice(0, 12) })), []);
 
   const all = res.data || [];
-  const groups = {
-    all,
-    movie: all.filter(m => m.type === 'movie' && !m.anime),
-    series: all.filter(m => m.type === 'series' && !m.anime),
-    anime: all.filter(m => m.anime),
-  };
-  const tabs = [
-    { id: 'all', label: 'All', icon: 'sparkle', count: groups.all.length },
-    { id: 'movie', label: 'Movies', icon: 'film', count: groups.movie.length },
-    { id: 'series', label: 'Shows', icon: 'tv', count: groups.series.length },
-    { id: 'anime', label: 'Anime', icon: 'anime', count: groups.anime.length },
-  ];
+  const counts = useMemo(() => ({
+    all: all.length,
+    movie: all.filter(m => m.type === 'movie' && !m.anime).length,
+    series: all.filter(m => m.type === 'series' && !m.anime).length,
+    anime: all.filter(m => m.anime).length,
+  }), [all]);
+
+  const filtered = useMemo(() => {
+    return all.filter(m => {
+      if (typeFilter === 'movie' && (m.type !== 'movie' || m.anime)) return false;
+      if (typeFilter === 'series' && (m.type !== 'series' || m.anime)) return false;
+      if (typeFilter === 'anime' && !m.anime) return false;
+      if (yearFilter) {
+        const yr = m.year ? parseInt(m.year, 10) : null;
+        if (!yr) return false;
+        if (yearFilter === 'classic') {
+          if (yr >= 1980) return false;
+        } else {
+          const dec = parseInt(yearFilter, 10);
+          if (yr < dec || yr > dec + 9) return false;
+        }
+      }
+      return true;
+    });
+  }, [all, typeFilter, yearFilter]);
+
+  const setType = id => setQuery({ t: id === 'all' ? '' : id });
+  const setYear = id => setQuery({ y: id === yearFilter ? '' : id });
 
   const listen = () => {
     const r = new Speech();
@@ -95,10 +128,17 @@ export default function Search({ query }) {
         <h2 class="search-for">Results for <span class="mark">${q}</span></h2>
         <a class="search-people" href=${`#/person/${encodeURIComponent(q)}`}><${Icon} name="person" size=${20} /> People named “${q}”</a>
       </div>
-      <${Tabs} tabs=${tabs} value=${tab} onChange=${setTab} />
+      <div class="search-filters">
+        <div class="chips search-chips search-type-chips" role="group" aria-label="Filter by type">
+          ${TYPE_FILTERS.map(t => html`<${Chip} key=${t.id} icon=${t.icon} active=${typeFilter === t.id} onClick=${() => setType(t.id)}>${t.label} <small class="type faint">(${counts[t.id] || 0})</small><//>`)}
+        </div>
+        <div class="chips scroll search-chips search-year-chips" role="group" aria-label="Filter by year">
+          ${DECADE_FILTERS.map(d => html`<${Chip} key=${d.id} active=${yearFilter === d.id} onClick=${() => setYear(d.id)}>${d.label}<//>`)}
+        </div>
+      </div>
       ${res.error ? html`<${ErrorNote} error=${res.error} retry=${res.reload} />` : html`
-        <${Grid} items=${groups[tab]} loading=${res.loading && !groups[tab].length}
-          empty=${html`<${Empty} mood="binoculars" title=${`No luck with “${q}”`} text="Check the spelling, try the original title, or search a person instead." action=${html`<a class="btn btn-ink btn-md ink-edge wide" href=${`#/person/${encodeURIComponent(q)}`}><${Icon} name="person" size=${20} /><span>Search people</span></a>`} />`} />`}
+        <${Grid} items=${filtered} loading=${res.loading && !filtered.length}
+          empty=${html`<${Empty} mood="binoculars" title=${`No luck with “${q}”`} text=${yearFilter || typeFilter !== 'all' ? 'Try clearing your filters.' : 'Check the spelling, try the original title, or search a person instead.'} action=${html`<a class="btn btn-ink btn-md ink-edge wide" href=${`#/person/${encodeURIComponent(q)}`}><${Icon} name="person" size=${20} /><span>Search people</span></a>`} />`} />`}
     `}
   <//>`;
 }

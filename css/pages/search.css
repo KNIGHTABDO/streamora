@@ -15,12 +15,30 @@
 .search-lens { color: var(--a1); transform: rotate(-10deg); }
 .search-mic.listening { background: var(--a1); color: var(--on-accent); animation: wiggle .6s ease-in-out infinite; }
 .search-recent { margin: 0 0 20px; }
-.search-clear { color: var(--ink-3); font-size: 14px; }
+.search-clear { color: var(--ink-3); font-size: 14px; min-height: 44px; display: inline-flex; align-items: center; padding: 6px 12px; }
 .search-clear:hover { color: var(--a1); }
 .search-head { margin: 0 0 12px; }
 .search-for { font-size: clamp(26px, 3.4vw, 38px); }
-.search-people { display: inline-flex; align-items: center; gap: 6px; font-size: 18px; color: var(--ink-2); border-bottom: 2px dashed var(--ink-3); padding-bottom: 2px; }
+.search-people { display: inline-flex; align-items: center; gap: 6px; font-size: 18px; color: var(--ink-2); border-bottom: 2px dashed var(--ink-3); padding-bottom: 2px; min-height: 44px; }
 .search-people:hover { color: var(--a1); border-color: var(--a1); }
+
+.search-filters { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 18px; }
+.search-chips .chip { min-height: 44px; padding: 8px 16px; font-size: 17px; }
+
+@media (min-width: 761px) and (max-width: 1100px) {
+  .search-box { margin: 8px 0 20px; }
+  .search-field { min-height: 70px; padding: 6px 14px; }
+  .search-field input { font-size: 32px; }
+}
+
+@media (min-width: 761px) and (max-width: 900px) {
+  .search .grid { grid-template-columns: repeat(4, 1fr); gap: 20px 14px; }
+}
+
+@media (min-width: 901px) and (max-width: 1100px) {
+  .search .grid { grid-template-columns: repeat(5, 1fr); gap: 22px 16px; }
+}
+
 @media (max-width: 760px) {
   .search-field { min-height: 60px; padding-left: 12px; }
   .search-field input { font-size: 24px; }

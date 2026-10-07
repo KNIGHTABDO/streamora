@@ -47,3 +47,34 @@
 }
 .genres-decade { margin-top: 18px; }
 .genres-decades .chips { margin-top: 4px; }
+.genres-filter-bar {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  margin: 12px 0 6px;
+}
+.genres-extra-chips {
+  margin: 8px 0 10px;
+  align-items: center;
+}
+.genres-extra-label {
+  margin-right: 6px;
+  font-size: 15px;
+  color: var(--ink-2);
+}
+.genres-decades .chip,
+.genres-extra-chips .chip,
+.genres-filter-bar .chip {
+  min-height: 44px; padding: 8px 16px; font-size: 17px;
+}
+
+@media (min-width: 761px) and (max-width: 1100px) {
+  .genres-wall { gap: 16px 14px; }
+  .sticker { min-height: 54px; font-size: 20px; }
+}
+
+@media (min-width: 761px) and (max-width: 900px) {
+  .genres-decade .grid, .genres .grid { grid-template-columns: repeat(4, 1fr); gap: 20px 14px; }
+}
+
+@media (min-width: 901px) and (max-width: 1100px) {
+  .genres-decade .grid, .genres .grid { grid-template-columns: repeat(5, 1fr); gap: 22px 16px; }
+}

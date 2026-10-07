@@ -1,9 +1,10 @@
 // #/genres: a wall of die-cut genre stickers, plus a decade dial (?decade=1990&t=series, the old Time Machine).  #/genre/{type}/{genre}: that shelf as a grid.
-import { html, useRef } from '../../vendor/preact-htm.js';
-import { Page, Grid, usePaged, useAsync, Tabs, Chip, Empty, Btn, ErrorNote, SectionTitle, loadCSS, Icon, cx } from '../ui/components.js';
+import { html, useRef, useMemo, useEffect } from '../../vendor/preact-htm.js';
+import { Page, Grid, usePaged, useAsync, Tabs, Chip, Toggle, Empty, Btn, ErrorNote, SectionTitle, loadCSS, Icon, cx } from '../ui/components.js';
 import { registerIcons } from '../ui/icons.js';
 import { tiltOf, hash } from '../ui/sketch.js';
 import { catalog, search, MOVIE_GENRES, SERIES_GENRES, ANIME_GENRES } from '../core/meta.js';
+import { useStore, history, progress, diary } from '../core/store.js';
 import { fetchShelf } from './browse/shelf.js';
 import { setQuery } from '../router.js';
 
@@ -107,6 +108,13 @@ function Wall({ query }) {
   <//>`;
 }
 
+const RATINGS = [
+  { id: '', label: 'Any rating' },
+  { id: '6', label: '6+' },
+  { id: '7', label: '7+' },
+  { id: '8', label: '8+' },
+];
+
 function Shelf({ type, genre, query }) {
   const special = SPECIALS[genre];
   const label = special ? special.label : genre;
@@ -121,13 +129,86 @@ function Shelf({ type, genre, query }) {
     const f = special.pages[page.current++];
     return f ? f() : Promise.resolve([]);
   }, [type, genre, sort]);
+
+  // Multi-genre selection (AND)
+  const genreList = useMemo(() => {
+    const all = type === 'anime' ? ANIME_GENRES : type === 'series' ? SERIES_GENRES : MOVIE_GENRES;
+    return all.filter(g => g.toLowerCase() !== genre.toLowerCase());
+  }, [type, genre]);
+
+  const extraGenres = useMemo(() => {
+    const raw = (query.with || query.genres || '').split(',').map(s => s.trim()).filter(Boolean);
+    return raw.filter(g => genreList.some(gl => gl.toLowerCase() === g.toLowerCase()));
+  }, [query.with, query.genres, genreList]);
+
+  // Hide watched toggle
+  const hideWatched = query.hideWatched === '1' || query.hideWatched === 'true';
+  const hist = useStore(history);
+  const prog = useStore(progress);
+  const dia = useStore(diary);
+  const watchedIds = useMemo(() => {
+    const ids = new Set((hist || []).map(x => x.id));
+    for (const e of Object.values(prog || {})) {
+      if (Object.values(e.eps || {}).some(ep => ep.done)) ids.add(e.id);
+    }
+    for (const d of dia || []) ids.add(d.id);
+    return ids;
+  }, [hist, prog, dia]);
+
+  // Minimum rating filter
+  const minRating = parseFloat(query.minRating) || 0;
+
+  // Apply filters client-side on loaded items
+  const filteredItems = useMemo(() => {
+    return paged.items.filter(item => {
+      if (hideWatched && watchedIds.has(item.id)) return false;
+      if (minRating > 0) {
+        const r = parseFloat(item.imdbRating);
+        if (!r || r < minRating) return false;
+      }
+      if (extraGenres.length > 0) {
+        const itGenres = item.genres || [];
+        if (!extraGenres.every(g => itGenres.some(ig => ig.toLowerCase() === g.toLowerCase()))) return false;
+      }
+      return true;
+    });
+  }, [paged.items, hideWatched, minRating, extraGenres, watchedIds]);
+
+  // Keep paging working (load more when filtered list is short)
+  useEffect(() => {
+    if (filteredItems.length < 18 && !paged.done && !paged.loading && paged.items.length > 0) {
+      paged.more();
+    }
+  }, [filteredItems.length, paged.done, paged.loading, paged.items.length]);
+
+  const toggleExtra = g => {
+    const exists = extraGenres.some(eg => eg.toLowerCase() === g.toLowerCase());
+    const next = exists ? extraGenres.filter(eg => eg.toLowerCase() !== g.toLowerCase()) : [...extraGenres, g];
+    setQuery({ with: next.join(',') });
+  };
+
   const noun = type === 'series' ? 'shows' : type === 'anime' ? 'anime' : 'movies';
   return html`<${Page} title=${label} kicker=${`${noun} · genre`} icon=${(special && special.icon) || ICON_FOR[genre] || 'tag'}
       actions=${html`<${Btn} href="#/genres" icon="back" size="sm" variant="ghost">All genres<//>`}>
     ${!special && html`<${Tabs} tabs=${sorts} value=${sort} onChange=${id => setQuery({ sort: id })} />`}
+
+    <div class="browse-filter-bar genres-filter-bar">
+      <${Toggle} checked=${hideWatched} onChange=${v => setQuery({ hideWatched: v ? '1' : '' })} label="Hide watched" />
+      <div class="chips browse-ratings" role="group" aria-label="Minimum rating">
+        ${RATINGS.map(r => html`<${Chip} key=${r.id} active=${(query.minRating || '') === r.id} onClick=${() => setQuery({ minRating: (query.minRating || '') === r.id ? '' : r.id })}>${r.label}<//>`)}
+      </div>
+    </div>
+
+    ${!special && genreList.length > 0 && html`
+      <div class="chips scroll genres-extra-chips" role="group" aria-label="Combine genres">
+        <span class="genres-extra-label type faint">+ combine:</span>
+        ${genreList.map(g => html`<${Chip} key=${g} active=${extraGenres.some(eg => eg.toLowerCase() === g.toLowerCase())} onClick=${() => toggleExtra(g)}>${g}<//>`)}
+      </div>
+    `}
+
     ${paged.error && !paged.items.length ? html`<${ErrorNote} error=${paged.error} retry=${paged.reload} />` : html`
-      <${Grid} items=${paged.items} loading=${paged.loading} done=${paged.done} onMore=${paged.more}
-        empty=${html`<${Empty} mood="confused" title="This shelf is bare" text="Nothing turned up here. Try a neighbouring genre." action=${html`<${Btn} href="#/genres" icon="tag">All genres<//>`} />`} />`}
+      <${Grid} items=${filteredItems} loading=${paged.loading && !filteredItems.length} done=${paged.done} onMore=${paged.more}
+        empty=${html`<${Empty} mood="confused" title="This shelf is bare" text="Nothing turned up here. Try another genre or clearing your filters." action=${html`<${Btn} href="#/genres" icon="tag">All genres<//>`} />`} />`}
   <//>`;
 }
 

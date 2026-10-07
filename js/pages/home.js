@@ -1,7 +1,7 @@
 // Home: rotating riso hero, greeting, Continue Watching, and the shelves.
 import { html, useState, useEffect, useMemo, useRef } from '../../vendor/preact-htm.js';
 import { Page, Hero, Row, PosterCard, Btn, IconBtn, Icon, Reel, toast, useAsync, loadCSS, cx, hrefTitle, shuffle } from '../ui/components.js';
-import { useStore, progress, hidden, history, watchlist, profiles, activeProfileId, keyStore, ls } from '../core/store.js';
+import { useStore, progress, hidden, history, diary, watchlist, profiles, activeProfileId, keyStore, ls } from '../core/store.js';
 import { continueWatching, hideFromContinue } from '../core/progress.js';
 import { catalog, meta as getMeta, resolveTitle } from '../core/meta.js';
 import { torrents, user } from '../core/rd.js';
@@ -10,6 +10,7 @@ import { navigate } from '../router.js';
 import { playAction, inWatchlist, toggleWatchlist } from '../lib/play.js';
 import { newEps } from '../lib/newEpisodes.js';
 import { rdRecent } from '../lib/rdRecent.js';
+import { loadGenres, genreTaste } from '../lib/stats.js';
 
 loadCSS('css/pages/home.css');
 
@@ -61,11 +62,11 @@ function HeroCarousel({ items }) {
         <${IconBtn} class="home-heart" icon=${loved ? 'heartFill' : 'heart'} label=${loved ? 'Remove from watchlist' : 'Add to watchlist'}
           onClick=${() => toast(toggleWatchlist(item) ? `Pinned “${item.name}” to your watchlist` : 'Removed from watchlist', { icon: 'heart' })} />`} />
     </div>
-    ${n > 1 && html`<div class="home-dots" role="tablist" aria-label="Featured titles">
-      ${items.map((it, k) => html`<button type="button" role="tab" aria-selected=${k === i} aria-label=${it.name} class=${cx('home-dot', k === i && 'on')} onClick=${() => setI(k)}>
+    ${n > 1 && html`<nav class="home-dots" aria-label="Featured titles">
+      ${items.map((it, k) => html`<button type="button" aria-current=${k === i ? 'true' : 'false'} aria-label=${`Show ${it.name}`} class=${cx('home-dot', k === i && 'on')} onClick=${() => setI(k)}>
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.6c4.3-.1 7.4 3.2 7.4 7.3 0 4.2-3.3 7.5-7.5 7.5C5.8 17.4 2.6 14 2.7 9.9 2.8 5.8 5.9 2.7 10 2.6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle class="home-dot-fill" cx="10" cy="10" r="5"/></svg>
       </button>`)}
-    </div>`}
+    </nav>`}
   </div>`;
 }
 
@@ -109,6 +110,47 @@ function BecauseRow({ kids }) {
   }, [seed && seed.id]);
   if (!q.data || !q.data.items.length) return null;
   return html`<${Row} title=${`Because you watched ${q.data.name}`} kicker=${`more ${q.data.genre.toLowerCase()}`} icon="sparkle" items=${q.data.items} />`;
+}
+
+// ---------------------------------------------------------------- because you like <genre> (weighted genre taste)
+function TasteRows({ kids }) {
+  const h = useStore(history);
+  const dia = useStore(diary);
+  const p = useStore(progress);
+  const q = useAsync(async () => {
+    if (!h || !h.length || kids) return [];
+    const pool = [...h, ...(dia || [])];
+    const gm = await loadGenres(pool, 40);
+    const top = genreTaste(h, dia, gm, 2);
+    if (!top.length) return [];
+    const seen = new Set([...Object.keys(p || {}), ...h.map(x => x.id), ...(dia || []).map(x => x.id)]);
+    const results = [];
+    for (const [genre] of top) {
+      if (!genre) continue;
+      const [mList, sList] = await Promise.allSettled([
+        catalog('movie', 'top', { genre }),
+        catalog('series', 'top', { genre }),
+      ]);
+      const combined = [
+        ...(mList.status === 'fulfilled' ? mList.value : []),
+        ...(sList.status === 'fulfilled' ? sList.value : []),
+      ];
+      const items = [];
+      const ids = new Set();
+      for (const item of combined) {
+        if (!seen.has(item.id) && !ids.has(item.id)) {
+          ids.add(item.id);
+          items.push(item);
+        }
+        if (items.length >= 20) break;
+      }
+      if (items.length) results.push({ genre, items });
+    }
+    return results;
+  }, [h.length, (dia || []).length, kids]);
+
+  if (!h || !h.length || !q.data || !q.data.length) return null;
+  return html`${q.data.map(r => html`<${Row} key=${r.genre} title=${`Because you like ${r.genre}`} kicker=${`more ${r.genre.toLowerCase()}`} icon="sparkle" items=${r.items} href=${`#/genre/movie/${encodeURIComponent(r.genre)}`} />`)}`;
 }
 
 // ---------------------------------------------------------------- played on your other devices (RD downloads)
@@ -236,6 +278,7 @@ export default function Home() {
         <${WatchlistRow} />
       ` : html`
         <${BecauseRow} kids=${kids} />
+        <${TasteRows} kids=${kids} />
         <${CatRow} title="Top 10 today" kicker="the most watched" icon="trophy" type="movie" id="top" numbered eager=${eagerFirst} />
         <${CatRow} title="Trending movies" kicker="the big screen" icon="film" type="movie" id="top" opts=${{ skip: 10 }} href="#/movies" />
         <${CatRow} title="Trending shows" kicker="binge material" icon="tv" type="series" id="top" href="#/shows" />
