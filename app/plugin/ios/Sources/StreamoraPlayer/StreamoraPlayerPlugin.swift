@@ -5,8 +5,9 @@ import Capacitor
 // JS: Capacitor.Plugins.StreamoraPlayer.play({ url, title, subtitle, start, hasNext, audioLang, subsLang }) / close()
 //     extras({ subs: [{label, lang, url}], intro: [start, end]?, outro: [start, end]? }) once the web side has them
 // Engine mode (the web player's own controls on top of VLC, see VlcEngine.swift and js/player/vlc.js):
-//     capabilities() -> { engine: true } · engineOpen({ url, start, audioLang }) · enginePlay() · enginePause()
+//     capabilities() -> { engine: true, version, build } · engineOpen({ url, start, audioLang, title, subtitle, poster, audioDelay }) · engineMeta({ title, subtitle, poster }) · engineAudioDelay({ seconds }) · enginePlay() · enginePause()
 //     engineSeek({ time }) · engineRate({ rate }) · engineVolume({ volume, muted }) · engineAudio({ id }) · engineSub({ id }) · engineClose()
+// Engine events also include 'remote' {action: play|pause|seek, time?} (lock screen / Control Center commands)
 // Events: 'progress' {position, duration, paused}, 'next', 'closed' {position, duration, ended, error?}
 @objc(StreamoraPlayerPlugin)
 public class StreamoraPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -25,26 +26,34 @@ public class StreamoraPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "engineVolume", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "engineAudio", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "engineSub", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "engineMeta", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "engineAudioDelay", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "engineClose", returnType: CAPPluginReturnPromise)
     ]
 
     private weak var current: PlayerViewController?
     private var engine: VlcEngine?
 
-    @objc func capabilities(_ call: CAPPluginCall) { call.resolve(["engine": true]) }
+    @objc func capabilities(_ call: CAPPluginCall) {
+        let info = Bundle.main.infoDictionary ?? [:]
+        call.resolve(["engine": true, "version": info["CFBundleShortVersionString"] as? String ?? "", "build": info["CFBundleVersion"] as? String ?? ""])
+    }
 
     @objc func engineOpen(_ call: CAPPluginCall) {
         guard let s = call.getString("url"), let url = URL(string: s) else { return call.reject("No playable link") }
         let start = call.getDouble("start") ?? 0, audioLang = call.getString("audioLang") ?? ""
+        let title = call.getString("title") ?? "", subtitle = call.getString("subtitle") ?? "", poster = call.getString("poster") ?? ""
+        let delay = call.getDouble("audioDelay") ?? 0
         DispatchQueue.main.async {
             self.engine?.close()
             guard let web = self.bridge?.webView,
-                  let e = VlcEngine(webView: web, url: url, start: start, audioLang: audioLang, send: { [weak self] ev, data in self?.notifyListeners(ev, data: data) })
+                  let e = VlcEngine(webView: web, url: url, start: start, audioLang: audioLang, title: title, subtitle: subtitle, poster: poster, send: { [weak self] ev, data in self?.notifyListeners(ev, data: data) })
             else {
                 self.setStatusBarHidden(false)
                 return call.reject("No view to play in")
             }
             self.engine = e
+            if delay != 0 { e.setAudioDelay(delay) }
             self.setStatusBarHidden(true)
             call.resolve()
         }
@@ -67,6 +76,11 @@ public class StreamoraPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     }
     @objc func engineAudio(_ call: CAPPluginCall) { let i = Int32(call.getInt("id") ?? -1); onEngine(call) { $0.setAudio(i) } }
     @objc func engineSub(_ call: CAPPluginCall) { let i = Int32(call.getInt("id") ?? -1); onEngine(call) { $0.setSub(i) } }
+    @objc func engineMeta(_ call: CAPPluginCall) {
+        let t = call.getString("title") ?? "", s = call.getString("subtitle") ?? "", p = call.getString("poster") ?? ""
+        onEngine(call) { $0.setMeta(title: t, subtitle: s, poster: p) }
+    }
+    @objc func engineAudioDelay(_ call: CAPPluginCall) { let s = call.getDouble("seconds") ?? 0; onEngine(call) { $0.setAudioDelay(s) } }
     @objc func engineClose(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             self.engine?.close()

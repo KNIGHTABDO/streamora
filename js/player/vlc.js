@@ -31,6 +31,7 @@ export class VlcVideo extends EventTarget {
     this.tracks = { audio: [], subs: [], audioId: -1, subId: -1 };
     this.handles = [];
     this.closed = false;
+    this._delay = 0; this._meta = {}; this.opened = false;
   }
   fire(type, detail) { this.dispatchEvent(detail ? new CustomEvent(type, { detail }) : new Event(type)); }
 
@@ -66,6 +67,14 @@ export class VlcVideo extends EventTarget {
     this.p.enginePause().catch(() => {});
     this.fire('pause');
   }
+  /** seconds, + delays the sound (fixes lip-sync) */
+  get audioDelay() { return this._delay; }
+  set audioDelay(s) { this._delay = +s || 0; this.p.engineAudioDelay({ seconds: this._delay }).catch(() => {}); this.fire('audiodelaychange'); }
+  /** lock screen info {title, subtitle, poster}; works before or after open() */
+  setMeta(m = {}) {
+    this._meta = { title: m.title || '', subtitle: m.subtitle || '', poster: m.poster || '' };
+    if (this.opened && !this.closed) this.p.engineMeta(this._meta).catch(() => {});
+  }
   setAudio(id) { this.p.engineAudio({ id }).catch(() => {}); }
   setSub(id) { this.p.engineSub({ id }).catch(() => {}); }
 
@@ -75,9 +84,11 @@ export class VlcVideo extends EventTarget {
     const p = this.p;
     const on = (name, f) => Promise.resolve(p.addListener(name, f)).then(h => (this.closed ? h.remove() : this.handles.push(h)));
     await on('engine', d => this.onEngine(d, onFatal));
+    await on('remote', d => this.onRemote(d));
     await on('tracks', d => { this.tracks = d; this.fire('tracks', d); });
     this._t = start; this._want = true; this._cmdAt = performance.now();
-    await p.engineOpen({ url, start: Math.max(0, Math.floor(start)), audioLang });
+    await p.engineOpen({ url, start: Math.max(0, Math.floor(start)), audioLang, ...this._meta, audioDelay: this._delay });
+    this.opened = true;
     this.fire('play');
     this.fire('waiting');
     return () => this.close();
@@ -87,6 +98,18 @@ export class VlcVideo extends EventTarget {
     this.closed = true;
     this.handles.forEach(h => h.remove());
     this.p.engineClose().catch(() => {});
+  }
+
+  // lock screen / Control Center already acted on VLC: only bring this element's state in line
+  onRemote(d) {
+    if (this.closed || !d) return;
+    this._cmdAt = performance.now();
+    if (d.action === 'play' && !this._want) { this._want = true; this.fire('play'); }
+    else if (d.action === 'pause' && this._want) { this._want = false; this._moving = false; this.fire('pause'); }
+    else if (d.action === 'seek') {
+      this._seekTo = +d.time || 0; this._seekAt = performance.now(); this.seeking = true; this.ended = false;
+      this.fire('seeking'); this.fire('timeupdate');
+    }
   }
 
   onEngine(d, onFatal) {
