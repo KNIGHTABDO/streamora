@@ -26,16 +26,23 @@ function isNewer(a, b) {
   return false;
 }
 
-function UpdateNotice({ version, url, notes }) {
+// SideStore installs the .ipa itself (keeping the app's data); without SideStore the page stays visible, so open the release page
+function install(ipa, page) {
+  if (!ipa) { open(page, '_blank'); return; }
+  location.href = `sidestore://install?url=${encodeURIComponent(ipa)}`;
+  setTimeout(() => document.visibilityState === 'visible' && open(page, '_blank'), 2500);
+}
+
+function UpdateNotice({ version, url, ipa, notes }) {
   const [open, setOpen] = useState(true);
   const close = () => { later = version; shown = false; setOpen(false); };
   return html`<${Modal} open=${open} onClose=${close} title="Update available">
     <h2 class="display">Streamora ${version} is out</h2>
     ${notes && html`<p class="faint" style="white-space:pre-line;max-height:40dvh;overflow:auto">${notes}</p>`}
-    <p>Download the new .ipa and install it with SideStore.</p>
+    <p>Update opens SideStore and installs it there.</p>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
       <button type="button" class="btn btn-ghost" onClick=${close}>Later</button>
-      <a class="btn btn-primary" href=${url} target="_blank" rel="noopener" onClick=${close}>Update</a>
+      <button type="button" class="btn btn-primary" onClick=${() => { close(); install(ipa, url); }}>Update</button>
     </div>
   <//>`;
 }
@@ -56,7 +63,8 @@ async function check() {
   const root = document.createElement('div');
   document.body.append(root);
   const notes = /^Unsigned/.test(rel.body || '') ? '' : String(rel.body || '').replace(/\r/g, '').trim().slice(0, 600);
-  render(html`<${UpdateNotice} version=${latest} url=${rel.html_url || PAGE} notes=${notes} />`, root);
+  const ipa = ((rel.assets || []).find(a => /\.ipa$/i.test(a.name)) || {}).browser_download_url;
+  render(html`<${UpdateNotice} version=${latest} url=${rel.html_url || PAGE} ipa=${ipa} notes=${notes} />`, root);
 }
 
 /** Called once after startup: checks now and each time the app returns to the foreground. Does nothing outside the iOS app. */
