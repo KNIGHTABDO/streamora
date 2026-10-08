@@ -54,9 +54,8 @@
 .pl-video::cue { font-family: var(--font-hand); }
 .pl-surface { position: absolute; inset: 0; z-index: 1; touch-action: none; -webkit-touch-callout: none; }
 
-/* touch gestures: 2× badge while holding, volume bar while dragging on the right half */
+/* touch gestures: volume bar while dragging on the right half */
 .pl-gest { position: absolute; z-index: 2; pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 6px; animation: pop-in .2s var(--ease-pop) both; }
-.pl-gest.hold { top: 16%; left: 50%; translate: -50% 0; padding: 4px 20px; background: var(--pl-accent); color: #1e1630; border-radius: 48% 52% 46% 54%; box-shadow: 3px 4px 0 rgba(0,0,0,.6); font-size: 30px; }
 .pl-gest.vol { top: 50%; right: 9%; margin-top: -92px; color: #f4ede0; filter: drop-shadow(2px 3px 0 rgba(0,0,0,.6)); }
 .pl-level { width: 30px; height: 150px; overflow: visible; }
 .pl-level path { fill: #f4ede0; }

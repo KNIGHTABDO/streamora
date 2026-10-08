@@ -292,6 +292,10 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   useEffect(() => {
     if (!vlc || autoSubbed.current || !(vt.audio.length || vt.subs.length)) return;
     const want = mem.subLang || s.subsLang;
+    if (mem.subLang === 'off') { autoSubbed.current = true; return; }
+    // the track this show remembered, by name (its language may be unknown)
+    const kept = mem.subName && vt.subs.find(t => t.id >= 0 && t.name === mem.subName);
+    if (kept) { autoSubbed.current = true; vlc.setSub(kept.id); return; }
     if (!want || want === 'off') { autoSubbed.current = true; return; }
     const name = langName(want).toLowerCase();
     const isWant = t => t.name.toLowerCase().includes(name) || new RegExp(`\\b${want}\\b`, 'i').test(t.name);
@@ -301,7 +305,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     if (inFile) { autoSubbed.current = true; vlc.setSub(inFile.id); return; }
     if (!extDone) return;
     autoSubbed.current = true;
-    const hit = ext.find(x => x.lang === want && x.match) || ext.find(x => x.lang === want);
+    const hit = (mem.subId && ext.find(x => x.id === mem.subId)) || ext.find(x => x.lang === want && x.match) || ext.find(x => x.lang === want);
     if (hit) chooseExt(hit);
   }, [vt, extDone]);
   useEffect(() => {
@@ -317,13 +321,16 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       const aud = info && info.details && info.details.audio && audio && info.details.audio[audio];
       const same = aud && aud.lang_iso && !/^(und|unk)$/i.test(aud.lang_iso) && aud.lang_iso === want;
       if (mem.subLang || !same) {
-        const hit = list.find(x => x.lang === want && x.match) || list.find(x => x.lang === want);
+        // the remembered file first, then a language match; with no hit, the file's own track in that language burned in (for a language this show chose)
+        const hit = (mem.subId && list.find(x => x.id === mem.subId)) || list.find(x => x.lang === want && x.match) || list.find(x => x.lang === want);
         if (hit) chooseExt(hit);
+        else if (mem.subLang) { const em = trackLabels((info && info.details && info.details.subtitles) || {}).find(([, x]) => x.lang_iso === want); if (em) setBurn(em[0]); }
       }
     });
   }, [meta && meta.id, video && video.id]);
   const chooseExt = async (it, user) => {
-    if (user) picked.current.subLang = it ? it.lang : 'off';
+    if (user) Object.assign(picked.current, { subLang: it ? it.lang : 'off', subId: null, subName: null });
+    if (user && it) { picked.current.subId = it.id; settings.update(x => ({ ...x, subsLang: it.lang })); }
     if (vlc && (it || user)) vlc.setSub(-1);
     if (!it) { setCur(null); return; }
     setCur({ id: it.id, label: it.label, cues: [], loading: true });
@@ -566,22 +573,20 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       toggle(); poke();
     }
   };
-  // touch gestures: a vertical drag on the right half = volume; holding still = 2× while the finger is down
-  const [gest, setGest] = useState(null);      // { kind: 'vol', level } | { kind: 'hold' }
+  // touch gestures: a vertical drag on the right half = volume
+  const [gest, setGest] = useState(null);      // { kind: 'vol', level }
   const touchG = useRef(null);
   const onDown = e => {
     if (e.pointerType !== 'touch' || !v()) return;
     const r = e.currentTarget.getBoundingClientRect();
     const g = { x: e.clientX, y: e.clientY, h: r.height, right: (e.clientX - r.left) / r.width > .5, vol: v().volume, mode: null };
-    g.timer = setTimeout(() => { if (!v()) return; g.mode = 'hold'; g.rate = v().playbackRate; v().playbackRate = 2; setGest({ kind: 'hold' }); }, 450);
     touchG.current = g;
   };
   const onMove = e => {
     const g = touchG.current;
-    if (!g || g.mode === 'hold') return;
+    if (!g) return;
     if (!g.mode) {
       if (Math.hypot(e.clientX - g.x, e.clientY - g.y) < 12) return;
-      clearTimeout(g.timer);
       if (!g.right || Math.abs(e.clientY - g.y) < Math.abs(e.clientX - g.x)) { g.mode = 'off'; return; }
       g.mode = 'vol';
     }
@@ -593,10 +598,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const endGesture = () => {
     const g = touchG.current;
     touchG.current = null;
-    if (!g) return false;
-    clearTimeout(g.timer);
-    if (g.mode === 'hold' && v()) v().playbackRate = g.rate;
-    if (g.mode !== 'hold' && g.mode !== 'vol') return false;
+    if (!g || g.mode !== 'vol') return false;
     setGest(null);
     return true;
   };
@@ -610,8 +612,8 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     : Object.entries((info && info.details && info.details.audio) || {}).map(([k, a]) => ({ key: k, label: a.lang || langName(a.lang_iso), extra: `${a.codec} ${a.channels}`, on: audio === k, pick: () => { setAudio(k); picked.current.audioLang = a.lang_iso; } }));
   const embeddedWeb = useMemo(() => trackLabels((info && info.details && info.details.subtitles) || {}), [info]);
   const embedded = vlc
-    ? vt.subs.filter(t => t.id >= 0).map(t => ({ key: t.id, label: t.name, on: !cur && vt.subId === t.id, pick: () => { chooseExt(null); vlc.setSub(t.id); } }))
-    : embeddedWeb.map(([k, x, label]) => ({ key: k, label, extra: x.type && String(x.type).toUpperCase(), on: burn === k, pick: () => { chooseExt(null); setBurn(k); picked.current.subLang = x.lang_iso && !/^(und|unk)$/i.test(x.lang_iso) ? x.lang_iso : 'off'; } }));
+    ? vt.subs.filter(t => t.id >= 0).map(t => ({ key: t.id, label: t.name, on: !cur && vt.subId === t.id, pick: () => { chooseExt(null); vlc.setSub(t.id); picked.current.subName = t.name; picked.current.subLang = null; const sl = mem.subLang || s.subsLang; if (sl && sl !== 'off' && t.name.toLowerCase().includes(langName(sl).toLowerCase())) picked.current.subLang = sl; } }))
+    : embeddedWeb.map(([k, x, label]) => ({ key: k, label, extra: x.type && String(x.type).toUpperCase(), on: burn === k, pick: () => { chooseExt(null); setBurn(k); picked.current.subId = null; picked.current.subName = null; const l = x.lang_iso && !/^(und|unk)$/i.test(x.lang_iso) ? x.lang_iso : 'off'; picked.current.subLang = l; if (l !== 'off') settings.update(y => ({ ...y, subsLang: l })); } }));
   const subsOn = !!cur || burn !== 'none' || (!!vlc && vt.subId >= 0);
   useEffect(() => {
     if (!vlc) return;
@@ -646,9 +648,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     ${line.length > 0 && html`<div class="pl-subs" aria-live="off">${line.map(l => html`<span dangerouslySetInnerHTML=${{ __html: l.replace(/\n/g, '<br>') }}></span>`)}</div>`}
 
     ${flash && html`<div class=${'pl-flash ' + flash.side} key=${flash.k}><${Icon} name=${flash.side === 'left' ? 'rewind' : 'forward'} size=${38} /><span>10s</span></div>`}
-    ${gest && (gest.kind === 'hold'
-      ? html`<div class="pl-gest hold"><span class="display">2×</span></div>`
-      : html`<div class="pl-gest vol"><svg viewBox="0 0 30 150" class="pl-level" aria-hidden="true"><path d=${levelFrame} /><rect x="9" y=${144 - gest.level * 132} width="12" height=${gest.level * 132} rx="3" /></svg><span class="type">${Math.round(gest.level * 100)}</span></div>`)}
+    ${gest && html`<div class="pl-gest vol"><svg viewBox="0 0 30 150" class="pl-level" aria-hidden="true"><path d=${levelFrame} /><rect x="9" y=${144 - gest.level * 132} width="12" height=${gest.level * 132} rx="3" /></svg><span class="type">${Math.round(gest.level * 100)}</span></div>`}
     ${st.waiting && !blocked && html`<div class="pl-buffer" aria-label="Buffering"><${Reel} mood="think" size=${96} /></div>`}
     ${blocked && html`<button type="button" class="pl-bigplay" onClick=${toggle} aria-label="Play"><${Icon} name="play" size=${54} /><span class="display">tap to play</span></button>`}
 
