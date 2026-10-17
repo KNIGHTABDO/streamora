@@ -1,5 +1,5 @@
-// Finding sources for a title via Torrentio, marked [RD+] when Real-Debrid already has them cached.
-// Real-Debrid's own "instantAvailability" endpoint is disabled, so Torrentio's flag is the cache check.
+// Finding sources for a title via Torrentio and the built-in debrid addons, marked cached ([RD+], ⚡) when Real-Debrid
+// already has them. Real-Debrid's own "instantAvailability" endpoint is disabled, so the addons' flags are the cache check.
 import { getRdKey } from './store.js';
 import { fetchT } from './net.js';
 
@@ -23,7 +23,7 @@ export function parseStream(s) {
   const fileLine = rest.find(l => /\.(mkv|mp4|avi|mov|m4v|webm|ts)$/i.test(l.trim()));
   return {
     raw: s,
-    cached: /\[RD\+\]/.test(name),
+    cached: /\[RD\+\]|RD ?⚡/.test(name),
     quality,
     rank: QUALITY_RANK[quality] ?? 0,
     hdr: /\bHDR|DV\b|Dolby ?Vision/i.test(text),
@@ -34,7 +34,7 @@ export function parseStream(s) {
     dual: /dual audio|multi/i.test(text),
     size: parseSize(meta),
     seeders: +((/👤\s*(\d+)/.exec(meta) || [])[1] || 0),
-    site: ((/⚙️\s*([^\n]+)/.exec(meta) || [])[1] || '').trim(),
+    site: ((/⚙️\s*([^\n]+)/.exec(rest.join('\n')) || [])[1] || '').trim(),
     langs: (meta.match(/[\u{1F1E6}-\u{1F1FF}]{2}/gu) || []),
     release: release.trim(),
     filename: (s.behaviorHints && s.behaviorHints.filename) || (fileLine && fileLine.trim()) || null,
@@ -42,7 +42,7 @@ export function parseStream(s) {
     fileIdx: s.fileIdx ?? (() => { const m = /\/[a-f0-9]{40}\/[^/]+\/(\d+)\//i.exec(s.url || ''); return m ? +m[1] : undefined; })(),
     // Torrentio adds a file-path line only when the file differs from the torrent (collections like "IMDB Top 250").
     // Packs often resolve to the wrong file on Real-Debrid, so they rank last.
-    pack: rest.some(l => l.trim() && !/👤|💾|⚙️/.test(l)),
+    pack: rest.some(l => l.trim() && !/👤|💾|⚙️/.test(l) && !/^[\s/\u{1F1E6}-\u{1F1FF}]+$/u.test(l)),
     binge: s.behaviorHints && s.behaviorHints.bingeGroup,
   };
 }
@@ -54,7 +54,7 @@ export function parseStream(s) {
 export async function streams(type, id) {
   const key = await getRdKey();
   const cfg = key ? `/sort=qualitysize|realdebrid=${key}` : '/sort=qualitysize';
-  const extraP = import('./addons.js').then(m => m.addonStreams(type, id)).catch(() => []);
+  const extraP = import('./addons.js').then(m => m.addonStreams(type, id, key)).catch(() => []);
   const load = async () => {
     const r = await fetchT(`${TORRENTIO}${cfg}/stream/${type}/${encodeURIComponent(id)}.json`, {}, 12000, 'Torrentio');
     if (!r.ok) throw new Error(`Source search failed (${r.status})`);
@@ -66,8 +66,14 @@ export async function streams(type, id) {
   const extra = await extraP;
   // Torrentio down: the other addons' sources still count; only when nothing answered is it an error
   if (err && !extra.length) throw err;
-  const base = err ? [] : j.streams || [], seen = new Set(base.map(s => s.infoHash));
-  const out = [...base, ...extra.filter(s => !seen.has(s.infoHash))].map(parseStream).filter(s => s.infoHash);
+  // one entry per release; if any addon says Real-Debrid has it cached, it is
+  const byHash = new Map();
+  for (const s of [...(err ? [] : j.streams || []), ...extra].map(parseStream)) {
+    if (!s.infoHash) continue;
+    const h = s.infoHash.toLowerCase(), had = byHash.get(h);
+    if (!had) byHash.set(h, s); else if (s.cached) had.cached = true;
+  }
+  const out = [...byHash.values()];
   if (err) Object.defineProperty(out, 'failed', { value: ['Torrentio'], enumerable: false }); // sources that didn't answer
   return out;
 }

@@ -235,7 +235,7 @@ function AddonsCard() {
   };
   return html`<div class="panel stack">
     <h3><${Icon} name="layers" /> Source addons</h3>
-    <p class="muted">Extra Stremio addons to search for sources next to Torrentio. Only torrent sources are used.</p>
+    <p class="muted">Torrentio, Comet and MediaFusion are built in. Add more Stremio addons to search for sources next to them. Only torrent sources are used.</p>
     ${list.length > 0 && html`<ul class="st-addons">${list.map(a => html`<li key=${a.url}>
       <div><b>${a.name}</b><div class="type faint st-addon-url">${a.url.replace(/^https:\/\//, '').replace(/\/manifest\.json$/, '')}</div></div>
       <${IconBtn} icon="trash" label=${`Remove ${a.name}`} onClick=${() => removeAddon(a.url)} />
@@ -291,7 +291,7 @@ function Privacy() {
         <li><b>Your Google Drive:</b> profiles, watchlists, progress, diary, settings, your Real-Debrid key and Trakt sign-ins, in one file in the "Streamora" folder of your Drive. Streamora can only see files it made itself, never your own. Leave that file be: deleting it removes your data from every device.</li>
         <li><b>This device:</b> a copy of the same, so everything is instant and works offline (localStorage). Your key is AES-encrypted here with a key the browser can't export.</li>
         <li><b>The relays</b> (/api/rd, /api/google) forward requests to Real-Debrid and Google and store nothing.</li>
-        <li><b>Catalog and sources</b> come from Cinemeta, Kitsu and Torrentio. Torrentio receives your key to mark cached sources and start them on your Real-Debrid. <b>Trakt</b> (optional, per profile) sees what you watch.</li>
+        <li><b>Catalog and sources</b> come from Cinemeta, Kitsu, Torrentio, Comet and MediaFusion. The three source addons receive your key to mark cached sources and start them on your Real-Debrid. <b>Trakt</b> (optional, per profile) sees what you watch.</li>
         <li>No analytics, no cookies, no Streamora accounts: your Google account is the only one.</li>
       </ul>
     </div>
@@ -340,7 +340,7 @@ function About() {
     <ul>
       <li><b>Cinemeta</b> for movie and series catalogs and art</li>
       <li><b>Kitsu</b> (anime-kitsu addon) for anime catalogs</li>
-      <li><b>Torrentio</b> for sources and cache flags</li>
+      <li><b>Torrentio</b>, <b>Comet</b> and <b>MediaFusion</b> for sources and cache flags</li>
       <li><b>OpenSubtitles</b> for subtitles</li>
       <li><b>Real-Debrid</b> for streaming and transcoding</li>
       <li>Preact, htm, hls.js, qrcode-generator</li>

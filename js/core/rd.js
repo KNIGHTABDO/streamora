@@ -126,12 +126,13 @@ async function findInAccount(h) {
 }
 
 /**
- * Ask Torrentio to add a source to the user's Real-Debrid, exactly like Stremio does: Real-Debrid's 2026 copyright
- * filter refuses torrent adds from most addresses (even for public-domain films) but accepts Torrentio's.
- * It's a plain request from this device (no CORS needed); Torrentio adds + unlocks the file and redirects,
- * and we stop listening as soon as the answer starts. Then the torrent is simply in the account.
+ * Ask an addon to add a source to the user's Real-Debrid, exactly like Stremio does: Real-Debrid's 2026 copyright
+ * filter refuses torrent adds from most addresses (even for public-domain films) but accepts the addons' servers.
+ * It's a plain request from this device (no CORS needed) to the stream's playback link (Torrentio's resolve link,
+ * Comet's or MediaFusion's playback link); the addon adds + unlocks the file and redirects, and we stop listening
+ * as soon as the answer starts. Then the torrent is simply in the account.
  */
-async function addViaTorrentio(url) {
+async function addViaAddon(url) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), 60000);
   try { await fetch(url, { mode: 'no-cors', cache: 'no-store', signal: ac.signal }); } catch {}
@@ -139,9 +140,9 @@ async function addViaTorrentio(url) {
 }
 
 /**
- * Turn a source into a playable Real-Debrid file. A copy already in the account is used as is; otherwise Torrentio
- * adds it (see addViaTorrentio). `url` is the stream's own Torrentio link when we have it; otherwise one is built
- * from hash + file index + filename. onStep(text) reports progress for the UI.
+ * Turn a source into a playable Real-Debrid file. A copy already in the account is used as is; otherwise an addon
+ * adds it (see addViaAddon): first the stream's own playback link (`url`), then a Torrentio link built from
+ * hash + file index + filename (Torrentio only adds releases it indexes). onStep(text) reports progress for the UI.
  * Returns { downloadId, filename, filesize, direct, hls, torrentId }. direct=true (the app's VLC player) skips the transcode.
  */
 export async function resolveStream({ infoHash, fileIdx, filename, url, season, episode, direct = false }, onStep = () => {}) {
@@ -159,13 +160,17 @@ export async function resolveStream({ infoHash, fileIdx, filename, url, season, 
   if (!t || t.status !== 'downloaded') {
     const key = await getRdKey();
     if (!key) throw new RDError('No Real-Debrid key set.', 'nokey', 0);
-    const tio = url && /^https:\/\/torrentio\.strem\.fun\/resolve\/realdebrid\//.test(url) ? url
-      : `https://torrentio.strem.fun/resolve/realdebrid/${key}/${infoHash}/null/${fileIdx ?? 0}/${encodeURIComponent(filename || 'video')}`;
+    const tio = `https://torrentio.strem.fun/resolve/realdebrid/${key}/${infoHash}/null/${fileIdx ?? 0}/${encodeURIComponent(filename || 'video')}`;
+    const links = url && /^https:\/\//.test(url) ? [url] : [];
+    if (!links.some(u => u.startsWith('https://torrentio.strem.fun/resolve/realdebrid/'))) links.push(tio);
     onStep('Adding it to your Real-Debrid…');
-    await addViaTorrentio(tio);
-    for (let i = 0; i < 4 && !(t && t.status === 'downloaded'); i++) {
-      t = await findInAccount(infoHash);
-      if (!t) await sleep(1000);
+    for (const link of links) {
+      await addViaAddon(link);
+      for (let i = 0; i < 4 && !(t && t.status === 'downloaded'); i++) {
+        t = await findInAccount(infoHash);
+        if (!t) await sleep(1000);
+      }
+      if (t) break;
     }
     if (!t) throw new RDError('Real-Debrid wouldn\'t take this release (its copyright filter) or doesn\'t have it cached. Pick another source marked RD+ cached.', 35, 0);
   }

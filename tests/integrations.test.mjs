@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { merge, mergeSecrets, syncable } from '../js/core/sync.js';
 import { foldWatched, scrobbleBody } from '../js/core/trakt.js';
 import { normalizeStream, checkManifest, manifestUrl } from '../js/core/addons.js';
+import { parseStream } from '../js/core/sources.js';
 import { onRequest as googleFn } from '../functions/api/google/[[path]].js';
 import { allowedUrl } from '../functions/api/addon.js';
 
@@ -101,8 +102,17 @@ assert.deepEqual(scrobbleBody({ id: 'tt5', type: 'series' }, { season: 2, episod
 // ---- addons
 const hash = 'a'.repeat(40);
 assert.deepEqual(normalizeStream({ name: '4k', title: 'x\n💾 1 GB', infoHash: hash.toUpperCase(), fileIdx: 2, behaviorHints: { bingeGroup: 'g', evil: 1 } }, 'Ad'),
-  { name: '[Ad] 4k', title: 'x\n💾 1 GB', infoHash: hash, fileIdx: 2, behaviorHints: { filename: undefined, bingeGroup: 'g' } });
+  { name: '[Ad] 4k', title: 'x\n💾 1 GB ⚙️ Ad', infoHash: hash, fileIdx: 2, url: undefined, behaviorHints: { filename: undefined, bingeGroup: 'g' } });
 assert.equal(normalizeStream({ url: 'https://x/y.mp4' }, 'Ad'), null);
+// Comet: hash in bingeGroup, playback url kept, cached ⚡, size from videoSize when the text has none
+const comet = parseStream(normalizeStream({ name: '[RD⚡] Comet 1080p', description: '📄 A.2020.1080p.mkv\n💾 None 🔎 DMM\n🇹🇷', url: 'https://c.io/playback/x',
+  behaviorHints: { bingeGroup: `comet|realdebrid|${hash}`, filename: 'A.2020.1080p.mkv', videoSize: 2e9 } }, 'Comet'));
+assert.deepEqual([comet.infoHash, comet.cached, comet.raw.url, comet.size, comet.site, comet.langs, comet.pack, comet.quality],
+  [hash, true, 'https://c.io/playback/x', 2e9, 'Comet', ['🇹🇷'], false, '1080p']);
+// MediaFusion: language words become flags, English alone stays unflagged
+const mf = parseStream(normalizeStream({ name: 'MediaFusion 🧲 RD ⏳ 2160p', description: '📺 WEB-DL\n📦 24.52 GB 👤 3\n🌐 Arabic + English\n🔗 Site', infoHash: hash }, 'MediaFusion'));
+assert.deepEqual([mf.cached, mf.size, mf.seeders, mf.langs, mf.pack], [false, 24.52e9, 3, ['🇸🇦', '🇬🇧'], false]);
+assert.deepEqual(parseStream(normalizeStream({ description: '🌐 English', infoHash: hash }, 'M')).langs, []);
 assert.throws(() => checkManifest({ id: 'a', name: 'A', resources: ['catalog'], types: ['movie'] }, 'u'));
 assert.deepEqual(checkManifest({ id: 'a', name: 'A', resources: [{ name: 'stream', types: ['series'], idPrefixes: ['tt'] }], types: ['movie'] }, 'u').types, ['series']);
 assert.equal(manifestUrl('stremio://x.io/cfg/'), 'https://x.io/cfg/manifest.json');

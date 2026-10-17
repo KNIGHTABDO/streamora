@@ -14,8 +14,10 @@ const KEY = readFileSync(new URL('./.rdkey', import.meta.url), 'utf8').trim();
 const shots = fileURLToPath(new URL('./shots/', import.meta.url));
 mkdirSync(shots, { recursive: true });
 
-const browser = await puppeteer.launch({ executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
+const browser = await puppeteer.launch({ executablePath: process.env.CHROME || (process.platform === 'win32' ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : '/usr/bin/google-chrome'), headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
 const page = await browser.newPage();
+await page.setRequestInterception(true);
+page.on('request', r => (/www\.googleapis\.com|\/api\/google\/refresh/.test(r.url()) ? r.abort() : r.continue()));
 await page.setViewport(phone ? { width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true } : { width: 1440, height: 900 });
 const errors = [];
 page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
@@ -27,6 +29,10 @@ await page.evaluate(async KEY => {
   s.activeProfileId.set('test1');
   s.settings.update(x => ({ ...x, nightAuto: false }));
   await s.saveRdKey(KEY);
+  // pretend to be signed in to Google (Drive calls just fail quietly), so the sign-in gate lets us through
+  const { idbSet } = await import('/js/core/idb.js');
+  await idbSet('google', { refresh_token: 'shot', client: 'web', access_token: 'shot', exp: Date.now() + 36e5 });
+  (await import('/js/core/google.js')).account.set({ sub: 'shot', email: 'tester@example.com', name: 'Tester', picture: '' });
 }, KEY);
 await page.goto('http://localhost:5173/' + hash);
 await page.evaluate(() => location.reload());
