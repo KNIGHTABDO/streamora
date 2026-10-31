@@ -1,10 +1,10 @@
 // First run: a tiny flip-book about Streamora, then "Continue with Google" (everything is saved in the account's
-// private Drive folder), then the Real-Debrid key if Drive doesn't have one yet.
+// private Drive folder), then the TorBox key if Drive doesn't have one yet.
 // Devices that used Streamora before Drive get one page and no way around it: sign in, and this device's data moves in.
 import { html, useState, useEffect, useRef } from '../../vendor/preact-htm.js';
 import { Btn, Input, Field, Reel, ErrorNote, Spinner, loadCSS } from '../ui/components.js';
-import { useStore, saveRdKey, keyStore, ls } from '../core/store.js';
-import { user } from '../core/rd.js';
+import { useStore, saveTbKey, keyStore, ls } from '../core/store.js';
+import { user } from '../core/tb.js';
 import { account, returning, signInWithRedirect, startDeviceSignIn, finishDeviceSignIn } from '../core/google.js';
 import { syncNow } from '../core/sync.js';
 import { isNative } from '../player/native.js';
@@ -13,12 +13,12 @@ import { navigate } from '../router.js';
 loadCSS('css/pages/welcome.css');
 
 const PAGES = [
-  { mood: 'wave', title: 'Hi, I\'m Reel.', body: html`Streamora is a sketchbook that plays movies, shows and anime, streamed through <span class="mark">your own Real-Debrid</span>.` },
-  { mood: 'binoculars', title: 'Bring your own key', body: html`You'll need a premium Real-Debrid account. Your API key is at <a class="welcome-link" href="https://real-debrid.com/apitoken" target="_blank" rel="noopener">real-debrid.com/apitoken</a>. You only paste it once.` },
+  { mood: 'wave', title: 'Hi, I\'m Reel.', body: html`Streamora is a sketchbook that plays movies, shows and anime, streamed through <span class="mark">your own TorBox</span>.` },
+  { mood: 'binoculars', title: 'Bring your own key', body: html`You'll need a paid TorBox account. Your API key is at <a class="welcome-link" href="https://torbox.app/settings" target="_blank" rel="noopener">torbox.app/settings</a>. You only paste it once.` },
   { mood: 'love', title: 'Kept in your Google Drive', body: html`Profiles, watchlists and progress are saved in a <span class="mark">Streamora folder in your Google Drive</span>, so every phone, laptop and TV you sign in on picks up where you left off. Streamora can only see the files it made, never your own.` },
 ];
 // used Streamora on this device before it moved to Drive
-const legacy = () => ls.get('profiles', []).length > 0 || !!ls.get('rdkey', null);
+const legacy = () => ls.get('profiles', []).length > 0 || !!ls.get('tbkey', null);
 
 function Title() {
   return html`<svg class="welcome-title" viewBox="0 0 520 120" role="img" aria-label="Streamora">
@@ -112,17 +112,17 @@ function KeyStep() {
     try {
       const k = key.trim();
       const u = await user(k);
-      if (u.type !== 'premium') throw new Error('This Real-Debrid account is not premium. Streaming needs premium.');
+      if (u.type !== 'premium') throw new Error('This TorBox account has no paid plan. Streaming needs one.');
       setWho({ name: u.username, days: Math.max(0, Math.round((new Date(u.expiration) - Date.now()) / 864e5)) });
-      await saveRdKey(k); // goes to Drive with everything else, so other devices won't ask
+      await saveTbKey(k); // goes to Drive with everything else, so other devices won't ask
       setTimeout(() => navigate('/profiles', { replace: true }), 1500);
     } catch (x) { setErr(x); setBusy(false); }
   };
   return html`<form class="stack" onSubmit=${verify}>
     <div class="welcome-reel"><${Reel} mood=${who ? 'party' : busy ? 'think' : err ? 'sad' : 'popcorn'} size=${130} /></div>
-    <h2>Your Real-Debrid key</h2>
-    <${Field} label="API key" hint=${html`Find it at <a class="welcome-link" href="https://real-debrid.com/apitoken" target="_blank" rel="noopener">real-debrid.com/apitoken</a>. It's saved in your Drive, so you only do this once.`}>
-      <${Input} value=${key} onInput=${e => setKey(e.currentTarget.value)} placeholder="Paste it here…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Real-Debrid API key" />
+    <h2>Your TorBox key</h2>
+    <${Field} label="API key" hint=${html`Find it at <a class="welcome-link" href="https://torbox.app/settings" target="_blank" rel="noopener">torbox.app/settings</a>. It's saved in your Drive, so you only do this once.`}>
+      <${Input} value=${key} onInput=${e => setKey(e.currentTarget.value)} placeholder="Paste it here…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="TorBox API key" />
     <//>
     ${err && html`<${ErrorNote} error=${err} compact />`}
     ${who && html`<div class="welcome-stamp" role="status"><span>Premium ✓</span><b>${who.name}</b><small>${who.days} days left</small></div>`}

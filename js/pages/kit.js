@@ -25,7 +25,7 @@ export default function Kit() {
       <${SectionTitle} kicker="buttons">Buttons & chips<//>
       <div class="cluster" style="margin:18px 0">
         <${Btn} variant="primary" icon="play">Primary<//><${Btn} icon="heart">Ink<//><${Btn} variant="ghost" icon="share">Ghost<//>
-        <${Btn} variant="danger" icon="trash">Danger<//><${Btn} size="sm" icon="plus">Small<//><${Btn} variant="stamp">RD+ cached<//>
+        <${Btn} variant="danger" icon="trash">Danger<//><${Btn} size="sm" icon="plus">Small<//><${Btn} variant="stamp">cached<//>
         <${IconBtn} icon="gear" label="Settings" /><${IconBtn} icon="heartFill" label="Loved" active />
       </div>
       <div class="chips" style="margin-bottom:24px">${['Action', 'Cozy', 'Horror', 'Sci-Fi', 'Romance'].map((g, i) => html`<${Chip} active=${i === 1}>${g}<//>`)}</div>
@@ -44,7 +44,7 @@ export default function Kit() {
         <${Btn} onClick=${() => toast('Added to your watchlist', { icon: 'heart' })}>Toast<//>
         <${Btn} onClick=${() => setOpen(true)}>Modal<//>
       </div>
-      <${ErrorNote} error=${new Error('Real-Debrid is too busy right now.')} retry=${() => {}} />
+      <${ErrorNote} error=${new Error('TorBox is too busy right now.')} retry=${() => {}} />
       <${Spinner} />
       <${Modal} open=${open} onClose=${() => setOpen(false)} title="Pick a source"><p>Sheet on phones, card on desktop.</p><${Btn} variant="primary" onClick=${() => setOpen(false)}>Okay<//><//>
 

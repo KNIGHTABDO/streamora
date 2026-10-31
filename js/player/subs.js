@@ -1,5 +1,5 @@
 // Subtitles: OpenSubtitles (Stremio addon, CORS ok) + SRT/VTT parsing for our own overlay.
-// Embedded tracks inside the file can't be fetched separately from Real-Debrid; they are burned in
+// Embedded tracks inside the file can't be fetched separately; they are burned in
 // through the transcode URL's {subtitles} slot instead (see engine.js).
 
 export const OPENSUBS = 'https://opensubtitles-v3.strem.io';

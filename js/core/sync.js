@@ -7,9 +7,9 @@
 // - "did anything change?" is a tiny metadata call (Drive's file `version`); the file is only downloaded when it did,
 //   and only uploaded when something here changed. The file is gzipped JSON.
 // Lists and progress merge item by item (newest wins; deletions stick thanks to `sync-base`), see merge().
-// Secrets (Real-Debrid key, Trakt tokens) travel in the same private file; newest change wins.
+// Secrets (TorBox key, Trakt tokens) travel in the same private file; newest change wins.
 // The active profile, caches and this device's sign-in never sync.
-import { store, ls, exportAll, importAll, profiles, settings, getRdKey, saveRdKey, forgetRdKey } from './store.js';
+import { store, ls, exportAll, importAll, profiles, settings, getTbKey, saveTbKey, forgetTbKey } from './store.js';
 import { addons } from './addons.js';
 import { account, accessToken, SignedOut } from './google.js';
 import { idbGet, idbSet } from './idb.js';
@@ -136,14 +136,14 @@ function adoptStamps(data, stamps) { // after a merge was written locally: the w
 }
 
 /**
- * Secrets: { rd: {v: key|null, at}, trakt: {profileId: token|{off:true}, with `at`} }. Newest `at` wins per entry;
+ * Secrets: { tb: {v: key|null, at}, trakt: {profileId: token|{off:true}, with `at`} }. Newest `at` wins per entry;
  * a tie goes to b (Drive's copy), so two devices that never stamped their key settle on one instead of ping-ponging.
  */
 export function mergeSecrets(a = {}, b = {}) {
   const pick = (x, y) => (!x ? y : !y ? x : (y.at || 0) >= (x.at || 0) ? y : x);
   const ta = a.trakt || {}, tb = b.trakt || {}, trakt = {};
   for (const id of new Set([...Object.keys(ta), ...Object.keys(tb)])) trakt[id] = pick(ta[id], tb[id]);
-  return { rd: pick(a.rd, b.rd) || { v: null, at: 0 }, trakt };
+  return { tb: pick(a.tb, b.tb) || { v: null, at: 0 }, trakt };
 }
 const baseOf = data => Object.fromEntries(Object.entries(data).map(([k, v]) => [k, idsOf(k, v)]).filter(([, v]) => v));
 const canon = d => JSON.stringify(Object.keys(d || {}).sort().map(k => [k, d[k]]));
@@ -157,11 +157,11 @@ const localBundle = () => {
   return { at, data, stamps: stampsOf(stored) };
 };
 async function localSecrets() {
-  const v = await getRdKey();
+  const v = await getTbKey();
   const trakt = {};
   for (const p of profiles.get()) { const t = await idbGet(`trakt:${p.id}`); if (t) trakt[p.id] = t; }
-  if (v && !ls.get('rdkey-at', 0)) ls.set('rdkey-at', 1); // key from before Drive: older than any real change
-  return { rd: { v: v || null, at: ls.get('rdkey-at', 0) }, trakt };
+  if (v && !ls.get('tbkey-at', 0)) ls.set('tbkey-at', 1); // key from before Drive: older than any real change
+  return { tb: { v: v || null, at: ls.get('tbkey-at', 0) }, trakt };
 }
 
 let applying = 0; // remote changes being written locally: don't count them as local edits
@@ -173,9 +173,9 @@ function apply(data) {
 async function applySecrets(next, cur) {
   applying++;
   try {
-    if (next.rd.v !== cur.rd.v) {
-      if (next.rd.v) await saveRdKey(next.rd.v, next.rd.at);
-      else if (next.rd.at) { forgetRdKey(true); ls.set('rdkey-at', next.rd.at); }
+    if (next.tb.v !== cur.tb.v) {
+      if (next.tb.v) await saveTbKey(next.tb.v, next.tb.at);
+      else if (next.tb.at) { forgetTbKey(true); ls.set('tbkey-at', next.tb.at); }
     }
     let traktChanged = false;
     for (const [pid, t] of Object.entries(next.trakt)) {
@@ -333,7 +333,7 @@ export async function initSync() {
   if (started) return;
   started = true;
   // every store write announces its key (store.js); the key and Trakt tokens count too
-  addEventListener('streamora:changed', e => (syncable(e.detail) || e.detail === 'rdkey-state' || e.detail === 'trakt-rev') && changed(e.detail));
+  addEventListener('streamora:changed', e => (syncable(e.detail) || e.detail === 'tbkey-state' || e.detail === 'trakt-rev') && changed(e.detail));
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') pull();
     else if (timer) { clearTimeout(timer); timer = null; syncNow(); } // leaving: save now while the page still runs

@@ -1,5 +1,5 @@
 // Video engine: attaches an HLS (or direct) url to a <video>. Safari/iOS plays HLS natively; others use hls.js.
-// Also builds Real-Debrid transcode urls from mediaInfos().modelUrl so audio / burned-in subs / quality can change.
+// Also builds transcode urls from a media-info modelUrl so audio / burned-in subs / quality can change.
 
 export const QUALITIES = [
   { key: 'original', model: 'full', label: 'Original' },
@@ -21,7 +21,7 @@ export function autoQuality(height, phone) {
   return height && height <= 720 ? 'medium' : 'high';
 }
 
-/** Build a transcode url. model = mediaInfos().modelUrl */
+/** Build a transcode url. model = info.modelUrl */
 export function buildUrl(model, { audio, subs = 'none', quality = 'high', format = 'm3u8' }) {
   const q = (QUALITIES.find(x => x.key === quality) || QUALITIES[1]).model;
   return model.replace('{audio}', audio).replace('{subtitles}', subs || 'none').replace('{audioCodec}', 'aac').replace('{quality}', q).replace('{format}', format);
@@ -68,7 +68,7 @@ export async function attach(video, url, { start = 0, onFatal = () => {} } = {})
   if (!isHls || nativeHls(video)) return plain();
   const Hls = await loadHls();
   if (!Hls.isSupported()) return plain();
-  // RD transcodes on the fly: a cold segment can take 20s+ to appear, so be patient before calling it dead.
+  // HLS is transcoded on the fly: a cold segment can take 20s+ to appear, so be patient before calling it dead.
   const slow = { maxTimeToFirstByteMs: 60000, maxLoadTimeMs: 90000, timeoutRetry: { maxNumRetry: 4, retryDelayMs: 1000, maxRetryDelayMs: 4000 }, errorRetry: { maxNumRetry: 6, retryDelayMs: 1000, maxRetryDelayMs: 8000 } };
   const hls = new Hls({ startPosition: start > 0 ? start : -1, maxBufferLength: 120, maxMaxBufferLength: 300, maxBufferSize: 150e6, backBufferLength: 90, maxBufferHole: 1, startFragPrefetch: true, enableWorker: true,
     fragLoadPolicy: { default: slow }, playlistLoadPolicy: { default: slow }, manifestLoadPolicy: { default: slow } });

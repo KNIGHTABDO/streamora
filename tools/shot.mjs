@@ -1,6 +1,6 @@
 // Screenshot / smoke-test helper (needs `node dev-server.mjs` running on :5173).
 //   node tools/shot.mjs "#/movies" [--phone] [--tv] [--theme riso] [--wait 4000] [--out name] [--click selector] [--fresh] [--seed-demo]
-// Seeds the Real-Debrid key (tools/.rdkey) and a test profile, then prints console errors + saves tools/shots/<name>.png
+// Seeds the TorBox key (tools/.tbkey) and a test profile, then prints console errors + saves tools/shots/<name>.png
 import puppeteer from 'puppeteer-core';
 import { readFileSync, mkdirSync } from 'node:fs';
 
@@ -12,7 +12,7 @@ const theme = flag('theme', 'ink');
 const wait = +flag('wait', 3500);
 const out = flag('out', (hash.replace(/[^a-z0-9]+/gi, '_') || 'home') + (phone ? '_phone' : tv ? '_tv' : ''));
 const base = 'http://localhost:' + (process.env.PORT || 5173);
-const KEY = readFileSync(new URL('./.rdkey', import.meta.url), 'utf8').trim();
+const KEY = readFileSync(new URL('./.tbkey', import.meta.url), 'utf8').trim();
 const exe = process.env.CHROME || (process.platform === 'win32' ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : '/usr/bin/google-chrome');
 
 const browser = await puppeteer.launch({ executablePath: exe, headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
@@ -40,7 +40,7 @@ if (!flag('fresh', false)) {
     } else s.profiles.update(p => p.map(x => ({ ...x, theme })));
     s.activeProfileId.set('test1');
     s.settings.update(x => ({ ...x, nightAuto: theme === 'blueprint' }));
-    await s.saveRdKey(KEY);
+    await s.saveTbKey(KEY);
     // pretend to be signed in to Google (Drive calls just fail quietly), so the sign-in gate lets us through
     const { idbSet } = await import('/js/core/idb.js');
     await idbSet('google', { refresh_token: 'shot', client: 'web', access_token: 'shot', exp: Date.now() + 36e5 });

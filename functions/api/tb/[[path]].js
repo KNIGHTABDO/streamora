@@ -1,5 +1,5 @@
-// Cloudflare Pages Function: /api/rd/* -> api.real-debrid.com/rest/1.0/*
-// The browser can't call Real-Debrid directly (no CORS). This relays the request as-is.
+// Cloudflare Pages Function: /api/tb/* -> api.torbox.app/v1/api/*
+// The browser can't call TorBox directly (no CORS). This relays the request as-is.
 // The user's key arrives in the Authorization header and is never stored here.
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 
@@ -18,16 +18,24 @@ export async function onRequest({ request, params }) {
   const segs = [].concat(params.path || []);
   if (segs.some(s => s === '..' || s === '.' || /[\\/]/.test(s))) return json(400, { error: 'bad_path' });
   const path = segs.map(encodeURIComponent).join('/');
-  const headers = { Authorization: request.headers.get('Authorization') || '' };
+  const auth = request.headers.get('Authorization') || '';
+  // requestdl takes the key in the query. Adding it here keeps it out of the browser's request URL, and user_ip
+  // makes TorBox pick a CDN near the viewer rather than near this relay.
+  if (segs[segs.length - 1] === 'requestdl') {
+    url.searchParams.set('token', auth.replace(/^Bearer\s+/i, ''));
+    const ip = request.headers.get('CF-Connecting-IP');
+    if (ip) url.searchParams.set('user_ip', ip);
+  }
+  const headers = { Authorization: auth };
   const init = { method: request.method, headers };
   if (!['GET', 'HEAD'].includes(request.method)) {
     init.body = await request.arrayBuffer();
     const ct = request.headers.get('Content-Type');
-    if (ct) headers['Content-Type'] = ct;
+    if (ct) headers['Content-Type'] = ct; // multipart boundary included
   }
   let r;
-  try { r = await fetch(`https://api.real-debrid.com/rest/1.0/${path}${url.search}`, init); }
-  catch (e) { return json(502, { error: 'relay_failed', detail: String(e) }); }
+  try { r = await fetch(`https://api.torbox.app/v1/api/${path}${url.search}`, init); }
+  catch { return json(502, { success: false, error: 'relay_failed' }); }
   const out = new Headers();
   out.set('Content-Type', r.headers.get('Content-Type') || 'application/json');
   out.set('Cache-Control', 'no-store');

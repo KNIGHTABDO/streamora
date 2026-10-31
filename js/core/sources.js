@@ -1,6 +1,6 @@
-// Finding sources for a title via Torrentio and the built-in debrid addons, marked cached ([RD+], ⚡) when Real-Debrid
-// already has them. Real-Debrid's own "instantAvailability" endpoint is disabled, so the addons' flags are the cache check.
-import { getRdKey } from './store.js';
+// Finding sources for a title via Torrentio and the built-in debrid addons. TorBox's own cache check decides what's
+// cached; the addons' flags ([TB+], ⚡) only count when that check can't answer.
+import { getTbKey } from './store.js';
 import { fetchT } from './net.js';
 
 export const TORRENTIO = 'https://torrentio.strem.fun';
@@ -23,7 +23,7 @@ export function parseStream(s) {
   const fileLine = rest.find(l => /\.(mkv|mp4|avi|mov|m4v|webm|ts)$/i.test(l.trim()));
   return {
     raw: s,
-    cached: /\[RD\+\]|RD ?⚡/.test(name),
+    cached: /\[TB\+\]|\bTB ?⚡|\bTRB ?⚡/.test(name),
     quality,
     rank: QUALITY_RANK[quality] ?? 0,
     hdr: /\bHDR|DV\b|Dolby ?Vision/i.test(text),
@@ -41,7 +41,7 @@ export function parseStream(s) {
     infoHash: s.infoHash || (/\/([a-f0-9]{40})\//i.exec(s.url || '') || [])[1] || null,
     fileIdx: s.fileIdx ?? (() => { const m = /\/[a-f0-9]{40}\/[^/]+\/(\d+)\//i.exec(s.url || ''); return m ? +m[1] : undefined; })(),
     // Torrentio adds a file-path line only when the file differs from the torrent (collections like "IMDB Top 250").
-    // Packs often resolve to the wrong file on Real-Debrid, so they rank last.
+    // Packs can hold many files and may start the wrong one, so they rank last.
     pack: rest.some(l => l.trim() && !/👤|💾|⚙️/.test(l) && !/^[\s/\u{1F1E6}-\u{1F1FF}]+$/u.test(l)),
     binge: s.behaviorHints && s.behaviorHints.bingeGroup,
   };
@@ -52,8 +52,8 @@ export function parseStream(s) {
  * For series pass the *video id* (episode id), for movies the meta id.
  */
 export async function streams(type, id) {
-  const key = await getRdKey();
-  const cfg = key ? `/sort=qualitysize|realdebrid=${key}` : '/sort=qualitysize';
+  const key = await getTbKey();
+  const cfg = key ? `/sort=qualitysize|torbox=${key}` : '/sort=qualitysize';
   const extraP = import('./addons.js').then(m => m.addonStreams(type, id, key)).catch(() => []);
   const load = async () => {
     const r = await fetchT(`${TORRENTIO}${cfg}/stream/${type}/${encodeURIComponent(id)}.json`, {}, 12000, 'Torrentio');
@@ -66,7 +66,7 @@ export async function streams(type, id) {
   const extra = await extraP;
   // Torrentio down: the other addons' sources still count; only when nothing answered is it an error
   if (err && !extra.length) throw err;
-  // one entry per release; if any addon says Real-Debrid has it cached, it is
+  // one entry per release; if any addon says it's cached, it is (until TorBox itself says otherwise below)
   const byHash = new Map();
   for (const s of [...(err ? [] : j.streams || []), ...extra].map(parseStream)) {
     if (!s.infoHash) continue;
@@ -74,6 +74,11 @@ export async function streams(type, id) {
     if (!had) byHash.set(h, s); else if (s.cached) had.cached = true;
   }
   const out = [...byHash.values()];
+  if (key && out.length) {
+    const { checkCached } = await import('./tb.js');
+    const have = await checkCached([...byHash.keys()]).catch(() => null);
+    if (have) out.forEach(s => { s.cached = have.has(s.infoHash.toLowerCase()); });
+  }
   if (err) Object.defineProperty(out, 'failed', { value: ['Torrentio'], enumerable: false }); // sources that didn't answer
   return out;
 }
@@ -86,7 +91,7 @@ const langMismatch = (s, lang) => !!lang && !!s.langs && s.langs.length > 0 && !
 
 /**
  * Sort best-first for this device.
- * prefs: { maxQuality:'2160p'|'1080p'|..., cachedOnly, preferSmall (phones), preferBinge, audioLang (ISO 639-2, e.g. 'eng'), preferMp4 (no native mkv) }
+ * prefs: { maxQuality:'2160p'|'1080p'|..., cachedOnly, preferSmall (phones), preferBinge, audioLang (ISO 639-2, e.g. 'eng'), preferMp4 (no native mkv), mp4First (mkv can't play at all here) }
  */
 export function rankStreams(list, prefs = {}) {
   const max = QUALITY_RANK[prefs.maxQuality || '2160p'] ?? 4;
@@ -98,8 +103,11 @@ export function rankStreams(list, prefs = {}) {
     x += (s.rank <= max ? s.rank : max - (s.rank - max)) * 60;
     if (prefs.preferBinge && s.binge === prefs.preferBinge) x += 400;
     if (langMismatch(s, prefs.audioLang)) x -= 300;
-    // mp4 plays directly (no RD transcode) where mkv can't, e.g. Safari; wins ties within a quality tier
-    if (prefs.preferMp4 && /\.(mp4|m4v)$/i.test(s.filename || '')) x += 55;
+    // mp4 plays directly where mkv can't, e.g. Safari; wins ties within a quality tier
+    const mp4 = /\.(mp4|m4v)$/i.test(s.filename || '');
+    if (prefs.preferMp4 && mp4) x += 55;
+    // browsers often can't decode these inside an mp4 either, so plain h264/aac copies go first
+    if (prefs.mp4First && mp4) x += /x265|hevc|h\.?265|e?ac-?3|ddp|dd[+ .]?5|dts|truehd/i.test(`${s.filename} ${s.release}`) ? 500 : 700;
     const gb = s.size / 1e9;
     // huge remuxes transcode slowly; favour sane sizes, more so on phones
     x -= prefs.preferSmall ? gb * 4 : gb * 2 + Math.max(0, gb - 20) * 6;
@@ -116,6 +124,6 @@ export const isPhone = () => matchMedia('(max-width: 700px)').matches || /iPhone
 
 export const fmtSize = b => !b ? '' : b >= 1e9 ? `${(b / 1e9).toFixed(b >= 1e10 ? 0 : 1)} GB` : `${Math.round(b / 1e6)} MB`;
 
-// true where the browser can't play mkv itself (Safari/iOS), so mp4 releases skip the transcoder (the app's VLC player plays mkv)
+// true where the browser can't play mkv itself (Safari/iOS), so mp4 releases go first (the app's VLC player plays mkv)
 export const noMkv = () => typeof document !== 'undefined' && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())
   && !document.createElement('video').canPlayType('video/x-matroska');

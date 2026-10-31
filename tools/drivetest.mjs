@@ -8,7 +8,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
 const exe = process.env.CHROME || (process.platform === 'win32' ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : '/usr/bin/google-chrome');
-const KEY = readFileSync(new URL('./.rdkey', import.meta.url), 'utf8').trim();
+const KEY = readFileSync(new URL('./.tbkey', import.meta.url), 'utf8').trim();
 const base = 'http://localhost:5173';
 mkdirSync(new URL('./shots/', import.meta.url), { recursive: true });
 
@@ -94,8 +94,8 @@ await A.page.evaluate(async KEY => {
   s.profiles.set([{ id: 'pA', name: 'Anna', avatar: 'cat', theme: 'ink', ink: '#ff4f79', created: 1 }]);
   s.activeProfileId.set('pA');
   s.watchlist.set([{ id: 'tt0111161', type: 'movie', name: 'The Shawshank Redemption', added: 1 }]);
-  await s.saveRdKey(KEY);
-  localStorage.removeItem('streamora:rdkey-at'); // like a key saved before Drive existed
+  await s.saveTbKey(KEY);
+  localStorage.removeItem('streamora:tbkey-at'); // like a key saved before Drive existed
 }, KEY);
 await A.page.goto(base + '/#/', { waitUntil: 'networkidle2' }); await A.page.reload({ waitUntil: 'networkidle2' });
 await A.wait(800);
@@ -108,9 +108,9 @@ await A.signIn();
 await A.page.waitForFunction(() => location.hash.startsWith('#/profiles') || location.hash === '#/', { timeout: 15000 });
 await A.wait(500);
 let d = driveJson();
-assert.equal(d.secrets.rd.v, KEY, 'key moved to Drive');
+assert.equal(d.secrets.tb.v, KEY, 'key moved to Drive');
 assert.equal(d.data['p:pA:watchlist'][0].id, 'tt0111161', 'watchlist moved to Drive');
-assert.ok(!('activeProfile' in d.data) && !('rdkey' in d.data), 'device-only keys stay home');
+assert.ok(!('activeProfile' in d.data) && !('tbkey' in d.data), 'device-only keys stay home');
 console.log('A migrated:', log.join(', ')); log.length = 0;
 
 // ---- B: fresh device, same Google account
@@ -158,7 +158,7 @@ await B.page.goto(base + '/#/settings', { waitUntil: 'networkidle2' }); await B.
 assert.match(await B.page.evaluate(() => document.body.innerText), /test@example\.com/);
 await B.shot('4-settings');
 
-const errs = [...A.errors, ...B.errors].filter(e => !/real-debrid|torrentio|cinemeta|metahub|kitsu|Failed to load resource/i.test(e));
+const errs = [...A.errors, ...B.errors].filter(e => !/torbox|torrentio|cinemeta|metahub|kitsu|Failed to load resource/i.test(e));
 console.log(errs.length ? errs.join('\n') : 'no page errors');
 assert.equal(errs.length, 0);
 console.log('drivetest: all passed', [...files.keys()].length, 'file(s) in Drive');

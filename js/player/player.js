@@ -1,6 +1,6 @@
 // The Streamora player: a <video> wrapped in hand-drawn controls.
 // Props:
-//   meta, video (episode or null), stream {hls, direct, downloadId, filename}, info (mediaInfos or null),
+//   meta, video (episode or null), stream {hls, direct, downloadId, filename}, info (media info or null),
 //   start (seconds), source {infoHash, fileIdx, binge, release, quality, filename} | null, noProgress,
 //   live (a ref: gets the current position in seconds, so a source switch can resume there),
 //   onFatal(err, pos) (stream died or stalled; pos = real seconds to resume at: parent tries another source), onPickSource(), onBack()
@@ -56,7 +56,7 @@ function pickAudio(info, pref) {
   return keys.find(k => a[k].lang_iso === pref) || keys[0];
 }
 
-// Embedded tracks often have no language tag (RD reports "Unknown"/"und"): label them by language when
+// Embedded tracks often have no language tag (often "Unknown"/"und"): label them by language when
 // known, "Track N" otherwise, and number duplicates ("English · 2"). -> [[key, track, label]]
 function trackLabels(tracks) {
   const known = x => x.lang_iso && !/^(und|unk|mis|zxx)$/i.test(x.lang_iso) && !/^unknown$/i.test(x.lang || '');
@@ -93,7 +93,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const [quality, setQuality] = useState(() => (s.quality && s.quality !== 'auto' ? s.quality : autoQuality(height, phone)));
   const [audio, setAudio] = useState(() => pickAudio(info, mem.audioLang || s.audioLang));
   const [burn, setBurn] = useState('none');            // embedded subtitle key burned into the video
-  // Direct play: an h264 mp4 the device decodes itself needs no RD transcode (which can fall behind realtime → stalls).
+  // Direct play: an h264 mp4 the device decodes itself needs no transcode (which can fall behind realtime → stalls).
   // Only while nothing needs the transcoder (default audio, no burned subs, quality untouched); dropped on error.
   const [direct, setDirect] = useState(() => directOk(stream, info));
   const url = useMemo(() => {
@@ -101,7 +101,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     if (direct && burn === 'none' && (!audio || audio === pickAudio(info))) return stream.direct;
     if (info && info.modelUrl && audio) return buildUrl(info.modelUrl, { audio, subs: burn, quality });
     const h = stream.hls || {};
-    return h[quality] || h.high || h.original || Object.values(h).find(Boolean) || (/\.(mp4|webm|m4v)(\?|$)/i.test(stream.direct || '') ? stream.direct : null);
+    return h[quality] || h.high || h.original || Object.values(h).find(Boolean) || (/\.(mp4|webm|m4v)$/i.test(stream.filename || '') ? stream.direct : null);
   }, [info, audio, burn, quality, stream, direct]);
 
   // ------------------------------------------------ playback state
@@ -111,10 +111,10 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const [ui, setUi] = useState(true);                  // controls visible
   const [menu, setMenu] = useState(null);              // null | 'settings' | 'subs' | 'audio' | 'episodes'
   const [flash, setFlash] = useState(null);            // double-tap feedback
-  // RD transcodes on the fly and only serves segments near where it is converting, so a far seek
+  // A live transcode only serves segments near where it is converting, so a far seek
   // can't just set currentTime: it re-requests the playlist with ?t=<seconds>, which restarts the
   // conversion there. offRef = the real time of the stream's first segment; real time = off + currentTime.
-  const isTc = /stream\.real-debrid\.com\/t\//.test(url || '');
+  const isTc = false; // no offset-based transcode with TorBox: its HLS seeks normally
   const posRef = useRef(start);          // real position to (re)start at
   const seekPending = useRef(false);     // a far seek set posRef; don't let the re-attach cleanup overwrite it
   const offRef = useRef(0);
@@ -309,7 +309,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     if (hit) chooseExt(hit);
   }, [vt, extDone]);
   useEffect(() => {
-    if (!meta || String(meta.id).startsWith('rd:')) return;
+    if (!meta || String(meta.id).startsWith('tb:')) return;
     openSubs(meta.type, video ? video.id : meta.id, release).then(list => {
       setExt(list);
       // auto-pick: this show's remembered language, else the preferred one when the audio isn't in it
@@ -606,7 +606,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 600); return () => clearTimeout(t); }, [flash]);
 
   // ------------------------------------------------ render
-  // audio + in-file subtitle choices: RD's media info on the web, VLC's own track list in VLC mode
+  // audio + in-file subtitle choices: media info on the web when available, VLC's own track list in VLC mode
   const audios = vlc
     ? vt.audio.filter(t => t.id >= 0).map(t => ({ key: t.id, label: t.name, on: vt.audioId === t.id, pick: () => vlc.setAudio(t.id) }))
     : Object.entries((info && info.details && info.details.audio) || {}).map(([k, a]) => ({ key: k, label: a.lang || langName(a.lang_iso), extra: `${a.codec} ${a.channels}`, on: audio === k, pick: () => { setAudio(k); picked.current.audioLang = a.lang_iso; } }));

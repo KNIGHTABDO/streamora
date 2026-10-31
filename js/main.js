@@ -77,7 +77,7 @@ export const MAIN_NAV = [
   { href: '#/movies', path: '/movies', label: 'Movies', icon: 'film' },
   { href: '#/shows', path: '/shows', label: 'Shows', icon: 'tv' },
   { href: '#/anime', path: '/anime', label: 'Anime', icon: 'anime' },
-  { href: '#/myrd', path: '/myrd', label: 'My RD', icon: 'cloud' },
+  { href: '#/myrd', path: '/myrd', label: 'My TorBox', icon: 'cloud' },
 ];
 export const MORE_NAV = [
   { group: 'Discover', items: [

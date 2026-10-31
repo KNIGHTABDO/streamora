@@ -1,7 +1,7 @@
-// #/myrd : your own Real-Debrid library, grouped by title and matched to posters.
+// #/myrd : your own TorBox library, grouped by title and matched to posters.
 import { html, useState, useEffect, useMemo } from '../../vendor/preact-htm.js';
-import { Page, Grid, Tabs, Chip, Btn, IconBtn, Modal, Empty, ErrorNote, Spinner, Underline, PosterCard, Icon, loadCSS, useAsync, toast, hrefTitle, plural, cx } from '../ui/components.js';
-import { user, trafficToday, allTorrents, downloads, torrentInfo, deleteTorrent, deleteDownload, VIDEO_RE } from '../core/rd.js';
+import { Page, Grid, Tabs, Chip, Btn, IconBtn, Modal, Empty, ErrorNote, Underline, PosterCard, Icon, loadCSS, useAsync, toast, hrefTitle, plural, cx } from '../ui/components.js';
+import { user, torrents as listTorrents, webDownloads, deleteTorrent, deleteWeb, videoFiles, libraryRef } from '../core/tb.js';
 import { resolveTitle } from '../core/meta.js';
 import { fmtSize } from '../core/sources.js';
 import { parse } from '../core/parse.js';
@@ -10,13 +10,16 @@ import { pool } from '../lib/pool.js';
 
 loadCSS('css/pages/myrd.css');
 
-export const watchHref = (link, name) => `#/watch/rd/${encodeURIComponent(link)}?name=${encodeURIComponent(name || '')}`;
+export const watchHref = (t, f, name) => `#/watch/tb/${encodeURIComponent(libraryRef(t, f))}?name=${encodeURIComponent(name || f.name || '')}`;
+const remove = t => (t.kind === 'web' ? deleteWeb : deleteTorrent)(t.id);
 
 // ---------- grouping + matching ----------
 function groupTorrents(list) {
   const groups = new Map();
   for (const t of list) {
     const p = parse(t.filename);
+    // a torrent named without a year often has it on the file ("Adam [HD1080]" holds Adam.2009...mp4); the poster match needs it
+    if (!p.year) { const main = videoFiles(t).sort((a, b) => b.bytes - a.bytes)[0]; if (main) p.year = parse(main.name).year; }
     const kind = p.anime ? 'anime' : p.type;
     const key = `${kind}:${p.title.toLowerCase()}${p.type === 'movie' && p.year ? ':' + p.year : ''}`;
     if (!groups.has(key)) groups.set(key, { key, title: p.title || t.filename, year: p.year, type: p.type, kind, torrents: [], seasons: new Set(), eps: 0, bytes: 0, added: 0 });
@@ -36,7 +39,7 @@ function useMatches(groups) {
   useEffect(() => {
     let alive = true;
     pool(groups, 6, async g => {
-      const m = await resolveTitle(g.title, g.year, g.kind === 'anime' ? 'anime' : g.type);
+      const m = await (g.kind === 'anime' ? resolveTitle(g.title, g.year, 'anime') : resolveTitle(g.title, g.year, g.type, { strict: true }));
       if (alive && m) set(s => ({ ...s, [g.key]: m }));
     });
     return () => { alive = false; };
@@ -50,32 +53,23 @@ function Account({ u }) {
   if (!u) return null;
   const d = daysLeft(u);
   return html`<div class="myrd-account">
-    <div><div class="kicker type">signed in as</div><b class="myrd-user display">${u.username}</b><div class="type faint">${u.points} fidelity points</div>
-      <div class="type faint">premium until ${new Date(u.expiration).toLocaleDateString()}${u.traffic != null ? ` · ${fmtSize(u.traffic)} used today` : ''}</div></div>
+    <div><div class="kicker type">signed in as</div><b class="myrd-user display">${u.username}</b>
+      <div class="type faint">premium until ${new Date(u.expiration).toLocaleDateString()}</div></div>
     <div class=${cx('myrd-stamp', d < 7 && 'low')} title=${`Premium until ${new Date(u.expiration).toLocaleDateString()}`}>
-      <span class="type">${u.type}</span><b>${d}</b><span class="type">days left</span>
+      <span class="type">${u.plan}</span><b>${d}</b><span class="type">days left</span>
     </div>
   </div>`;
 }
 
 // ---------- library ----------
 function GroupModal({ group, match, onClose, onDeleted }) {
-  const [files, setFiles] = useState({}); // torrentId -> [{name, link, bytes}] | 'loading'
+  const [files, setFiles] = useState({}); // torrent id -> true when its file list is open
   const [confirm, setConfirm] = useState(null);
   if (!group) return null;
   const sorted = group.torrents.slice().sort((a, b) => ((a.parsed.season ?? 0) - (b.parsed.season ?? 0)) || ((a.parsed.episode ?? 0) - (b.parsed.episode ?? 0)) || a.filename.localeCompare(b.filename));
 
-  const expand = async t => {
-    setFiles(f => ({ ...f, [t.id]: 'loading' }));
-    try {
-      const info = await torrentInfo(t.id);
-      const sel = info.files.filter(f => f.selected);
-      const list = sel.map((f, i) => ({ name: f.path.split('/').pop(), link: info.links[i], bytes: f.bytes })).filter(f => f.link && VIDEO_RE.test(f.name));
-      setFiles(f => ({ ...f, [t.id]: list }));
-    } catch (e) { toast(e.message, { kind: 'error' }); setFiles(f => ({ ...f, [t.id]: undefined })); }
-  };
   const del = async t => {
-    try { await deleteTorrent(t.id); toast('Removed from Real-Debrid', { icon: 'trash' }); onDeleted(t.id); }
+    try { await remove(t); toast('Removed from TorBox', { icon: 'trash' }); onDeleted(t.id); }
     catch (e) { toast(e.message, { kind: 'error' }); }
     setConfirm(null);
   };
@@ -84,30 +78,29 @@ function GroupModal({ group, match, onClose, onDeleted }) {
     ${match && html`<a class="myrd-matched" href=${hrefTitle(match)} onClick=${onClose}><${Icon} name="info" size=${18} /> Open the ${match.type === 'series' ? 'show' : 'movie'} page</a>`}
     <ul class="myrd-files">
       ${sorted.map(t => {
-        const p = t.parsed, fs = files[t.id];
-        const multi = t.links && t.links.length > 1;
+        const p = t.parsed, open = files[t.id], vids = videoFiles(t);
+        const multi = vids.length > 1;
         return html`<li key=${t.id}>
           <div class="myrd-file">
             <span class="myrd-file-tag type">${p.season != null ? `S${p.season}${p.episode != null ? ' E' + p.episode : ''}` : p.episode != null ? `E${p.episode}` : p.quality || 'file'}</span>
             <span class="myrd-file-name" title=${t.filename}>${t.filename}</span>
-            <span class="type faint">${fmtSize(t.bytes)}${multi ? ` · ${t.links.length} files` : ''}</span>
+            <span class="type faint">${fmtSize(t.bytes)}${multi ? ` · ${vids.length} files` : ''}</span>
             <span class="cluster">
-              ${t.status !== 'downloaded' ? html`<span class="type">${t.status} ${t.progress}%</span>`
-                : multi ? html`<${Btn} size="sm" icon=${fs ? 'up' : 'list'} onClick=${() => (fs ? setFiles(f => ({ ...f, [t.id]: undefined })) : expand(t))}>Files<//>`
-                : html`<${Btn} size="sm" variant="primary" icon="play" href=${watchHref(t.links[0], t.filename)}>Play<//>`}
+              ${t.status !== 'downloaded' ? html`<span class="type">${t.state} ${t.progress}%</span>`
+                : multi ? html`<${Btn} size="sm" icon=${open ? 'up' : 'list'} onClick=${() => setFiles(f => ({ ...f, [t.id]: !open }))}>Files<//>`
+                : vids[0] ? html`<${Btn} size="sm" variant="primary" icon="play" href=${watchHref(t, vids[0], t.filename)}>Play<//>` : null}
               <${IconBtn} icon="trash" label="Delete" onClick=${() => setConfirm(t)} />
             </span>
           </div>
-          ${fs === 'loading' && html`<${Spinner} label="opening the torrent…" size=${40} />`}
-          ${Array.isArray(fs) && html`<ul class="myrd-subfiles">${fs.map(f => html`<li>
+          ${open && html`<ul class="myrd-subfiles">${vids.map(f => html`<li>
             <span class="myrd-file-name">${f.name}</span><span class="type faint">${fmtSize(f.bytes)}</span>
-            <${Btn} size="sm" variant="primary" icon="play" href=${watchHref(f.link, f.name)}>Play<//>
+            <${Btn} size="sm" variant="primary" icon="play" href=${watchHref(t, f)}>Play<//>
           </li>`)}</ul>`}
         </li>`;
       })}
     </ul>
-    <${Modal} open=${!!confirm} title="Delete from Real-Debrid?" onClose=${() => setConfirm(null)}>
-      <p>This removes <b>${confirm && confirm.filename}</b> from your Real-Debrid account. You can always add it again.</p>
+    <${Modal} open=${!!confirm} title="Delete from TorBox?" onClose=${() => setConfirm(null)}>
+      <p>This removes <b>${confirm && confirm.filename}</b> from your TorBox account. You can always add it again.</p>
       <div class="cluster"><${Btn} variant="danger" icon="trash" onClick=${() => del(confirm)}>Delete<//><${Btn} variant="ghost" onClick=${() => setConfirm(null)}>Keep it<//></div>
     <//>
   <//>`;
@@ -121,7 +114,7 @@ function Library({ torrents, onDeleted }) {
   const matches = useMatches(groups);
   const shown = groups.filter(g => kind === 'all' || g.kind === kind)
     .sort(sort === 'az' ? (a, b) => a.title.localeCompare(b.title) : sort === 'size' ? (a, b) => b.bytes - a.bytes : (a, b) => b.added - a.added);
-  if (!groups.length) return html`<${Empty} mood="popcorn" title="Your Real-Debrid is empty" text="Anything you play in Streamora or add on real-debrid.com shows up here." action=${html`<${Btn} href="#/add" icon="magnet">Add a magnet<//>`} />`;
+  if (!groups.length) return html`<${Empty} mood="popcorn" title="Your TorBox is empty" text="Anything you play in Streamora or add on torbox.app shows up here." action=${html`<${Btn} href="#/add" icon="magnet">Add a magnet<//>`} />`;
   const count = k => groups.filter(g => g.kind === k).length;
   return html`
     <div class="spread myrd-filters">
@@ -138,7 +131,7 @@ function Library({ torrents, onDeleted }) {
       const label = g.type === 'series'
         ? [g.seasons.size && `S${[...g.seasons].sort((a, b) => a - b).join(', ')}`, g.eps ? plural(g.eps, 'ep') : plural(g.torrents.length, 'pack')].filter(Boolean).join(' · ')
         : `${g.year || ''}${g.year ? ' · ' : ''}${fmtSize(g.bytes)}`;
-      const item = { id: 'rd:' + hash(g.key), name: m ? m.name : g.title, poster: m && m.poster, year: g.year };
+      const item = { id: 'tb:' + hash(g.key), name: m ? m.name : g.title, poster: m && m.poster, year: g.year };
       return html`<${PosterCard} key=${g.key} item=${item} label=${label} onClick=${() => setOpen(g)} badge=${g.torrents.some(t => /2160p|4k/i.test(t.filename)) ? '4K' : null} />`;
     }} />
     ${open && html`<${GroupModal} group=${open} match=${matches[open.key]} onClose=${() => setOpen(null)}
@@ -148,30 +141,30 @@ function Library({ torrents, onDeleted }) {
 // ---------- downloads (torrents still in progress) ----------
 function Active({ torrents, onDeleted }) {
   const active = torrents.filter(t => t.status !== 'downloaded');
-  if (!active.length) return html`<${Empty} mood="sleep" title="Nothing downloading" text="Uncached sources you start show their progress here while Real-Debrid fetches them." />`;
-  const bad = s => ['error', 'magnet_error', 'virus', 'dead'].includes(s);
+  if (!active.length) return html`<${Empty} mood="sleep" title="Nothing downloading" text="Uncached sources you start show their progress here while TorBox fetches them." />`;
+  const bad = s => s === 'error';
   return html`<ul class="myrd-active">${active.map(t => html`<li key=${t.id} class=${cx('panel', bad(t.status) && 'bad')}>
     <div class="spread">
       <span class="myrd-file-name" title=${t.filename}>${t.filename}</span>
-      <span class="cluster"><span class=${cx('myrd-status type', bad(t.status) && 'bad')}>${t.status.replace(/_/g, ' ')}</span>
-      <${IconBtn} icon="trash" label="Delete" onClick=${async () => { try { await deleteTorrent(t.id); onDeleted(t.id); toast('Removed'); } catch (e) { toast(e.message, { kind: 'error' }); } }} /></span>
+      <span class="cluster"><span class=${cx('myrd-status type', bad(t.status) && 'bad')}>${t.state || t.status}</span>
+      <${IconBtn} icon="trash" label="Delete" onClick=${async () => { try { await remove(t); onDeleted(t.id); toast('Removed'); } catch (e) { toast(e.message, { kind: 'error' }); } }} /></span>
     </div>
     <${Underline} seed=${hash(t.id)} pct=${(t.progress || 0) / 100} class="myrd-progress" />
     <div class="type faint">${t.progress || 0}% · ${fmtSize(t.bytes)}${t.speed ? ` · ${fmtSize(t.speed)}/s` : ''}${t.seeders != null ? ` · ${t.seeders} seeders` : ''}</div>
   </li>`)}</ul>`;
 }
 
-// ---------- hoster links (unrestricted downloads) ----------
+// ---------- hoster links (TorBox web downloads) ----------
 function Hosters({ list, onDeleted }) {
-  const items = list.filter(d => d.host !== 'real-debrid.com');
+  const items = list;
   if (!items.length) return html`<${Empty} mood="binoculars" title="No hoster links yet" text="Paste a link from a file hoster on the Add page and it will appear here." action=${html`<${Btn} href="#/add" icon="link">Add a link<//>`} />`;
   return html`<ul class="myrd-active">${items.map(d => html`<li key=${d.id} class="panel">
     <div class="spread">
-      <span class="cluster myrd-host">${d.host_icon && html`<img src=${d.host_icon} alt="" width="20" height="20" />`}<span class="myrd-file-name" title=${d.filename}>${d.filename}</span></span>
+      <span class="cluster myrd-host"><span class="myrd-file-name" title=${d.filename}>${d.filename}</span></span>
       <span class="cluster">
-        <span class="type faint">${fmtSize(d.filesize)} · ${d.host}</span>
-        ${d.streamable ? html`<${Btn} size="sm" variant="primary" icon="play" href=${watchHref(d.link, d.filename)}>Play<//>` : html`<a class="btn btn-ghost btn-sm" href=${d.download} target="_blank" rel="noopener"><${Icon} name="download" size=${16} /><span>Download</span></a>`}
-        <${IconBtn} icon="trash" label="Delete" onClick=${async () => { try { await deleteDownload(d.id); onDeleted(d.id); } catch (e) { toast(e.message, { kind: 'error' }); } }} />
+        <span class="type faint">${d.status === 'downloaded' ? fmtSize(d.bytes) : `${d.progress}%`}</span>
+        ${d.status === 'downloaded' && videoFiles(d)[0] && html`<${Btn} size="sm" variant="primary" icon="play" href=${watchHref(d, videoFiles(d)[0], d.filename)}>Play<//>`}
+        <${IconBtn} icon="trash" label="Delete" onClick=${async () => { try { await remove(d); onDeleted(d.id); } catch (e) { toast(e.message, { kind: 'error' }); } }} />
       </span>
     </div>
   </li>`)}</ul>`;
@@ -179,21 +172,21 @@ function Hosters({ list, onDeleted }) {
 
 export default function MyRD() {
   const [tab, setTab] = useState('library');
-  const acct = useAsync(() => Promise.all([user(), trafficToday().catch(() => null)]).then(([u, traffic]) => ({ ...u, traffic })), []);
-  const data = useAsync(() => Promise.all([allTorrents(), downloads(1, 100)]).then(([t, d]) => ({ t: t || [], d: d || [] })), []);
+  const acct = useAsync(() => user(), []);
+  const data = useAsync(() => Promise.all([listTorrents(1, 1000), webDownloads(1, 200)]).then(([t, d]) => ({ t, d })), []);
   const [gone, setGone] = useState(new Set());
   const t = ((data.data && data.data.t) || []).filter(x => !gone.has(x.id));
   const d = ((data.data && data.data.d) || []).filter(x => !gone.has(x.id));
   const drop = id => setGone(s => new Set([...s, id]));
   const activeCount = t.filter(x => x.status !== 'downloaded').length;
 
-  return html`<${Page} title="My Real-Debrid" kicker="your own shelf" icon="cloud" class="myrd"
+  return html`<${Page} title="My TorBox" kicker="your own shelf" icon="cloud" class="myrd"
       actions=${html`<div class="cluster"><${Btn} size="sm" icon="magnet" href="#/add">Add<//><${Btn} size="sm" icon="refresh" variant="ghost" onClick=${() => { setGone(new Set()); data.reload(); acct.reload(); }}>Refresh<//></div>`}>
     <${Account} u=${acct.data} />
     <${Tabs} tabs=${[
       { id: 'library', label: 'Library', icon: 'grid', count: data.data ? t.filter(x => x.status === 'downloaded').length : null },
       { id: 'active', label: 'Downloads', icon: 'download', count: data.data ? activeCount : null },
-      { id: 'hosters', label: 'Hosters', icon: 'link', count: data.data ? d.filter(x => x.host !== 'real-debrid.com').length : null },
+      { id: 'hosters', label: 'Hosters', icon: 'link', count: data.data ? d.length : null },
     ]} value=${tab} onChange=${setTab} />
     <div class="myrd-body">
       ${data.error ? html`<${ErrorNote} error=${data.error} retry=${data.reload} />`

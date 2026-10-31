@@ -12,12 +12,12 @@ You get one URL like `https://streamora.pages.dev` that works on your iPhone, TV
    ```
    Do the [Google sign-in](#google-sign-in-required) setup once before the first deploy.
    Run this from the **Streamora folder** (not `dist`), so wrangler also uploads the `functions/` relay.
-3. Open the printed URL, sign in with Google, paste your Real-Debrid key (only once: it's saved in your Drive), and make a profile.
+3. Open the printed URL, sign in with Google, paste your TorBox key (only once: it's saved in your Drive), and make a profile.
 
 To update later, run the same two commands again (`build` + `deploy`).
 
 ## Option B: from GitHub (auto-deploys on every push)
-1. Push this folder to a GitHub repo (the `.gitignore` already skips `tools/node_modules`, `tools/.rdkey`, `.dev.vars` and `dist`).
+1. Push this folder to a GitHub repo (the `.gitignore` already skips `tools/node_modules`, `tools/.tbkey`, `.dev.vars` and `dist`).
 2. Go to Cloudflare dashboard → Workers & Pages → Create → Pages → Connect to Git → pick the repo.
 3. Build command: `node tools/build.mjs` · Build output directory: `dist` · Root directory: *(leave empty)*
 4. Deploy.
@@ -26,8 +26,8 @@ To update later, run the same two commands again (`build` + `deploy`).
 Open the URL in Safari → Share → **Add to Home Screen**. Streamora then launches full screen like a real app.
 
 ## Checks
-- `https://<your-site>/api/rd/time` should return the Real-Debrid server time. That means the relay works.
-- If playback fails for one title, open the source picker in the player and try another `[RD+]` source.
+- Settings → Account should show your TorBox plan and days left. That means the relay works.
+- If playback fails for one title, open the source picker in the player and try another cached source.
 
 ## Google sign-in (required)
 Streamora keeps everything in each user's Google Drive, so the Google OAuth app has to be set up once. The current one is the Google Cloud project **Streamora** (`streamora-510411`, account knight007youtu@gmail.com):

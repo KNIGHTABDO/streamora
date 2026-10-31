@@ -1,6 +1,6 @@
 node_modules/
 tools/node_modules/
-tools/.rdkey
+tools/.tbkey
 tools/shots/
 .wrangler/
 dist/
@@ -11,3 +11,4 @@ app/android/
 .gemini-tasks/
 .claude/worktrees/
 .gemini-tasks-*.out
+tools/.rdkey

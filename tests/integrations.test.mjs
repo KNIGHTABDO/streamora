@@ -35,7 +35,7 @@ const h = merge({ at: 1, data: { [P + 'history']: [{ id: 'a', at: 1 }, { id: 'b'
 assert.deepEqual(h[P + 'history'].map(x => x.id), ['b', 'c', 'a'], 'history union sorted newest first');
 
 assert.ok(syncable('profiles') && syncable('addons') && syncable('p:a:mood'), 'profiles, addons, per-profile buckets sync');
-for (const k of ['rdkey', 'rdkey-at', 'google', 'gd-ver', 'sync-base', 'rt', 'resolved', 'app-banner-off', 'oauth-pending']) assert.ok(!syncable(k), k + ' stays on the device');
+for (const k of ['tbkey', 'tbkey-at', 'rdkey', 'rdkey-at', 'google', 'gd-ver', 'sync-base', 'rt', 'resolved', 'app-banner-off', 'oauth-pending']) assert.ok(!syncable(k), k + ' stays on the device');
 // per-item/per-key stamps: an unrelated later change on another device must not overwrite this one
 const S = { 'p:a:settings': { quality: 'high', lang: 'en' }, profiles: [{ id: 'a', name: 'Old' }, { id: 'b', name: 'Bee' }] };
 const devA = { at: 100, stamps: { 'p:a:settings': { quality: 100, lang: 10 }, profiles: { a: 100, b: 10 } }, data: { 'p:a:settings': { quality: 'low', lang: 'en' }, profiles: [{ id: 'a', name: 'Renamed' }, { id: 'b', name: 'Bee' }] } };
@@ -49,15 +49,15 @@ assert.equal(legacy.profiles[0].name, 'Renamed', 'old bundle without stamps: loc
 assert.equal(merge({ at: 1, data: S }, { at: 2, data: { ...S, profiles: [{ id: 'a', name: 'New' }, { id: 'b', name: 'Bee' }] } }).profiles[0].name, 'New', 'legacy bundles still newest-bundle-wins');
 
 // ---- secrets: newest wins per entry, ties go to Drive's copy
-let sm = mergeSecrets({ rd: { v: 'A', at: 5 }, trakt: { p1: { access_token: 'x', at: 1 } } }, { rd: { v: 'B', at: 3 }, trakt: { p1: { off: true, at: 2 }, p2: { access_token: 'y', at: 1 } } });
-assert.equal(sm.rd.v, 'A', 'newer local key wins');
+let sm = mergeSecrets({ tb: { v: 'A', at: 5 }, trakt: { p1: { access_token: 'x', at: 1 } } }, { tb: { v: 'B', at: 3 }, trakt: { p1: { off: true, at: 2 }, p2: { access_token: 'y', at: 1 } } });
+assert.equal(sm.tb.v, 'A', 'newer local key wins');
 assert.ok(sm.trakt.p1.off && sm.trakt.p2.access_token === 'y', 'newer disconnect wins, remote-only kept');
-sm = mergeSecrets({ rd: { v: 'A', at: 1 } }, { rd: { v: 'B', at: 1 } });
-assert.equal(sm.rd.v, 'B', 'tie -> Drive');
-sm = mergeSecrets({ rd: { v: 'A', at: 1 } }, undefined);
-assert.equal(sm.rd.v, 'A', 'empty Drive takes the local key');
-sm = mergeSecrets({ rd: { v: null, at: 9 } }, { rd: { v: 'B', at: 3 } });
-assert.equal(sm.rd.v, null, 'a newer removal sticks');
+sm = mergeSecrets({ tb: { v: 'A', at: 1 } }, { tb: { v: 'B', at: 1 } });
+assert.equal(sm.tb.v, 'B', 'tie -> Drive');
+sm = mergeSecrets({ tb: { v: 'A', at: 1 } }, undefined);
+assert.equal(sm.tb.v, 'A', 'empty Drive takes the local key');
+sm = mergeSecrets({ tb: { v: null, at: 9 } }, { tb: { v: 'B', at: 3 } });
+assert.equal(sm.tb.v, null, 'a newer removal sticks');
 
 // ---- Google relay (Google mocked)
 const realFetch = globalThis.fetch;
@@ -105,12 +105,12 @@ assert.deepEqual(normalizeStream({ name: '4k', title: 'x\n💾 1 GB', infoHash: 
   { name: '[Ad] 4k', title: 'x\n💾 1 GB ⚙️ Ad', infoHash: hash, fileIdx: 2, url: undefined, behaviorHints: { filename: undefined, bingeGroup: 'g' } });
 assert.equal(normalizeStream({ url: 'https://x/y.mp4' }, 'Ad'), null);
 // Comet: hash in bingeGroup, playback url kept, cached ⚡, size from videoSize when the text has none
-const comet = parseStream(normalizeStream({ name: '[RD⚡] Comet 1080p', description: '📄 A.2020.1080p.mkv\n💾 None 🔎 DMM\n🇹🇷', url: 'https://c.io/playback/x',
-  behaviorHints: { bingeGroup: `comet|realdebrid|${hash}`, filename: 'A.2020.1080p.mkv', videoSize: 2e9 } }, 'Comet'));
+const comet = parseStream(normalizeStream({ name: '[TB⚡] Comet 1080p', description: '📄 A.2020.1080p.mkv\n💾 None 🔎 DMM\n🇹🇷', url: 'https://c.io/playback/x',
+  behaviorHints: { bingeGroup: `comet|torbox|${hash}`, filename: 'A.2020.1080p.mkv', videoSize: 2e9 } }, 'Comet'));
 assert.deepEqual([comet.infoHash, comet.cached, comet.raw.url, comet.size, comet.site, comet.langs, comet.pack, comet.quality],
   [hash, true, 'https://c.io/playback/x', 2e9, 'Comet', ['🇹🇷'], false, '1080p']);
 // MediaFusion: language words become flags, English alone stays unflagged
-const mf = parseStream(normalizeStream({ name: 'MediaFusion 🧲 RD ⏳ 2160p', description: '📺 WEB-DL\n📦 24.52 GB 👤 3\n🌐 Arabic + English\n🔗 Site', infoHash: hash }, 'MediaFusion'));
+const mf = parseStream(normalizeStream({ name: 'MediaFusion 🧲 TRB ⏳ 2160p', description: '📺 WEB-DL\n📦 24.52 GB 👤 3\n🌐 Arabic + English\n🔗 Site', infoHash: hash }, 'MediaFusion'));
 assert.deepEqual([mf.cached, mf.size, mf.seeders, mf.langs, mf.pack], [false, 24.52e9, 3, ['🇸🇦', '🇬🇧'], false]);
 assert.deepEqual(parseStream(normalizeStream({ description: '🌐 English', infoHash: hash }, 'M')).langs, []);
 assert.throws(() => checkManifest({ id: 'a', name: 'A', resources: ['catalog'], types: ['movie'] }, 'u'));
@@ -122,3 +122,21 @@ for (const bad of ['http://a.com/manifest.json', 'https://localhost/manifest.jso
   assert.equal(allowedUrl(bad), null, bad);
 
 console.log('integrations: all passed');
+
+// ---- TorBox client
+{
+  const { normalize, pickFile } = await import('../js/core/tb.js');
+  const n = normalize({ id: 7, hash: 'ABC', name: 'Rel', size: 9, progress: 0.5, download_state: 'downloading', files: [{ id: 3, name: 'Rel/a.mp4', short_name: 'a.mp4', size: 9, mimetype: 'video/mp4' }, { id: 4, name: 'Rel/v.mkv', infected: true }] });
+  assert.deepEqual([n.hash, n.status, n.progress, n.files.length, n.files[0].name], ['abc', 'downloading', 50, 1, 'a.mp4']);
+  assert.equal(normalize({ download_present: true, download_state: 'cached' }).status, 'downloaded');
+  assert.equal(normalize({ download_state: 'failed' }).status, 'error');
+  const fs = [{ id: 1, path: 'R/sample.mkv', bytes: 5 }, { id: 2, path: 'R/S01E02.mkv', bytes: 2 }, { id: 3, path: 'R/S01E03.mkv', bytes: 3 }];
+  assert.equal(pickFile(fs, { season: 1, episode: 2 }).id, 2, 'episode wins');
+  assert.equal(pickFile(fs, { filename: 's01e03.MKV' }).id, 3, 'filename wins');
+  assert.equal(pickFile(fs, {}).id, 3, 'largest non-sample');
+  assert.equal(parseStream({ name: '[TB download] Torrentio', title: 'x', infoHash: hash }).cached, false);
+  assert.equal(parseStream({ name: '[TB+] Torrentio', title: 'x', infoHash: hash }).cached, true);
+  const { imdbItems } = await import('../js/core/meta.js');
+  const im = imdbItems({ d: [{ id: 'tt2043822', l: 'Baya Al Maut', y: 2011, qid: 'movie', i: { imageUrl: 'p' } }, { id: 'nm1', l: 'A person' }, { id: 'tt1', l: 'Game', qid: 'videoGame' }] }, 'all');
+  assert.deepEqual(im.map(x => [x.id, x.type, x.name, x.year, x.poster]), [['tt2043822', 'movie', 'Baya Al Maut', 2011, 'p']]);
+}

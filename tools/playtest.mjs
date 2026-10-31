@@ -10,7 +10,7 @@ const hash = args.find(a => a.startsWith('#'));
 const phone = flag('phone', false);
 const out = flag('out', 'play');
 const secs = +flag('secs', 90);
-const KEY = readFileSync(new URL('./.rdkey', import.meta.url), 'utf8').trim();
+const KEY = readFileSync(new URL('./.tbkey', import.meta.url), 'utf8').trim();
 const shots = fileURLToPath(new URL('./shots/', import.meta.url));
 mkdirSync(shots, { recursive: true });
 
@@ -28,7 +28,7 @@ await page.evaluate(async KEY => {
   if (!s.profiles.get().length) s.profiles.set([{ id: 'test1', name: 'Tester', avatar: 'cat', theme: 'ink', ink: '#ff4f79' }]);
   s.activeProfileId.set('test1');
   s.settings.update(x => ({ ...x, nightAuto: false }));
-  await s.saveRdKey(KEY);
+  await s.saveTbKey(KEY);
   // pretend to be signed in to Google (Drive calls just fail quietly), so the sign-in gate lets us through
   const { idbSet } = await import('/js/core/idb.js');
   await idbSet('google', { refresh_token: 'shot', client: 'web', access_token: 'shot', exp: Date.now() + 36e5 });

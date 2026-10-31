@@ -1,10 +1,10 @@
-// #/watch/{type}/{id}?v=&t=&hash=&file=&fn=   and   #/watch/rd/{link}?name=
-// Finds a source, resolves it on Real-Debrid (auto-retrying the next source), asks to resume, then hands off to <Player>.
+// #/watch/{type}/{id}?v=&t=&hash=&file=&fn=   and   #/watch/tb/{ref}?name=
+// Finds a source, resolves it on TorBox (auto-retrying the next source), asks to resume, then hands off to <Player>.
 import { html, useState, useEffect, useRef } from '../../vendor/preact-htm.js';
 import { Btn, Icon, Reel, Img, Modal, Chip, cx, fmtTime, loadCSS, toast } from '../ui/components.js';
 import { meta as getMeta, backdropOf } from '../core/meta.js';
 import { streams, rankStreams, fmtSize, isPhone, noMkv } from '../core/sources.js';
-import { resolveStream, resolveLink, mediaInfos, torrents } from '../core/rd.js';
+import { resolveStream, resolveLink, torrents, webStreamingRefused } from '../core/tb.js';
 import { resumeAt } from '../core/progress.js';
 import { settings, progress } from '../core/store.js';
 import { navigate } from '../router.js';
@@ -16,7 +16,7 @@ loadCSS('css/player.css');
 const MAX_AUTO = 4;
 
 export default function Watch({ params, query }) {
-  if (params.type === 'rd') return html`<${RdWatch} key=${params.id} link=${params.id} name=${query.name} />`;
+  if (params.type === 'tb') return html`<${LibraryWatch} key=${params.id} link=${params.id} name=${query.name} />`;
   const k = [params.type, params.id, query.v || '', query.hash || '', query.file || ''].join('|');
   return html`<${Session} key=${k} params=${params} query=${query} />`;
 }
@@ -28,11 +28,12 @@ const netFail = e => !!e && (e.code === 'network' || /failed to fetch|networkerr
 
 function friendly(e) {
   const code = e && e.code;
-  if (code === 'nokey' || code === 8 || (e && e.status === 401)) return { mood: 'sad', title: 'Your Real-Debrid key stopped working', text: 'It may have expired or been reset. Paste a fresh one in Settings.', key: true };
-  if (netFail(e)) return { mood: 'sad', title: 'Can\'t reach Real-Debrid', text: 'Looks like you\'re offline, or the relay is down. Try again in a moment.' };
+  if (code === 'nokey' || code === 'badkey') return { mood: 'sad', title: 'Your TorBox key stopped working', text: 'It may have expired or been reset. Paste a fresh one in Settings.', key: true };
+  if (netFail(e)) return { mood: 'sad', title: 'Can\'t reach TorBox', text: 'Looks like you\'re offline, or the relay is down. Try again in a moment.' };
   if (code === 'sources') return { mood: 'binoculars', title: 'The sources didn\'t answer', text: 'They are slow or down right now. Try again in a moment.' };
   if (code === 'notcached') return { mood: 'sleep', title: 'Not cached yet', text: e.message };
-  if (code === 'nosources') return { mood: 'binoculars', title: 'Nothing cached for this one', text: 'Real-Debrid doesn\'t have a ready copy. Open the source list to try an uncached one (it downloads in the background).' };
+  if (code === 'webplan') return { mood: 'confused', title: 'This copy can\'t play in a browser', text: e.message };
+  if (code === 'nosources') return { mood: 'binoculars', title: 'Nothing cached for this one', text: 'TorBox doesn\'t have a ready copy. Open the source list to try an uncached one (it downloads in the background).' };
   return { mood: 'confused', title: 'That reel got tangled', text: (e && e.message) || 'Something went wrong while starting playback.' };
 }
 
@@ -72,8 +73,8 @@ function Session({ params, query }) {
     if (!meta) return;
     const id = video ? video.id : meta.id;
     const binge = (progress.get()[meta.id] || {}).source?.binge;
-    // transcodes top out at 1080p unless "original" is chosen, so 4K files only cost start-up time
-    const prefs = { cachedOnly: s.cachedOnly !== false, preferSmall: isPhone(), preferMp4: noMkv(), preferBinge: binge, audioLang: s.audioLang, maxQuality: s.quality === 'original' ? '2160p' : '1080p' };
+    // on the web 4K files only cost start-up time unless "original" is chosen
+    const prefs = { cachedOnly: s.cachedOnly !== false, preferSmall: isPhone(), preferMp4: noMkv(), mp4First: !isNative() && webStreamingRefused() && noMkv(), preferBinge: binge, audioLang: s.audioLang, maxQuality: s.quality === 'original' ? '2160p' : '1080p' };
     Promise.all([streams(meta.type, id), torrents(1, 100).catch(() => [])]).then(([list, mine]) => {
       if (list.failed && list.failed.length && list.length) toast(`${list.failed.join(', ')} didn't answer. Showing the rest.`, { kind: 'warn', icon: 'warn' });
       // sources already in the account start instantly (no new torrent added), so they go first
@@ -106,29 +107,27 @@ function Session({ params, query }) {
   const tryFrom = async (list, i, manual) => {
     const me = ++gen.current;
     setErr(null); setReady(null);
+    let last = null;
     for (let n = 0; i < list.length && (manual || n < MAX_AUTO); i++) {
       const c = list[i];
       if (!manual && tried.current.has(c.infoHash)) continue;
       tried.current.add(c.infoHash);
       setAttempt(++n);   // skipped (already tried) sources don't count toward MAX_AUTO
       try {
-        // the app's VLC player plays the original file: no transcode or media info to wait for
         const app = isNative();
-        const stream = await resolveStream({ infoHash: c.infoHash, fileIdx: c.fileIdx, filename: c.filename, url: c.raw && c.raw.url, season: video && video.season, episode: video && video.episode, direct: app },
+        const stream = await resolveStream({ infoHash: c.infoHash, fileIdx: c.fileIdx, filename: c.filename, season: video && video.season, episode: video && video.episode, direct: app },
           t => me === gen.current && setStep(t));
         if (me !== gen.current) return;
-        let info = null;
-        if (!app) try { info = await mediaInfos(stream.downloadId); } catch {}
-        if (me !== gen.current) return;
-        setReady({ stream, info, source: c });
+        setReady({ stream, info: null, source: c });
         return;
       } catch (e) {
         if (me !== gen.current) return;
-        if (e.code === 'nokey' || e.code === 8 || netFail(e) || manual) { setErr(e); return; }
-        setStep(`That one didn't work (${e.message.split('.')[0].toLowerCase()}). Trying another…`);
+        last = e;
+        if (e.code === 'nokey' || e.code === 'badkey' || netFail(e) || manual) { setErr(e); return; }
+        if (e.code !== 'webplan') setStep(`That one didn't work (${e.message.split('.')[0].toLowerCase()}). Trying another…`);
       }
     }
-    if (me === gen.current) setErr(Object.assign(new Error('None of the best sources would start.'), { code: 'nosources' }));
+    if (me === gen.current) setErr(last && last.code === 'webplan' ? last : Object.assign(new Error('None of the best sources would start.'), { code: 'nosources' }));
   };
   useEffect(() => { if (cands && cands.length) tryFrom(cands, 0); }, [cands]);
 
@@ -220,8 +219,8 @@ function SourcePicker({ open, onClose, list, current, onPick }) {
         <span class="watch-src-body">
           <span class="watch-src-name">${x.release}</span>
           <span class="watch-src-tags">
-            ${x.inAccount && html`<span class="watch-tag rd">in your RD</span>`}
-            ${x.cached ? html`<span class="watch-tag rd">RD+ cached</span>` : html`<span class="watch-tag slow">not cached</span>`}
+            ${x.inAccount && html`<span class="watch-tag rd">in your TorBox</span>`}
+            ${x.cached ? html`<span class="watch-tag rd">cached</span>` : html`<span class="watch-tag slow">not cached</span>`}
             ${x.hdr && html`<span class="watch-tag">${x.dv ? 'Dolby Vision' : 'HDR'}</span>`}
             ${x.remux && html`<span class="watch-tag">remux</span>`}
             ${x.dual && html`<span class="watch-tag">multi-audio</span>`}
@@ -235,19 +234,14 @@ function SourcePicker({ open, onClose, list, current, onPick }) {
   <//>`;
 }
 
-// ---- play something straight from the user's Real-Debrid account
-function RdWatch({ link, name }) {
+// ---- play something straight from the user's TorBox account
+function LibraryWatch({ link, name }) {
   const [st, setSt] = useState({ ready: null, err: null });
   useEffect(() => {
-    resolveLink(link, { direct: isNative() }).then(async stream => {
-      let info = null;
-      if (!isNative()) try { info = await mediaInfos(stream.downloadId); } catch {}
-      if (!isNative() && !stream.hls && !/\.(mp4|webm|m4v)$/i.test(stream.filename || '')) throw new Error('Real-Debrid can\'t stream this file type.');
-      setSt({ ready: { stream, info } });
-    }).catch(err => setSt({ err }));
+    resolveLink(link, { direct: isNative() }).then(stream => setSt({ ready: { stream, info: null } })).catch(err => setSt({ err }));
   }, []);
   const onBack = () => (history.length > 1 ? history.back() : navigate('#/myrd'));
-  const pseudo = st.ready && { id: 'rd:' + st.ready.stream.downloadId, type: 'movie', name: name || st.ready.stream.filename, background: st.ready.info && st.ready.info.backdrop_path };
+  const pseudo = st.ready && { id: 'tb:' + st.ready.stream.downloadId, type: 'movie', name: name || st.ready.stream.filename };
   return html`<div class="watch" data-no-paper>
     ${st.ready ? html`<${isNative() ? AppPlayer : Player} meta=${pseudo} video=${null} stream=${st.ready.stream} info=${st.ready.info} start=${0} noProgress onFatal=${e => setSt({ err: e })} onBack=${onBack} />`
       : html`<${Loading} step="Unlocking your file…" attempt=${0} err=${st.err} onBack=${onBack} onRetry=${() => location.reload()} />`}

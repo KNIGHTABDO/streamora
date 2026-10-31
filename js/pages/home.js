@@ -4,12 +4,11 @@ import { Page, Hero, Row, PosterCard, Btn, IconBtn, Icon, Reel, toast, useAsync,
 import { useStore, progress, hidden, history, diary, watchlist, profiles, activeProfileId, keyStore, ls } from '../core/store.js';
 import { continueWatching, hideFromContinue } from '../core/progress.js';
 import { catalog, meta as getMeta, resolveTitle } from '../core/meta.js';
-import { torrents, user } from '../core/rd.js';
+import { torrents, user } from '../core/tb.js';
 import { parse } from '../core/parse.js';
 import { navigate } from '../router.js';
 import { playAction, inWatchlist, toggleWatchlist } from '../lib/play.js';
 import { newEps } from '../lib/newEpisodes.js';
-import { rdRecent } from '../lib/rdRecent.js';
 import { loadGenres, genreTaste } from '../lib/stats.js';
 
 loadCSS('css/pages/home.css');
@@ -153,15 +152,6 @@ function TasteRows({ kids }) {
   return html`${q.data.map(r => html`<${Row} key=${r.genre} title=${`Because you like ${r.genre}`} kicker=${`more ${r.genre.toLowerCase()}`} icon="sparkle" items=${r.items} href=${`#/genre/movie/${encodeURIComponent(r.genre)}`} />`)}`;
 }
 
-// ---------------------------------------------------------------- played on your other devices (RD downloads)
-function RecentRow({ p }) {
-  const key = useStore(keyStore);
-  const q = useAsync(() => (key.set ? rdRecent(p) : Promise.resolve([])), [key.set, p]);
-  if (q.error || !q.data || !q.data.length) return null;
-  return html`<${Row} title="Played on your other devices" kicker="from your Real-Debrid history" icon="cloud" wide items=${q.data}
-    render=${it => html`<${PosterCard} key=${it.id} item=${it} wide href=${it.href || hrefTitle(it)} label=${it.episode != null ? `${it.season != null ? `S${it.season} ` : ''}E${it.episode}` : ''} />`} />`;
-}
-
 // ---------------------------------------------------------------- premium expiry notice (dismissible per day)
 function PremiumNotice() {
   const key = useStore(keyStore);
@@ -175,14 +165,14 @@ function PremiumNotice() {
   if (!expired && days > 7) return null;
   return html`<div class=${cx('home-premium panel', expired && 'expired')} role="status">
     <${Icon} name="clock" />
-    <p>${expired ? html`<b>Your Real-Debrid premium has expired.</b> Playback won't work until you renew.`
-      : html`<b>Real-Debrid premium ends in ${days} ${days === 1 ? 'day' : 'days'}.</b> Renew to keep streaming.`}</p>
-    <${Btn} size="sm" variant="primary" href="https://real-debrid.com/premium" target="_blank" rel="noopener">Renew<//>
+    <p>${expired ? html`<b>Your TorBox plan has expired.</b> Playback won't work until you renew.`
+      : html`<b>TorBox plan ends in ${days} ${days === 1 ? 'day' : 'days'}.</b> Renew to keep streaming.`}</p>
+    <${Btn} size="sm" variant="primary" href="https://torbox.app/pricing" target="_blank" rel="noopener">Renew<//>
     <${IconBtn} icon="close" label="Dismiss for today" onClick=${() => { ls.set('premium-dismissed', today); setGone(true); }} />
   </div>`;
 }
 
-// ---------------------------------------------------------------- your real-debrid (lightweight)
+// ---------------------------------------------------------------- your torbox (lightweight)
 function RDRow() {
   const q = useAsync(async () => {
     const list = ((await torrents(1, 30)) || []).filter(t => t.status === 'downloaded');
@@ -200,7 +190,7 @@ function RDRow() {
     return out;
   }, []);
   if (q.error || (q.data && !q.data.length)) return null;
-  return html`<${Row} title="In your Real-Debrid" kicker="already unlocked" icon="cloud" items=${q.data} loading=${q.loading} href="#/myrd" />`;
+  return html`<${Row} title="In your TorBox" kicker="already unlocked" icon="cloud" items=${q.data} loading=${q.loading} href="#/myrd" />`;
 }
 
 function WatchlistRow() {
@@ -267,7 +257,6 @@ export default function Home() {
 
       <${PremiumNotice} />
       <${ContinueRow} items=${cw} />
-      ${!kids && html`<${RecentRow} p=${p} />`}
       <${NewEpisodesRow} />
       ${kids ? html`
         <${CatRow} title="Cartoons & animation" kicker="for small humans" icon="sparkle" type="movie" id="top" opts=${{ genre: 'Animation' }} href="#/genre/movie/Animation" eager=${eagerFirst} />

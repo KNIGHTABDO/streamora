@@ -1,5 +1,5 @@
-// Release file name -> structured info. Real-Debrid's own metadata guesses are unreliable,
-// so the My Real-Debrid page matches files to Cinemeta/Kitsu using this.
+// Release file name -> structured info. Debrid services' own metadata guesses are unreliable,
+// so the My TorBox page matches files to Cinemeta/Kitsu using this.
 // parse('Reacher.S04E05.Bridge.1080p.HEVC.x265-MeGusta[EZTVx.to].mkv')
 //  -> { title:'Reacher', year:null, season:4, episode:5, quality:'1080p', hevc:true, hdr:false, group:'MeGusta', type:'series' }
 

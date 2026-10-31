@@ -1,5 +1,5 @@
-// Native player for the iOS/Android app (Capacitor shell, see app/). Plays RD's original file with VLC, so mkv,
-// HEVC, Dolby and DTS play without RD's live transcode. On the web isNative() is false and this is never used.
+// Native player for the iOS/Android app (Capacitor shell, see app/). Plays the original file with VLC, so mkv,
+// HEVC, Dolby and DTS play without any transcode. On the web isNative() is false and this is never used.
 // Same props as <Player>. The native side sends 'progress' {position, duration, paused} every few seconds,
 // 'next' when the viewer taps Next, and 'closed' {position, duration, ended} when it goes away.
 // Once playing, it gets extras: OpenSubtitles files (same source as the web player) and anime intro/credits times.

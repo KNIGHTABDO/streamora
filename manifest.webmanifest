@@ -1,7 +1,7 @@
 {
   "name": "Streamora",
   "short_name": "Streamora",
-  "description": "A sketchbook that plays movies. Your Real-Debrid, your profiles, saved in your own Google Drive.",
+  "description": "A sketchbook that plays movies. Your TorBox, your profiles, saved in your own Google Drive.",
   "start_url": "./#/",
   "scope": "./",
   "display": "standalone",

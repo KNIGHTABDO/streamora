@@ -3,11 +3,11 @@ import { html, useState, useEffect, useRef } from '../../vendor/preact-htm.js';
 import { Page, Btn, IconBtn, Tabs, Field, Input, Toggle, Select, Icon, Reel, Modal, ErrorNote, Spinner, Empty, useAsync, toast, loadCSS, cx } from '../ui/components.js';
 import {
   useStore, settings, profiles, activeProfileId, activeProfile, history, progress, hidden,
-  saveRdKey, forgetRdKey, ls,
+  saveTbKey, forgetTbKey, ls,
 } from '../core/store.js';
 import { account, signOut, revokeAccess } from '../core/google.js';
 import { idbWipe } from '../core/idb.js';
-import { user } from '../core/rd.js';
+import { user } from '../core/tb.js';
 import { navigate, setQuery } from '../router.js';
 import { THEMES, ThemeSwatch } from './profiles.js';
 const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -27,7 +27,7 @@ const ago = t => { const m = Math.round((Date.now() - t) / 6e4); return m < 1 ? 
 
 /** Wipes this device (Drive keeps everything) and goes back to the welcome page. */
 export async function eraseDevice() {
-  forgetRdKey();
+  forgetTbKey();
   for (const k of ls.keys()) ls.del(k);
   try { sessionStorage.clear(); } catch {}
   await idbWipe();
@@ -86,25 +86,25 @@ function Account() {
     try {
       const nu = await user(key.trim());
       if (nu.type !== 'premium') throw new Error('That account is not premium.');
-      await saveRdKey(key.trim()); setReplacing(false); setKey(''); me.reload(); toast('Key replaced', { icon: 'key' });
+      await saveTbKey(key.trim()); setReplacing(false); setKey(''); me.reload(); toast('Key replaced', { icon: 'key' });
     } catch (x) { setErr(x); } finally { setBusy(false); }
   };
   return html`<div class="stack">
     <${GoogleCard} />
     <div class="panel st-account">
-      ${me.loading ? html`<${Spinner} label="asking Real-Debrid…" />` : me.error ? html`<${ErrorNote} error=${me.error} retry=${me.reload} />` : html`
+      ${me.loading ? html`<${Spinner} label="asking TorBox…" />` : me.error ? html`<${ErrorNote} error=${me.error} retry=${me.reload} />` : html`
         <div class="st-account-row">
           <${Reel} mood="happy" size=${90} />
           <div>
-            <div class="kicker type">real-debrid account</div>
+            <div class="kicker type">torbox account</div>
             <h2>${u.username}</h2>
-            <div class="type muted">${u.email} · ${u.points} fidelity points</div>
+            <div class="type muted">premium until ${new Date(u.expiration).toLocaleDateString()}</div>
           </div>
-          <div class=${cx('st-stamp', days < 7 && 'warn')}><span>${u.type}</span><b>${days}</b><small>days left</small></div>
+          <div class=${cx('st-stamp', days < 7 && 'warn')}><span>${u.plan}</span><b>${days}</b><small>days left</small></div>
         </div>`}
     </div>
     ${replacing ? html`<form class="panel stack" onSubmit=${replace}>
-      <${Field} label="New API key" hint="real-debrid.com/apitoken"><${Input} value=${key} onInput=${e => setKey(e.currentTarget.value)} autocomplete="off" spellcheck="false" /><//>
+      <${Field} label="New API key" hint="torbox.app/settings"><${Input} value=${key} onInput=${e => setKey(e.currentTarget.value)} autocomplete="off" spellcheck="false" /><//>
       ${err && html`<${ErrorNote} error=${err} compact />`}
       <div class="cluster"><${Btn} variant="primary" icon="key" type="submit" disabled=${busy || key.trim().length < 20}>${busy ? 'Checking…' : 'Save key'}<//><${Btn} variant="ghost" onClick=${() => setReplacing(false)}>Cancel<//></div>
     </form>` : html`<div class="cluster">
@@ -113,7 +113,7 @@ function Account() {
     </div>`}
     <${Modal} open=${confirm} onClose=${() => setConfirm(false)} title="Remove the key?">
       <p>It's removed from your Drive too, so every device asks for a key again. Profiles and history stay.</p>
-      <div class="cluster"><${Btn} variant="danger" icon="logout" onClick=${() => { forgetRdKey(true); navigate('/welcome', { replace: true }); }}>Remove it<//><${Btn} variant="ghost" onClick=${() => setConfirm(false)}>Keep<//></div>
+      <div class="cluster"><${Btn} variant="danger" icon="logout" onClick=${() => { forgetTbKey(true); navigate('/welcome', { replace: true }); }}>Remove it<//><${Btn} variant="ghost" onClick=${() => setConfirm(false)}>Keep<//></div>
     <//>
   </div>`;
 }
@@ -137,7 +137,7 @@ function Player() {
       <${Field} label="Preferred audio"><${Select} value=${s.audioLang} onChange=${v => up({ audioLang: v })} options=${LANGS} /><//>
       <${Toggle} checked=${s.autoPlay !== false} onChange=${v => up({ autoPlay: v })} label="Start playing automatically" />
       <${Toggle} checked=${s.autoNext} onChange=${v => up({ autoNext: v })} label="Auto-play the next episode" />
-      <${Toggle} checked=${s.cachedOnly} onChange=${v => up({ cachedOnly: v })} label="Only show sources cached on Real-Debrid" />
+      <${Toggle} checked=${s.cachedOnly} onChange=${v => up({ cachedOnly: v })} label="Only show sources cached on TorBox" />
       ${isNative() && html`<${Toggle} checked=${s.appPlayer === 'classic'} onChange=${v => up({ appPlayer: v ? 'classic' : 'web' })} label="Classic app player (VLC's own simple controls)" />`}
       <${Field} label=${`Skip intro jumps ${s.skipIntroSec}s`}>
         <input type="range" class="st-range" min="30" max="180" step="5" value=${s.skipIntroSec} onInput=${e => up({ skipIntroSec: +e.currentTarget.value })} data-own-arrows />
@@ -288,10 +288,10 @@ function Privacy() {
     <div class="panel stack st-privacy">
       <h3>What lives where</h3>
       <ul>
-        <li><b>Your Google Drive:</b> profiles, watchlists, progress, diary, settings, your Real-Debrid key and Trakt sign-ins, in one file in the "Streamora" folder of your Drive. Streamora can only see files it made itself, never your own. Leave that file be: deleting it removes your data from every device.</li>
+        <li><b>Your Google Drive:</b> profiles, watchlists, progress, diary, settings, your TorBox key and Trakt sign-ins, in one file in the "Streamora" folder of your Drive. Streamora can only see files it made itself, never your own. Leave that file be: deleting it removes your data from every device.</li>
         <li><b>This device:</b> a copy of the same, so everything is instant and works offline (localStorage). Your key is AES-encrypted here with a key the browser can't export.</li>
-        <li><b>The relays</b> (/api/rd, /api/google) forward requests to Real-Debrid and Google and store nothing.</li>
-        <li><b>Catalog and sources</b> come from Cinemeta, Kitsu, Torrentio, Comet and MediaFusion. The three source addons receive your key to mark cached sources and start them on your Real-Debrid. <b>Trakt</b> (optional, per profile) sees what you watch.</li>
+        <li><b>The relays</b> (/api/tb, /api/google, /api/imdb) forward requests to TorBox, Google and IMDb and store nothing.</li>
+        <li><b>Catalog and sources</b> come from Cinemeta, Kitsu, Torrentio, Comet and MediaFusion. The three source addons receive your key to find sources cached on your TorBox. <b>Trakt</b> (optional, per profile) sees what you watch.</li>
         <li>No analytics, no cookies, no Streamora accounts: your Google account is the only one.</li>
       </ul>
     </div>
@@ -334,7 +334,7 @@ function Diagnostics() {
 function About() {
   return html`<div class="panel stack st-about">
     <div class="cluster"><${Reel} mood="popcorn" size=${110} /><div><h2>Streamora</h2><div class="type faint">version ${VERSION}</div></div></div>
-    <p>A sketchbook that plays movies. Bring your own Real-Debrid key; everything else is kept in your own Google Drive.</p>
+    <p>A sketchbook that plays movies. Bring your own TorBox key; everything else is kept in your own Google Drive.</p>
     <${Diagnostics} />
     <h3>Thanks to</h3>
     <ul>
@@ -342,7 +342,7 @@ function About() {
       <li><b>Kitsu</b> (anime-kitsu addon) for anime catalogs</li>
       <li><b>Torrentio</b>, <b>Comet</b> and <b>MediaFusion</b> for sources and cache flags</li>
       <li><b>OpenSubtitles</b> for subtitles</li>
-      <li><b>Real-Debrid</b> for streaming and transcoding</li>
+      <li><b>TorBox</b> for streaming</li>
       <li>Preact, htm, hls.js, qrcode-generator</li>
     </ul>
     <p class="sticky-note">Streamora doesn't host or index anything. It connects services you choose, and you're responsible for what you stream and where you live.</p>

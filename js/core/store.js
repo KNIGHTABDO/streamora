@@ -102,7 +102,7 @@ export function useStore(s) {
 
 export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
-// ---- the Real-Debrid key: AES-GCM encrypted in localStorage, with a non-extractable
+// ---- the TorBox key: AES-GCM encrypted in localStorage, with a non-extractable
 // CryptoKey kept in IndexedDB so the raw key never sits in storage as plain text.
 const IDB = 'streamora-vault';
 function idb(mode, fn) {
@@ -130,44 +130,46 @@ const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
 const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 
 let keyMem = null;
-export const keyStore = store('rdkey-state', { set: false }); // reactive "is a key saved" flag
-// `rdkey-at` = when the key last changed, so sync.js knows which device's key (or removal) is newest.
-export async function saveRdKey(plain, at = Date.now()) {
+export const keyStore = store('tbkey-state', { set: false }); // reactive "is a key saved" flag
+// `tbkey-at` = when the key last changed, so sync.js knows which device's key (or removal) is newest.
+export async function saveTbKey(plain, at = Date.now()) {
   keyMem = plain;
-  ls.set('rdkey-at', at);
+  ls.set('tbkey-at', at);
   try {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await vaultKey(), new TextEncoder().encode(plain));
-    ls.set('rdkey', { v: 1, iv: b64(iv), ct: b64(ct) });
+    ls.set('tbkey', { v: 1, iv: b64(iv), ct: b64(ct) });
   } catch {
     // ponytail: no IndexedDB/WebCrypto (very old browser / some private modes) -> obfuscated fallback
-    ls.set('rdkey', { v: 0, raw: btoa(plain) });
+    ls.set('tbkey', { v: 0, raw: btoa(plain) });
   }
   keyStore.set({ set: true });
 }
-export async function getRdKey() {
+export async function getTbKey() {
   if (keyMem) return keyMem;
-  const rec = ls.get('rdkey', null);
+  const rec = ls.get('tbkey', null);
   if (!rec) return null;
   try {
     if (rec.v === 0) return (keyMem = atob(rec.raw));
     const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(rec.iv) }, await vaultKey(), unb64(rec.ct));
     return (keyMem = new TextDecoder().decode(pt));
-  } catch { forgetRdKey(); return null; } // vault key lost (cleared site data / other browser): ask again
+  } catch { forgetTbKey(); return null; } // vault key lost (cleared site data / other browser): ask again
 }
 /** everywhere=true: the removal syncs to every device. false: only this device forgets (sync brings it back). */
-export function forgetRdKey(everywhere = false) {
-  keyMem = null; ls.del('rdkey');
-  if (everywhere) ls.set('rdkey-at', Date.now()); else ls.del('rdkey-at');
+export function forgetTbKey(everywhere = false) {
+  keyMem = null; ls.del('tbkey');
+  if (everywhere) ls.set('tbkey-at', Date.now()); else ls.del('tbkey-at');
   keyStore.set({ set: false });
   try { indexedDB.deleteDatabase(IDB); } catch {}
 }
-if (ls.get('rdkey', null)) keyStore.set({ set: true });
+// the Real-Debrid era's key is of no use to TorBox
+if (ls.get('rdkey', null)) { ls.del('rdkey'); ls.del('rdkey-at'); ls.del('resolved'); }
+if (ls.get('tbkey', null)) keyStore.set({ set: true });
 
 // ---- snapshot / merge-in of everything except the key (js/core/sync.js relies on both) ----
 // exportAll({onlyProfile}) -> {app:'streamora', v:1, at, data:{[lsKey]: value}}
 // importAll(bundle, {merge=true}): merge=true merges per key (see mergeValue); merge=false overwrites.
-const isKeyKey = k => k.startsWith('rdkey');
+const isKeyKey = k => k.startsWith('tbkey') || k.startsWith('rdkey');
 export const allDataKeys = () => ls.keys().filter(k => !isKeyKey(k));
 
 export function exportAll({ onlyProfile } = {}) {

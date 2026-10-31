@@ -7,7 +7,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
 const exe = process.env.CHROME || (process.platform === 'win32' ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : '/usr/bin/google-chrome');
-const KEY = readFileSync(new URL('./.rdkey', import.meta.url), 'utf8').trim();
+const KEY = readFileSync(new URL('./.tbkey', import.meta.url), 'utf8').trim();
 const base = 'http://localhost:' + (process.env.PORT || 5173);
 const hash = process.argv[2] || '#/watch/series/tt0903747?v=tt0903747:1:1';
 mkdirSync(new URL('./shots/', import.meta.url), { recursive: true });
@@ -70,7 +70,7 @@ await page.evaluate(async KEY => {
   s.profiles.set([{ id: 'app1', name: 'Tester', avatar: 'cat', theme: 'ink', ink: '#ff4f79', created: 1 }]);
   s.activeProfileId.set('app1');
   s.settings.update(x => ({ ...x, subsLang: 'eng', audioLang: 'eng', nightAuto: false }));
-  await s.saveRdKey(KEY);
+  await s.saveTbKey(KEY);
   const { idbSet } = await import('/js/core/idb.js');
   await idbSet('google', { refresh_token: 'x', client: 'web', access_token: 'x', exp: Date.now() + 36e5 });
   (await import('/js/core/google.js')).account.set({ sub: 'x', email: 't@example.com', name: 'T', picture: '' });

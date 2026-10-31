@@ -22,27 +22,27 @@
 <main>
   <div class="kicker">last updated 7 October 2026</div>
   <h1>Streamora privacy</h1>
-  <p>Streamora is a web app that plays movies and shows from your own Real-Debrid account. It has no accounts or servers that keep your data. This page explains what it stores and where.</p>
+  <p>Streamora is a web app that plays movies and shows from your own TorBox account. It has no accounts or servers that keep your data. This page explains what it stores and where.</p>
 
   <h2>Google sign-in and Drive</h2>
   <p>When you sign in with Google, Streamora asks for your name, email address and profile picture (to show which account you're using) and for access to <b>only the files Streamora creates in your Google Drive</b> (the <code>drive.file</code> permission). Streamora makes one folder, "Streamora", with one data file in it, and can't see any of your other files.</p>
-  <p>That file holds your profiles, watchlists, watch progress and history, diary, settings, your Real-Debrid API key and, if you connected it, your Trakt sign-in. This lets every device you sign in on stay in step. The file is read and written directly by the app in your browser. It isn't copied anywhere else.</p>
+  <p>That file holds your profiles, watchlists, watch progress and history, diary, settings, your TorBox API key and, if you connected it, your Trakt sign-in. This lets every device you sign in on stay in step. The file is read and written directly by the app in your browser. It isn't copied anywhere else.</p>
   <p>Streamora's use of information received from Google APIs follows the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements. Your Google data is used only to save and load your Streamora data. It is never sold, shared, used for ads or used to train AI models.</p>
 
   <h2>On your device</h2>
-  <p>A copy of the same data is kept in your browser (localStorage) so the app is instant and works offline. Your Real-Debrid key is encrypted there. Sign-in tokens for Google and Trakt are kept in the browser's IndexedDB.</p>
+  <p>A copy of the same data is kept in your browser (localStorage) so the app is instant and works offline. Your TorBox key is encrypted there. Sign-in tokens for Google and Trakt are kept in the browser's IndexedDB.</p>
 
   <h2>Servers in between</h2>
-  <p>Streamora's own server functions only relay requests: <code>/api/rd</code> passes requests to Real-Debrid (which blocks browsers), and <code>/api/google</code> completes the Google sign-in (which needs the app's client secret). They store and log nothing.</p>
-  <p>Catalogs and artwork come from Cinemeta and Kitsu, and sources come from Torrentio, which receives your Real-Debrid key to mark cached sources and to add the one you play to your Real-Debrid (as in Stremio). If you connect Trakt, Trakt sees what you watch. Streamora has no analytics, ads or tracking cookies.</p>
+  <p>Streamora's own server functions only relay requests: <code>/api/tb</code> passes requests to TorBox (which blocks browsers) along with your IP address when asking for a video link, so TorBox can pick a nearby server; <code>/api/imdb</code> looks up titles the main catalog lacks; and <code>/api/google</code> completes the Google sign-in (which needs the app's client secret). They store and log nothing.</p>
+  <p>Catalogs and artwork come from Cinemeta and Kitsu, and sources come from Torrentio, Comet and MediaFusion, which receive your TorBox key to find sources for your account (as in Stremio). If you connect Trakt, Trakt sees what you watch. Streamora has no analytics, ads or tracking cookies.</p>
 
   <h2>Third-party services</h2>
   <p>The app contacts these services directly from your browser. Here is what each one receives.</p>
   <ul>
     <li><b>Cinemeta</b> (v3-cinemeta.strem.io): the titles you browse and the words you search for.</li>
     <li><b>Kitsu</b> (anime-kitsu.strem.fun): the same, for anime.</li>
-    <li><b>Torrentio</b> (torrentio.strem.fun): the title you open, and your Real-Debrid key, to find sources and add the one you play to your account.</li>
-    <li><b>Real-Debrid</b> (real-debrid.com, through our <code>/api/rd</code> relay; video streams from *.download.real-debrid.com): your API key and the torrents and links the app manages in your account.</li>
+    <li><b>Torrentio</b> (torrentio.strem.fun): the title you open, and your TorBox key, to find sources.</li>
+    <li><b>TorBox</b> (torbox.app, through our <code>/api/tb</code> relay; video streams from *.tb-cdn.st and similar TorBox hosts): your API key and the torrents and links the app manages in your account.</li>
     <li><b>OpenSubtitles</b> (opensubtitles-v3.strem.io): the title and episode you are watching, to find subtitles.</li>
     <li><b>Kitsu mappings and AniSkip</b> (kitsu.io, api.aniskip.com): for anime, the MyAnimeList id and episode number, to find intro and outro times.</li>
     <li><b>Metahub</b> (images.metahub.space): posters, backdrops and logos. The image addresses show which titles you see.</li>

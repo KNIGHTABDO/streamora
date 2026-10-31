@@ -36,7 +36,7 @@ function SourcesModal({ meta, video, onClose }) {
     </div>
     ${res.loading ? html`<${Spinner} label="asking the trackers…" />`
       : res.error ? html`<${ErrorNote} error=${res.error} retry=${res.reload} />`
-      : !list.length ? html`<${Empty} mood="binoculars" title="No sources here" text=${cachedOnly ? 'Nothing cached on Real-Debrid yet. Try showing uncached sources too.' : 'The trackers came back empty for this one.'}
+      : !list.length ? html`<${Empty} mood="binoculars" title="No sources here" text=${cachedOnly ? 'Nothing cached on TorBox yet. Try showing uncached sources too.' : 'The trackers came back empty for this one.'}
           action=${cachedOnly && html`<${Btn} icon="eye" onClick=${() => setCachedOnly(false)}>Show uncached<//>`} />`
       : html`<ul class="det-src-list">
         ${list.slice(0, 60).map((x, i) => html`<li key=${x.infoHash + i}>
@@ -45,7 +45,7 @@ function SourcesModal({ meta, video, onClose }) {
             <span class="det-src-main">
               <span class="det-src-name">${x.release}</span>
               <span class="det-src-tags type">
-                ${x.cached ? html`<b class="det-tag ok">RD+ cached</b>` : html`<b class="det-tag">not cached</b>`}
+                ${x.cached ? html`<b class="det-tag ok">cached</b>` : html`<b class="det-tag">not cached</b>`}
                 ${x.hdr && html`<b class="det-tag">${x.dv ? 'DV' : 'HDR'}</b>`}${x.hevc && html`<b class="det-tag">HEVC</b>`}${x.remux && html`<b class="det-tag">REMUX</b>`}${x.dual && html`<b class="det-tag">multi-audio</b>`}${x.cam && html`<b class="det-tag bad">CAM</b>`}
                 <span>${fmtSize(x.size)}</span>${x.seeders ? html`<span>👤 ${x.seeders}</span>` : ''}${x.site && html`<span>${x.site}</span>`}${x.langs.join(' ')}
               </span>

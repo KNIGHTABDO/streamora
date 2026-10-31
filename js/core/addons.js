@@ -48,8 +48,8 @@ const LANG_FLAGS = { english: '🇬🇧', arabic: '🇸🇦', turkish: '🇹🇷
 
 /**
  * One addon stream -> the Torrentio shape parseStream() reads ("release\n👤 seeds 💾 size ⚙️ site\nflags"), or null
- * if it has no torrent. The hash comes from infoHash, the url, or Comet's bingeGroup ("comet|realdebrid|<hash>").
- * An https url is kept: debrid addons start the source on Real-Debrid from their own server when it's opened.
+ * if it has no torrent. The hash comes from infoHash, the url, or Comet's bingeGroup ("comet|torbox|<hash>").
+ * An https url is kept for addons that only offer a playback link.
  */
 export function normalizeStream(s, addonName) {
   if (!s || typeof s !== 'object') return null;
@@ -76,14 +76,13 @@ export function normalizeStream(s, addonName) {
   };
 }
 
-// Built-in debrid addons searched next to Torrentio with the user's Real-Debrid key. They find releases Torrentio
-// doesn't index (much of the Arabic and Turkish catalog), and their playback links add the source on Real-Debrid
-// from their own servers, which works where Torrentio's resolve link doesn't know the release.
+// Built-in debrid addons searched next to Torrentio with the user's TorBox key. They find releases Torrentio
+// doesn't index (much of the Arabic and Turkish catalog).
 const COMET = 'https://comet.elfhosted.com';
 const MEDIAFUSION = 'https://mediafusionfortheweebs.midnightignite.me';
 const cometCfg = key => btoa(JSON.stringify({
   maxResultsPerResolution: 8, maxSize: 0, cachedOnly: false, removeTrash: true, resultFormat: ['all'],
-  debridServices: [{ service: 'realdebrid', apiKey: key }], enableTorrent: false, deduplicateStreams: true, debridStreamProxyPassword: '',
+  debridServices: [{ service: 'torbox', apiKey: key }], enableTorrent: false, deduplicateStreams: true, debridStreamProxyPassword: '',
   languages: { required: [], exclude: [], preferred: [] }, resolutions: {},
   options: { remove_ranks_under: -10000000000, allow_english_in_languages: false, remove_unknown_languages: false },
 }));
@@ -93,7 +92,7 @@ const mediafusionCfg = key => {
   if (!mfCfg || mfCfg.key !== key) {
     const p = fetch(`${MEDIAFUSION}/encrypt-user-data`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({ streaming_providers: [{ service: 'realdebrid', token: key }] }),
+      body: JSON.stringify({ streaming_providers: [{ service: 'torbox', token: key }] }),
     }).then(r => r.json()).then(j => { if (!j || typeof j.encrypted_str !== 'string') throw new Error('MediaFusion config'); return j.encrypted_str; });
     p.catch(() => { if (mfCfg && mfCfg.p === p) mfCfg = null; });
     mfCfg = { key, p };
@@ -112,11 +111,11 @@ async function fromAddon(name, base, type, id, get) {
 // built-ins send CORS headers; the 9 s cap keeps a slow first search (Comet scrapes on a miss) from holding up the list
 const getDirect = async u => { const r = await fetch(u, { signal: AbortSignal.timeout(9000) }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); };
 
-/** Streams from the built-ins (with a Real-Debrid key) and every added addon that handles this type/id, deduped by infoHash. Never throws. */
-export async function addonStreams(type, id, rdKey) {
+/** Streams from the built-ins (with a TorBox key) and every added addon that handles this type/id, deduped by infoHash. Never throws. */
+export async function addonStreams(type, id, tbKey) {
   const list = addons.get().filter(a => a.types.includes(type) && (!a.idPrefixes || a.idPrefixes.some(p => id.startsWith(p))));
   const all = await Promise.allSettled([
-    ...(rdKey && /^tt\d+/.test(id) ? BUILTIN.map(async b => fromAddon(b.name, await b.base(rdKey), type, id, getDirect)) : []),
+    ...(tbKey && /^tt\d+/.test(id) ? BUILTIN.map(async b => fromAddon(b.name, await b.base(tbKey), type, id, getDirect)) : []),
     ...list.map(a => fromAddon(a.name, baseOf(a.url), type, id, getJson)),
   ]);
   const seen = new Set();

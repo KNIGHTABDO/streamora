@@ -89,9 +89,22 @@ export async function catalog(type, id, opts = {}) {
   return forProfile((j.metas || []).map(m => norm(m, anime)));
 }
 
+// Cinemeta misses many films (much of Moroccan cinema among them). IMDb's title suggestions fill the gap, so these
+// can still be found and opened. They come with a name, year and poster, nothing more.
+const IMDB_TYPES = { movie: 'movie', tvMovie: 'movie', video: 'movie', short: 'movie', tvSeries: 'series', tvMiniSeries: 'series' };
+export function imdbItems(j, type = 'all') {
+  return ((j && j.d) || []).filter(x => /^tt\d+$/.test(x.id || '') && IMDB_TYPES[x.qid] && (type === 'all' || IMDB_TYPES[x.qid] === type)).map(x => norm({
+    id: x.id, type: IMDB_TYPES[x.qid], name: x.l, year: x.y, poster: x.i && x.i.imageUrl, cast: x.s ? x.s.split(', ') : undefined, sparse: true,
+  }));
+}
+const imdbSearch = async (q, type) => imdbItems(await getJSON(`/api/imdb?q=${encodeURIComponent(q)}`), type);
+
 export async function meta(type, id) {
   const anime = String(id).startsWith('kitsu:');
-  const j = await getJSON(`${anime ? KITSU : CINEMETA}/meta/${type}/${encodeURIComponent(id)}.json`);
+  let j = {};
+  try { j = await getJSON(`${anime ? KITSU : CINEMETA}/meta/${type}/${encodeURIComponent(id)}.json`); }
+  catch (e) { if (!/^tt\d+$/.test(id)) throw e; }
+  if (!(j.meta && j.meta.name) && /^tt\d+$/.test(id)) return (await imdbSearch(id, type)).find(x => x.id === id) || null;
   const m = norm(j.meta, anime);
   if (m && m.videos) m.videos = m.videos.slice().sort((a, b) => (a.season - b.season) || (a.episode - b.episode));
   return m;
@@ -120,10 +133,13 @@ export async function search(q, type = 'all', onPart) {
   if (type === 'all' || type === 'movie') jobs.push(catalog('movie', 'top', { search: q }));
   if (type === 'all' || type === 'series') jobs.push(catalog('series', 'top', { search: q }));
   if (type === 'all' || type === 'anime') jobs.push(getJSON(`${KITSU}/catalog/anime/kitsu-anime-list/search=${encodeURIComponent(q)}.json`).then(j => (j.metas || []).map(m => norm(m, true))));
+  // last, so a title in both sources keeps Cinemeta's fuller entry
+  if (type !== 'anime') jobs.push(imdbSearch(q, type));
+  const once = list => { const seen = new Set(); return list.filter(m => !seen.has(m.id) && seen.add(m.id)); };
   const got = jobs.map(() => []);
-  jobs.forEach((j, i) => j.then(v => { got[i] = v; onPart && onPart(rankSearch(forProfile(got.flat()), q)); }, () => {}));
+  jobs.forEach((j, i) => j.then(v => { got[i] = v; onPart && onPart(rankSearch(forProfile(once(got.flat())), q)); }, () => {}));
   const res = await Promise.allSettled(jobs);
-  return rankSearch(forProfile(res.flatMap(r => (r.status === 'fulfilled' ? r.value : []))), q);
+  return rankSearch(forProfile(once(res.flatMap(r => (r.status === 'fulfilled' ? r.value : [])))), q);
 }
 
 /**
@@ -146,15 +162,15 @@ function rtSave() {
   ls.set('rt', rt);
 }
 
-export async function resolveTitle(name, year, type = 'movie') {
-  const key = `${type}:${name}:${year || ''}`;
+// strict: only the same title counts (a torrent's name, where a wrong poster is worse than none); also searches IMDb
+export async function resolveTitle(name, year, type = 'movie', { strict = false } = {}) {
+  const key = `${type}:${name}:${year || ''}${strict ? ':strict' : ''}`;
   const c = rtMap()[key];
   if (c) { delete rt[key]; rt[key] = c; return c; } // LRU touch (saved with the next write)
-  const res = type === 'anime' ? await search(name, 'anime') : await catalog(type, 'top', { search: name });
+  const res = type === 'anime' || strict ? await search(name, type) : await catalog(type, 'top', { search: name });
   const clean = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  const hit = res.find(m => clean(m.name) === clean(name) && (!year || Math.abs((m.year || 0) - year) <= 1))
-    || res.find(m => !year || Math.abs((m.year || 0) - year) <= 1)
-    || res[0] || null;
+  const exact = res.find(m => clean(m.name) === clean(name) && (!year || Math.abs((m.year || 0) - year) <= 1));
+  const hit = exact || (strict ? null : res.find(m => !year || Math.abs((m.year || 0) - year) <= 1) || res[0] || null);
   if (hit) { rtMap()[key] = hit; rtSave(); }
   return hit;
 }

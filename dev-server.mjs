@@ -19,7 +19,8 @@ const DIRS = new Set(['css', 'js', 'vendor', 'art']);
 
 // [url prefix, function file, param name, catch-all?]
 const FUNCS = [
-  ['/api/rd/', 'functions/api/rd/[[path]].js', 'path', true],
+  ['/api/tb/', 'functions/api/tb/[[path]].js', 'path', true],
+  ['/api/imdb', 'functions/api/imdb.js', 'x', false],
   ['/api/google/', 'functions/api/google/[[path]].js', 'path', true],
   ['/api/trakt/', 'functions/api/trakt/[[path]].js', 'path', true],
   ['/api/addon', 'functions/api/addon.js', 'x', false],
