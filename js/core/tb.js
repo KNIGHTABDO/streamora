@@ -97,10 +97,15 @@ export const addWebLink = async link => {
 export async function checkCached(hashes) {
   const out = new Set();
   try {
-    for (let i = 0; i < hashes.length; i += 100) {
-      const d = await tb(`torrents/checkcached?${q({ format: 'object', list_files: false })}`, { method: 'POST', json: { hashes: hashes.slice(i, i + 100) } });
-      Object.keys(d || {}).forEach(h => out.add(h.toLowerCase()));
-    }
+    const batches = [];
+    for (let i = 0; i < hashes.length; i += 100) batches.push(hashes.slice(i, i + 100));
+    const worker = async () => {
+      for (let b; (b = batches.shift());) {
+        const d = await tb(`torrents/checkcached?${q({ format: 'object', list_files: false })}`, { method: 'POST', json: { hashes: b } });
+        Object.keys(d || {}).forEach(h => out.add(h.toLowerCase()));
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
     return out;
   } catch (e) { if (e.code === 'badkey' || e.code === 'nokey') throw e; return null; }
 }

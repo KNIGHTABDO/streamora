@@ -36,7 +36,7 @@ function SourcesModal({ meta, video, onClose }) {
     </div>
     ${res.loading ? html`<${Spinner} label="asking the trackers…" />`
       : res.error ? html`<${ErrorNote} error=${res.error} retry=${res.reload} />`
-      : !list.length ? html`<${Empty} mood="binoculars" title="No sources here" text=${cachedOnly ? 'Nothing cached on TorBox yet. Try showing uncached sources too.' : 'The trackers came back empty for this one.'}
+      : !list.length ? html`<${Empty} mood="binoculars" title="No sources here" text=${cachedOnly ? 'Nothing cached on TorBox yet. Try showing uncached sources too.' : 'None of the sources we search have this one. If you find a magnet or .torrent for it, Add & play takes it.'}
           action=${cachedOnly && html`<${Btn} icon="eye" onClick=${() => setCachedOnly(false)}>Show uncached<//>`} />`
       : html`<ul class="det-src-list">
         ${list.slice(0, 60).map((x, i) => html`<li key=${x.infoHash + i}>

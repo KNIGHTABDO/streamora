@@ -344,3 +344,16 @@ h1 .st-underline { bottom: -4px; height: 14px; }
   .grid-lg { grid-template-columns: repeat(auto-fill, minmax(164px, 1fr)); }
   .page { padding-left: max(var(--gutter), env(safe-area-inset-left, 0px)); padding-right: max(var(--gutter), env(safe-area-inset-right, 0px)); }
 }
+
+/* comfortable tap targets on phones; the ::after ones grow the target without moving the layout */
+@media (max-width: 760px) {
+  .btn-sm, .chip, .drawer-pill { min-height: 44px; }
+  .nav-avatar { min-width: 44px; display: grid; place-items: center; }
+  html .appbar button { width: 44px; height: 44px; margin-block: -6px; }
+  /* Play, More info and the heart share one row */
+  .home-hero .hero-actions { flex-wrap: nowrap; gap: 8px; }
+  .home-hero .hero-actions .btn { flex: 1 1 auto; min-width: 0; padding-inline: 10px; white-space: nowrap; }
+  .home-hero .hero-actions .home-heart { flex: none; }
+  .row-more, .det-person, .appbar a { position: relative; }
+  .row-more::after, .det-person::after, .appbar a::after { content: ''; position: absolute; inset: -10px -4px; }
+}

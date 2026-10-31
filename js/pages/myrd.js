@@ -53,7 +53,7 @@ function Account({ u }) {
   if (!u) return null;
   const d = daysLeft(u);
   return html`<div class="myrd-account">
-    <div><div class="kicker type">signed in as</div><b class="myrd-user display">${u.username}</b>
+    <div><div class="kicker type">signed in as</div><b class="myrd-user display">${String(u.username).replace('@', '\u200b@')}</b>
       <div class="type faint">premium until ${new Date(u.expiration).toLocaleDateString()}</div></div>
     <div class=${cx('myrd-stamp', d < 7 && 'low')} title=${`Premium until ${new Date(u.expiration).toLocaleDateString()}`}>
       <span class="type">${u.plan}</span><b>${d}</b><span class="type">days left</span>

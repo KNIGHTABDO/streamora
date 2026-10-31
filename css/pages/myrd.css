@@ -39,6 +39,10 @@
   .myrd-file > .faint { grid-column: 2; }
   .myrd-file > .cluster { grid-column: 1 / -1; justify-content: flex-end; }
   .myrd-active .spread { flex-wrap: wrap; }
-  .myrd-stamp { width: 96px; height: 96px; }
+  .myrd-account { flex-wrap: nowrap; gap: 12px; }
+  .myrd-account > div:first-child { min-width: 0; }
+  .myrd-user { font-size: clamp(20px, 6vw, 30px); overflow-wrap: anywhere; }
+  .myrd-stamp { flex: none; width: 96px; height: 96px; }
   .myrd-stamp b { font-size: 34px; }
+  .myrd-stamp .type { font-size: 11px; letter-spacing: 0; }
 }

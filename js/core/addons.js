@@ -55,7 +55,7 @@ export function normalizeStream(s, addonName) {
   if (!s || typeof s !== 'object') return null;
   const str = v => (typeof v === 'string' ? v : '');
   const bh = s.behaviorHints || {};
-  const hash = String(s.infoHash || (/\/([a-f0-9]{40})\//i.exec(str(s.url)) || [])[1] || (/\|([a-f0-9]{40})$/i.exec(str(bh.bingeGroup)) || [])[1] || '').toLowerCase();
+  const hash = String(s.infoHash || (/\/([a-f0-9]{40})(?:[/?#]|$)/i.exec(str(s.url)) || [])[1] || (/\|([a-f0-9]{40})$/i.exec(str(bh.bingeGroup)) || [])[1] || '').toLowerCase();
   if (!/^[a-f0-9]{40}$/.test(hash)) return null;
   const text = str(s.title) || str(s.description);
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
@@ -80,8 +80,9 @@ export function normalizeStream(s, addonName) {
 // doesn't index (much of the Arabic and Turkish catalog).
 const COMET = 'https://comet.elfhosted.com';
 const MEDIAFUSION = 'https://mediafusionfortheweebs.midnightignite.me';
+const METEOR = 'https://meteorfortheweebs.midnightignite.me'; // needs no key, so nothing of the user's leaves the app
 const cometCfg = key => btoa(JSON.stringify({
-  maxResultsPerResolution: 8, maxSize: 0, cachedOnly: false, removeTrash: true, resultFormat: ['all'],
+  maxResultsPerResolution: 50, maxSize: 0, cachedOnly: false, removeTrash: true, resultFormat: ['all'],
   debridServices: [{ service: 'torbox', apiKey: key }], enableTorrent: false, deduplicateStreams: true, debridStreamProxyPassword: '',
   languages: { required: [], exclude: [], preferred: [] }, resolutions: {},
   options: { remove_ranks_under: -10000000000, allow_english_in_languages: false, remove_unknown_languages: false },
@@ -102,6 +103,7 @@ const mediafusionCfg = key => {
 export const BUILTIN = [
   { name: 'Comet', base: async key => `${COMET}/${cometCfg(key)}` },
   { name: 'MediaFusion', base: async key => `${MEDIAFUSION}/${await mediafusionCfg(key)}` },
+  { name: 'Meteor', base: async () => METEOR },
 ];
 
 async function fromAddon(name, base, type, id, get) {

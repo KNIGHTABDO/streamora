@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { merge, mergeSecrets, syncable } from '../js/core/sync.js';
 import { foldWatched, scrobbleBody } from '../js/core/trakt.js';
 import { normalizeStream, checkManifest, manifestUrl } from '../js/core/addons.js';
+import { trimStreams } from '../js/core/sources.js';
 import { parseStream } from '../js/core/sources.js';
 import { onRequest as googleFn } from '../functions/api/google/[[path]].js';
 import { allowedUrl } from '../functions/api/addon.js';
@@ -109,6 +110,11 @@ const comet = parseStream(normalizeStream({ name: '[TB⚡] Comet 1080p', descrip
   behaviorHints: { bingeGroup: `comet|torbox|${hash}`, filename: 'A.2020.1080p.mkv', videoSize: 2e9 } }, 'Comet'));
 assert.deepEqual([comet.infoHash, comet.cached, comet.raw.url, comet.size, comet.site, comet.langs, comet.pack, comet.quality],
   [hash, true, 'https://c.io/playback/x', 2e9, 'Comet', ['🇹🇷'], false, '1080p']);
+// MediaFusion: the hash is the last part of the playback url
+assert.equal(normalizeStream({ name: 'MF', description: 'x', url: `https://m.io/streaming_provider/abc/playback/torbox/${hash}` }, 'MediaFusion').infoHash, hash);
+// long lists: every cached release stays, uncached ones are cut to the best seeded
+{ const l = [{ cached: true, seeders: 0, id: 'c' }, { seeders: 9, id: 'a' }, { seeders: 1, id: 'b' }, { seeders: 5, id: 'd' }];
+  assert.deepEqual(trimStreams(l, 2).map(s => s.id), ['c', 'a', 'd']); }
 // MediaFusion: language words become flags, English alone stays unflagged
 const mf = parseStream(normalizeStream({ name: 'MediaFusion 🧲 TRB ⏳ 2160p', description: '📺 WEB-DL\n📦 24.52 GB 👤 3\n🌐 Arabic + English\n🔗 Site', infoHash: hash }, 'MediaFusion'));
 assert.deepEqual([mf.cached, mf.size, mf.seeders, mf.langs, mf.pack], [false, 24.52e9, 3, ['🇸🇦', '🇬🇧'], false]);

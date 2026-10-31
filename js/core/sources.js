@@ -47,6 +47,12 @@ export function parseStream(s) {
   };
 }
 
+/** Popular titles return over a thousand releases. Keep every cached one, plus the best-seeded uncached ones, so the list stays quick on phones. */
+export const trimStreams = (list, uncached = 60) => {
+  const keep = new Set(list.filter(s => !s.cached).sort((a, b) => b.seeders - a.seeders).slice(0, uncached));
+  return list.filter(s => s.cached || keep.has(s));
+};
+
 /**
  * streams('movie', 'tt1392214')  |  streams('series', 'tt0944947:1:1')  |  streams('series', 'kitsu:7442:3')
  * For series pass the *video id* (episode id), for movies the meta id.
@@ -73,12 +79,13 @@ export async function streams(type, id) {
     const h = s.infoHash.toLowerCase(), had = byHash.get(h);
     if (!had) byHash.set(h, s); else if (s.cached) had.cached = true;
   }
-  const out = [...byHash.values()];
+  let out = [...byHash.values()];
   if (key && out.length) {
     const { checkCached } = await import('./tb.js');
     const have = await checkCached([...byHash.keys()]).catch(() => null);
     if (have) out.forEach(s => { s.cached = have.has(s.infoHash.toLowerCase()); });
   }
+  out = trimStreams(out);
   if (err) Object.defineProperty(out, 'failed', { value: ['Torrentio'], enumerable: false }); // sources that didn't answer
   return out;
 }

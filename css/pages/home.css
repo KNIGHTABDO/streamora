@@ -67,7 +67,12 @@
 }
 
 @media (max-width: 760px) {
-  .home-dots { bottom: 22px; right: 12px; }
+  /* below the hero, so they can never sit on its buttons */
+  .home-dots { position: static; justify-content: center; gap: 0; margin: 2px 0 6px; }
+  .home-dot { width: 22px; min-width: 22px; color: inherit; }
+  .home-dot svg { display: none; }
+  .home-dot::before { content: ''; width: 7px; height: 7px; border-radius: 4px; background: var(--ink-3); transition: width .25s var(--ease-pop), background .25s; }
+  .home-dot.on::before { width: 18px; background: var(--a1); }
   .home-greet { gap: 10px 14px; margin-bottom: 18px; }
   .home-greet .reel { width: 70px; height: 70px; }
   .home-stickers { margin-left: 0; gap: 10px; overflow-x: auto; flex-wrap: nowrap; width: calc(100% + var(--gutter) * 2); margin: 0 calc(var(--gutter) * -1); padding: 8px var(--gutter) 12px; scrollbar-width: none; }

@@ -36,6 +36,7 @@ const SHORTCUTS = [
 function HeroCarousel({ items }) {
   const [i, setI] = useState(0);
   const [paused, setPaused] = useState(false);
+  const touch = useRef(null);
   const wl = useStore(watchlist);
   const n = items.length;
   useEffect(() => {
@@ -52,7 +53,14 @@ function HeroCarousel({ items }) {
     try { navigate(playAction(await getMeta(item.type, item.id)).href); }
     catch { navigate(hrefTitle(item)); }
   };
-  return html`<div class="home-hero" onMouseEnter=${() => setPaused(true)} onMouseLeave=${() => setPaused(false)}
+  // swipe between slides; a mostly vertical move is the page scrolling
+  const swipe = e => {
+    const t = e.changedTouches[0], s = touch.current;
+    if (!s || n < 2) return;
+    const dx = t.clientX - s.x, dy = t.clientY - s.y;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) setI(x => (x + (dx < 0 ? 1 : -1) + n) % n);
+  };
+  return html`<div class="home-hero" onTouchStart=${e => { const t = e.touches[0]; touch.current = { x: t.clientX, y: t.clientY }; }} onTouchEnd=${swipe} onMouseEnter=${() => setPaused(true)} onMouseLeave=${() => setPaused(false)}
       onFocusIn=${() => setPaused(true)} onFocusOut=${e => !e.currentTarget.contains(e.relatedTarget) && setPaused(false)}>
     <div class="home-hero-slide" key=${item.id}>
       <${Hero} item=${item} kicker=${item.anime ? 'trending anime' : item.type === 'series' ? 'trending show' : 'trending now'} tall actions=${html`
