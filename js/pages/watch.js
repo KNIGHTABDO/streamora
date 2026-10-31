@@ -7,7 +7,7 @@ import { streams, rankStreams, fmtSize, isPhone, noMkv } from '../core/sources.j
 import { resolveStream, resolveLink, torrents, webStreamingRefused } from '../core/tb.js';
 import { resumeAt } from '../core/progress.js';
 import { settings, progress } from '../core/store.js';
-import { navigate } from '../router.js';
+import { navigate, back } from '../router.js';
 import { Player } from '../player/player.js';
 import { AppPlayer, isNative } from '../player/native.js';
 
@@ -240,7 +240,7 @@ function LibraryWatch({ link, name }) {
   useEffect(() => {
     resolveLink(link, { direct: isNative() }).then(stream => setSt({ ready: { stream, info: null } })).catch(err => setSt({ err }));
   }, []);
-  const onBack = () => (history.length > 1 ? history.back() : navigate('#/myrd'));
+  const onBack = () => back();
   const pseudo = st.ready && { id: 'tb:' + st.ready.stream.downloadId, type: 'movie', name: name || st.ready.stream.filename };
   return html`<div class="watch" data-no-paper>
     ${st.ready ? html`<${isNative() ? AppPlayer : Player} meta=${pseudo} video=${null} stream=${st.ready.stream} info=${st.ready.info} start=${0} noProgress onFatal=${e => setSt({ err: e })} onBack=${onBack} />`

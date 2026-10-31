@@ -41,7 +41,11 @@
 .nav-avatar { display: block; margin-left: 6px; transition: transform .25s var(--ease-pop); border-radius: 50%; }
 .nav-avatar:hover { transform: rotate(-10deg) scale(1.08); }
 
+/* same glass as the logo pill, so it reads over a hero image and on plain paper */
+.nav-back { flex: none; background: var(--glass); margin-right: -4px; }
+.topnav.scrolled .nav-back { background: transparent; }
 @media (max-width: 760px) {
+  .topnav.has-back .logo-word { display: none; }
   .topnav { gap: 10px; }
   .topnav-links { display: none; }
   .logo-word { font-size: 28px; }

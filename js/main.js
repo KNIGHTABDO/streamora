@@ -4,7 +4,7 @@ import { html, render, useState, useEffect, useRef, useErrorBoundary } from '../
 import { installSketch } from './ui/sketch.js';
 import { Icon, Spinner, Toasts, ErrorNote, Btn, cx, toast } from './ui/components.js';
 import { Avatar } from './ui/avatars.js';
-import { useRoute, navigate, parseHash } from './router.js';
+import { useRoute, navigate, parseHash, back, hasBack, settleScroll } from './router.js';
 import { useStore, keyStore, profiles, activeProfileId, settings } from './core/store.js';
 import { account } from './core/google.js';
 import { initSync } from './core/sync.js';
@@ -115,7 +115,9 @@ function TopNav({ route, onMore, profile, moreOpen, badge }) {
     addEventListener('scroll', on, { passive: true });
     return () => removeEventListener('scroll', on);
   }, []);
-  return html`<header class=${cx('topnav', scrolled && 'scrolled')}>
+  const showBack = hasBack(route.path);
+  return html`<header class=${cx('topnav', scrolled && 'scrolled', showBack && 'has-back')}>
+    ${showBack && html`<button type="button" class="icon-btn nav-back" onClick=${back} aria-label="Go back" title="Back"><${Icon} name="back" /></button>`}
     <${Logo} />
     <nav class="topnav-links" aria-label="Main">
       ${MAIN_NAV.map(n => html`<a href=${n.href} class=${cx('topnav-link', route.path === n.path && 'active')} aria-current=${route.path === n.path ? 'page' : null}>${n.label}</a>`)}
@@ -212,7 +214,7 @@ function App() {
 
   const q = new URLSearchParams(route.query).toString();
   const badge = badgeCount(useStore(newEps));
-  useEffect(() => { scrollTo(0, 0); }, [route.path, q]);
+  useEffect(settleScroll, [route.path, q]);
   useEffect(() => { setMore(false); }, [route.path]);
 
   // gates: not signed in to Google (everything lives in Drive) or no key → welcome; no profile → profile picker
@@ -220,10 +222,26 @@ function App() {
   const ready = google && key.set;
   // redirect by rewriting the URL quietly and rendering the target now (navigating mid-render got lost on fresh loads)
   const gate = !ready && !open ? '#/welcome' : ready && !profile && !open && route.path !== '/profiles' ? '#/profiles' : null;
-  if (gate) { history.replaceState(null, '', gate); route = parseHash(gate); }
-  else if (route.redirect) history.replaceState(null, '', route.redirect);
+  if (gate) { history.replaceState(history.state, '', gate); route = parseHash(gate); }
+  else if (route.redirect) history.replaceState(history.state, '', route.redirect);
 
-  const chromeless = ['/watch', '/welcome'].some(p => route.path.startsWith(p)) || (route.path === '/profiles' && !profile);
+  // in the app, swipe in from the left edge to go back like any iOS app (Safari already does this itself)
+  useEffect(() => {
+    if (!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) return;
+    let from = null;
+    const start = e => { const t = e.touches[0]; from = t.clientX < 24 ? { x: t.clientX, y: t.clientY } : null; };
+    const end = e => {
+      const t = e.changedTouches[0], s = from; from = null;
+      if (!s || document.querySelector('.modal-scrim, .drawer-scrim.open')) return;
+      const dx = t.clientX - s.x, dy = Math.abs(t.clientY - s.y), p = parseHash().path;
+      if (dx > 70 && dx > dy * 1.5 && hasBack(p) && !p.startsWith('/watch/')) back();
+    };
+    addEventListener('touchstart', start, { passive: true });
+    addEventListener('touchend', end, { passive: true });
+    return () => { removeEventListener('touchstart', start); removeEventListener('touchend', end); };
+  }, []);
+
+  const chromeless = route.path.startsWith('/watch/') || route.path === '/welcome' || (route.path === '/profiles' && !profile);
   return html`
     <${Offline} />
     ${!chromeless && html`<${TopNav} route=${route} profile=${profile} onMore=${() => setMore(true)} moreOpen=${more} badge=${badge} />`}

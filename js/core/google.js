@@ -52,7 +52,7 @@ export async function signInWithRedirect() {
 async function finishRedirect(q) {
   const p = ls.get('oauth-pending', null);
   ls.del('oauth-pending');
-  history.replaceState(null, '', location.pathname + ((p && p.back) || '#/'));
+  history.replaceState(history.state, '', location.pathname + ((p && p.back) || '#/'));
   if (q.get('error')) throw new Error(q.get('error') === 'access_denied' ? 'Google sign-in was cancelled.' : `Google said ${q.get('error')}`);
   if (!p || p.state !== q.get('state') || Date.now() - p.at > 30 * 60e3) throw new Error('That sign-in expired. Try again.');
   const r = await relay('token', { code: q.get('code'), redirect_uri: redirectUri(), code_verifier: p.verifier });

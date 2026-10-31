@@ -63,7 +63,7 @@ export function parseHash(h = location.hash) {
 /** navigate('#/title/movie/tt123') or navigate('/search?q=x', { replace: true }) */
 export function navigate(to, { replace } = {}) {
   const h = to.startsWith('#') ? to : '#' + to;
-  if (replace) { history.replaceState(null, '', h); window.dispatchEvent(new HashChangeEvent('hashchange')); }
+  if (replace) { replacing = true; history.replaceState(history.state, '', h); window.dispatchEvent(new HashChangeEvent('hashchange')); }
   else location.hash = h;
 }
 
@@ -73,7 +73,8 @@ export function setQuery(patch) {
   const q = new URLSearchParams({ ...r.query, ...patch });
   for (const [k, v] of [...q]) if (v === '' || v == null || v === 'undefined') q.delete(k);
   const s = q.toString();
-  history.replaceState(null, '', `#${r.path}${s ? '?' + s : ''}`);
+  replacing = true;
+  history.replaceState(history.state, '', `#${r.path}${s ? '?' + s : ''}`);
   window.dispatchEvent(new HashChangeEvent('hashchange'));
 }
 
@@ -87,4 +88,49 @@ export function useRoute() {
   return r;
 }
 
-export const back = (fallback = '#/') => (history.length > 1 ? history.back() : navigate(fallback));
+// ---- going back. Every history entry gets a number, so we know whether an in-app page is behind this one
+// (history.length can't tell: it also counts whatever was open before the app) and can tell Back from a new page.
+let idx = Number.isInteger(history.state && history.state.idx) ? history.state.idx : 0;
+let lastNav = 'push', restoreY = 0, replacing = false, stopRestore = null;
+const scrolls = new Map();
+if (!history.state || history.state.idx !== idx) history.replaceState({ idx }, '');
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+addEventListener('hashchange', () => {
+  if (replacing) { replacing = false; lastNav = 'replace'; return; }
+  const s = history.state;
+  if (s && Number.isInteger(s.idx)) { idx = s.idx; lastNav = 'pop'; restoreY = scrolls.get(idx) || 0; return; }
+  idx += 1; lastNav = 'push'; history.replaceState({ idx }, '');
+});
+addEventListener('scroll', () => scrolls.set(idx, scrollY), { passive: true });
+
+/** After a route change: a new page starts at the top; Back returns to where you were, waiting for the content to load. */
+export function settleScroll() {
+  if (stopRestore) stopRestore();
+  const y = lastNav === 'pop' ? restoreY : 0;
+  const go = () => scrollTo({ top: y, behavior: 'instant' });
+  go();
+  if (!y) return;
+  const start = Date.now();
+  const timer = setInterval(() => {
+    const t = Date.now() - start;
+    if (Math.abs(scrollY - y) > 1) go();
+    if (t > 4000 || (t > 1200 && Math.abs(scrollY - y) <= 1)) stopRestore();
+  }, 80);
+  stopRestore = () => { clearInterval(timer); removeEventListener('touchstart', stopRestore); removeEventListener('wheel', stopRestore); stopRestore = null; };
+  addEventListener('touchstart', stopRestore, { passive: true }); // the user took over
+  addEventListener('wheel', stopRestore, { passive: true });
+}
+
+// The main tabs are places you go to, not places you come back from
+const ROOTS = ['/', '/movies', '/shows', '/anime', '/search'];
+export const hasBack = path => !ROOTS.includes(path);
+
+// Opened directly, with nothing to go back to: the section this page belongs to
+function parentOf(path) {
+  const [, a, type, id] = path.split('/');
+  if (a === 'watch') return /^(tt|kitsu)/.test(id || '') ? `#/title/${type}/${id}` : '#/myrd';
+  if (a === 'title') return /^kitsu/.test(id || '') ? '#/anime' : type === 'series' ? '#/shows' : '#/movies';
+  return { person: '#/people', genre: '#/genres', collection: '#/collections' }[a] || '#/';
+}
+
+export const back = () => (idx > 0 ? history.back() : navigate(parentOf(parseHash().path), { replace: true }));
