@@ -14,6 +14,15 @@ import { checkForUpdate } from './lib/update.js';
 import { isIOS } from './player/engine.js';
 import { isNative } from './player/native.js';
 
+// WKWebView loads the live site: keep quick taps from zooming or selecting the app UI.
+// Browser visitors keep pinch zoom for accessibility.
+if (window.Capacitor?.isNativePlatform?.()) {
+  const viewport = document.querySelector('meta[name="viewport"]');
+  if (viewport) viewport.content += ', maximum-scale=1, user-scalable=no';
+  document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
+  document.documentElement.classList.add('native-app');
+}
+
 installSketch();
 initFocus();
 
@@ -173,6 +182,7 @@ function MoreDrawer({ open, onClose, badge }) {
 const pageCache = new Map();
 function PageHost({ route }) {
   const [, force] = useState(0);
+  const [retry, setRetry] = useState(0);
   const [err, resetErr] = useErrorBoundary();
   const key = route.pattern;
   const entry = pageCache.get(key);
@@ -182,7 +192,7 @@ function PageHost({ route }) {
     pageCache.set(key, e);
     route.load().then(m => { e.status = 'ok'; e.Comp = m.default; force(x => x + 1); },
       error => { e.status = 'error'; e.error = error; force(x => x + 1); });
-  }, [key]);
+  }, [key, retry]);
   const full = route.path + '?' + new URLSearchParams(route.query);
   useEffect(() => { if (err) resetErr(); }, [full]);
   // after a path change, move focus to the new page (screen readers + TV remotes start at the top)
@@ -197,7 +207,7 @@ function PageHost({ route }) {
   if (err) return html`<main class="page"><${ErrorNote} error=${err} retry=${() => { resetErr(); }} /></main>`;
   if (!route.load) return html`<main class="page center-fill"><div class="empty"><h2>This page fell out of the sketchbook.</h2><${Btn} href="#/" icon="home">Go home<//></div></main>`;
   if (!entry || entry.status === 'loading') return html`<main class="page center-fill"><${Spinner} /></main>`;
-  if (entry.status === 'error') return html`<main class="page"><${ErrorNote} error=${entry.error} retry=${() => { pageCache.delete(key); force(x => x + 1); }} /></main>`;
+  if (entry.status === 'error') return html`<main class="page"><${ErrorNote} error=${entry.error} retry=${() => { pageCache.delete(key); setRetry(x => x + 1); }} /></main>`;
   const Comp = entry.Comp;
   return html`<div class="page-enter" key=${route.path}><${Comp} params=${route.params} query=${route.query} /></div>`;
 }

@@ -20,6 +20,7 @@ import { moveFocus } from '../ui/focus.js';
 import { attach, buildUrl, autoQuality, QUALITIES, isIOS, isSafari } from './engine.js';
 import { openSubs, loadSubFile, parseSubs, decodeSubs, cuesAt, toVTT, langName } from './subs.js';
 import { skipTimes } from './skip.js';
+import { createSubtitleLoader } from './subtitle-choice.js';
 import { VlcVideo } from './vlc.js';
 
 registerIcons({
@@ -101,7 +102,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     if (direct && burn === 'none' && (!audio || audio === pickAudio(info))) return stream.direct;
     if (info && info.modelUrl && audio) return buildUrl(info.modelUrl, { audio, subs: burn, quality });
     const h = stream.hls || {};
-    return h[quality] || h.high || h.original || Object.values(h).find(Boolean) || (/\.(mp4|webm|m4v)$/i.test(stream.filename || '') ? stream.direct : null);
+    return h[quality] || h.high || h.original || Object.values(h).find(Boolean) || ((stream.remux || /\.(mp4|webm|m4v)$/i.test(stream.filename || '')) ? stream.direct : null);
   }, [info, audio, burn, quality, stream, direct]);
 
   // ------------------------------------------------ playback state
@@ -148,6 +149,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     const v = vRef.current;
     if (!url) { fatal(new Error('No playable stream for this file.'), posRef.current); return; }
     let detach = () => {}, dead = false;
+    const controller = new AbortController();
     seekPending.current = false;
     const o = isTc ? Math.max(0, Math.floor(posRef.current)) : 0;
     offRef.current = o; setOff(o);
@@ -155,14 +157,14 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     setSt(x => ({ ...x, waiting: true }));
     if (vlc) vlc.setMeta({ title, subtitle: sub, poster: meta && meta.poster });   // lock screen / Now Playing
     (vlc ? vlc.open(src, { start: posRef.current, audioLang: mem.audioLang || s.audioLang, onFatal: (e, p) => !dead && fatal(e, p) })
-      : attach(v, src, { start: isTc ? 0 : posRef.current, onFatal: (e, p) => !dead && (src === stream.direct && info && info.modelUrl ? (posRef.current = p || posRef.current, setDirect(false)) : fatal(e, offRef.current + (p || 0))) })).then(d => {
+      : attach(v, src, { remux: stream.remux, audioLang: mem.audioLang || s.audioLang, signal: controller.signal, start: isTc ? 0 : posRef.current, onFatal: (e, p) => !dead && (src === stream.direct && info && info.modelUrl ? (posRef.current = p || posRef.current, setDirect(false)) : fatal(e, offRef.current + (p || 0))) })).then(d => {
       if (dead) return d();
       detach = d;
       v.playbackRate = rateRef.current;
       const p = v.play();
       p && p.catch(() => setBlocked(true));
     }, e => !dead && fatal(e, posRef.current));
-    return () => { dead = true; if (!seekPending.current && v.currentTime > 0) posRef.current = realNow(v); detach(); };
+    return () => { dead = true; if (!seekPending.current && v.currentTime > 0) posRef.current = realNow(v); controller.abort(); detach(); };
   }, [url, reload]);
 
   useEffect(() => {
@@ -278,6 +280,14 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const [line, setLine] = useState([]);
   const [subQ, setSubQ] = useState('');
   const [extDone, setExtDone] = useState(false);
+  const subtitleLoader = useMemo(() => createSubtitleLoader({
+    load: it => it.file ? it.file.arrayBuffer().then(buf => parseSubs(decodeSubs(buf, it.lang))) : loadSubFile(it.url, it.lang),
+    onLoading: it => setCur({ id: it.id, label: it.label, cues: [], loading: true }),
+    onCues: (it, cues) => showCues(it, cues),
+    onOff: () => setCur(null),
+    onError: () => { setCur(null); toast('That subtitle file would not load', { kind: 'warn' }); },
+  }), []);
+  useEffect(() => () => subtitleLoader.dispose(), []);
   // VLC: the file's audio / subtitle tracks as VLC lists them
   const [vt, setVt] = useState({ audio: [], subs: [], audioId: -1, subId: -1 });
   useEffect(() => {
@@ -310,12 +320,15 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   }, [vt, extDone]);
   useEffect(() => {
     if (!meta || String(meta.id).startsWith('tb:')) return;
+    let gone = false;
+    const before = subtitleLoader.version;
     openSubs(meta.type, video ? video.id : meta.id, release).then(list => {
+      if (gone) return;
       setExt(list);
       // auto-pick: this show's remembered language, else the preferred one when the audio isn't in it
       // (unknown / 'und' audio counts as "not in it")
       setExtDone(true);
-      if (vlc) return;   // VLC: see the effect below (the file's own tracks count too)
+      if (vlc || !subtitleLoader.isCurrent(before)) return;   // VLC: see the effect below (the file's own tracks count too)
       const want = mem.subLang || s.subsLang;
       if (!want || want === 'off') return;
       const aud = info && info.details && info.details.audio && audio && info.details.audio[audio];
@@ -327,15 +340,14 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
         else if (mem.subLang) { const em = trackLabels((info && info.details && info.details.subtitles) || {}).find(([, x]) => x.lang_iso === want); if (em) setBurn(em[0]); }
       }
     });
+    return () => { gone = true; };
   }, [meta && meta.id, video && video.id]);
   const chooseExt = async (it, user) => {
     if (user) Object.assign(picked.current, { subLang: it ? it.lang : 'off', subId: null, subName: null });
     if (user && it) { picked.current.subId = it.id; settings.update(x => ({ ...x, subsLang: it.lang })); }
     if (vlc && (it || user)) vlc.setSub(-1);
-    if (!it) { setCur(null); return; }
-    setCur({ id: it.id, label: it.label, cues: [], loading: true });
-    try { showCues(it, await loadSubFile(it.url, it.lang)); }
-    catch (e) { setCur(null); toast('That subtitle file would not load', { kind: 'warn' }); }
+    if (user) autoSubbed.current = true;
+    await subtitleLoader.choose(it);
   };
   const showCues = (it, cues) => {
     if (!cues.length) { setCur(null); toast('That subtitle file has no lines I can read', { kind: 'warn' }); return; }
@@ -346,8 +358,8 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     e.currentTarget.value = '';
     if (!f) return;
     setBurn('none');
-    try { showCues({ id: 'file:' + f.name, label: f.name }, parseSubs(decodeSubs(await f.arrayBuffer(), s.subsLang))); }
-    catch { toast('That subtitle file would not load', { kind: 'warn' }); }
+    autoSubbed.current = true;
+    await subtitleLoader.choose({ id: 'file:' + f.name, label: f.name, lang: s.subsLang, file: f });
   };
   useEffect(() => {
     if (!cur || !cur.cues.length) { setLine([]); return; }
@@ -631,6 +643,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   }, [ext, subQ]);
   const pct = st.dur ? st.t / st.dur : 0;
   const subStyle = `--sub-size:${(s.subsSize || 100) / 100};--sub-color:${s.subsColor || '#fffbe8'};--sub-bg:rgba(0,0,0,${s.subsBg ?? .35})`;
+  const qualities = vlc ? [] : QUALITIES.filter(q => info || (stream.hls && stream.hls[q.key]));
   const op = skip && skip.op;
   const inIntro = op ? st.t >= op[0] && st.t < op[1] - 1 : !!video && st.t > 5 && st.t < 180 && st.dur > 600;
   const skipIntro = () => (op ? seekTo(op[1]) : seekBy(s.skipIntroSec || 85));
@@ -728,8 +741,8 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     <//>`}
 
     ${menu === 'settings' && html`<${Menu} title="Settings" onClose=${() => setMenu(null)}>
-      ${!vlc && html`<div class="pl-menu-kicker kicker type">quality</div>`}
-      ${!vlc && html`<div class="pl-grid">${QUALITIES.filter(q => info ? true : stream.hls && stream.hls[q.key]).map(q => html`<button type="button" class=${cx('pl-chip', quality === q.key && 'on')} onClick=${() => { setDirect(false); setQuality(q.key); }}>${q.label}</button>`)}</div>`}
+      ${qualities.length > 0 && html`<div class="pl-menu-kicker kicker type">quality</div>`}
+      ${qualities.length > 0 && html`<div class="pl-grid">${qualities.map(q => html`<button type="button" class=${cx('pl-chip', quality === q.key && 'on')} onClick=${() => { setDirect(false); setQuality(q.key); }}>${q.label}</button>`)}</div>`}
       ${audios.length > 1 && html`<div class="pl-menu-kicker kicker type">audio</div>
         <div class="pl-grid">${audios.map(a => html`<button type="button" key=${a.key} class=${cx('pl-chip', a.on && 'on')} onClick=${a.pick}>${a.label}</button>`)}</div>`}
       <div class="pl-menu-kicker kicker type">speed</div>

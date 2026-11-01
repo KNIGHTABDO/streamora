@@ -17,6 +17,11 @@ import { idbGet, idbSet } from './idb.js';
 export const syncState = store('sync-status', { busy: false, last: 0, error: null });
 if (syncState.get().busy) syncState.set({ ...syncState.get(), busy: false });
 const DEBOUNCE = 1500, MAX_WAIT = 8000, POLL = 45e3, NAME = 'streamora-data';
+const RETRY_MIN = 5000, RETRY_MAX = 5 * 60e3;
+let retryDelay = 0, retryAt = 0;
+// Only the hide flush opts into a hidden run; retry scheduling keeps the default check.
+const canSync = (allowHiddenFlush = false) => !!account.get() && (typeof navigator === 'undefined' || navigator.onLine !== false)
+  && (allowHiddenFlush || typeof document === 'undefined' || document.visibilityState !== 'hidden');
 const TAG = (v) => encodeURIComponent(`appProperties has { key='streamora' and value='${v}' } and trashed=false`);
 const API = 'https://www.googleapis.com/drive/v3', UP = 'https://www.googleapis.com/upload/drive/v3';
 
@@ -190,7 +195,6 @@ class HttpError extends Error { constructor(r, what) { super(`${what}: Google Dr
 async function drive(url, opts = {}, tries = 0) {
   const r = await fetch(url, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${await accessToken(tries > 0 && opts._401)}` } });
   if (r.status === 401 && tries === 0) return drive(url, { ...opts, _401: true }, 1);
-  if ((r.status === 429 || r.status >= 500) && tries < 2) { await new Promise(res => setTimeout(res, 800 * (tries + 1))); return drive(url, opts, tries + 1); }
   return r;
 }
 async function fileMeta() {
@@ -259,8 +263,8 @@ export async function deleteDriveData() {
 }
 
 // ------------------------------------------------------------ one sync round
-async function run() {
-  if (!account.get()) return;
+async function run(allowHiddenFlush = false) {
+  if (!canSync(allowHiddenFlush)) return;
   syncState.set({ ...syncState.get(), busy: true });
   try {
     const meta = await fileMeta();
@@ -289,18 +293,25 @@ async function run() {
     ls.set('gd-ver', ver);
     ls.set('gd-clean', local.at || 0); // edits made while this ran keep it dirty, so they go up next round
     ls.set('sync-base', baseOf(data));
+    retryDelay = 0; retryAt = 0;
     syncState.set({ busy: false, last: Date.now(), error: null });
   } catch (e) {
+    retryDelay = Math.min(RETRY_MAX, retryDelay ? retryDelay * 2 : RETRY_MIN);
+    retryAt = Date.now() + retryDelay;
     const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
     syncState.set({ ...syncState.get(), busy: false, error: e instanceof SignedOut ? null : offline ? 'Offline. Changes are kept here and saved when you\'re back.' : (e.message || String(e)) });
   }
-  if (ls.get('sync-changed', 0) > ls.get('gd-clean', -1)) schedule(DEBOUNCE);
+  if (retryAt || ls.get('sync-changed', 0) > ls.get('gd-clean', -1)) schedule(DEBOUNCE);
 }
 let running = null, again = false;
 /** Runs a sync round now (or right after the current one). Resolves when this device is in step with Drive. */
-export function syncNow() {
+export function syncNow() { return startSync(); }
+function startSync(allowHiddenFlush = false) {
+  if (!canSync(allowHiddenFlush)) return Promise.resolve();
+  if (Date.now() < retryAt) { schedule(DEBOUNCE); return Promise.resolve(); }
   if (running) { again = true; return running; }
-  running = run().finally(() => { running = null; if (again) { again = false; syncNow(); } });
+  clearTimeout(timer); timer = null;
+  running = run(allowHiddenFlush).finally(() => { running = null; if (again) { again = false; syncNow(); } });
   return running;
 }
 export const syncPending = () => !!timer || !!running || ls.get('sync-changed', 0) > ls.get('gd-clean', -1);
@@ -308,11 +319,13 @@ export const syncPending = () => !!timer || !!running || ls.get('sync-changed', 
 // ------------------------------------------------------------ when to sync
 let timer = null, firstChange = 0;
 function schedule(ms) {
-  if (!account.get()) return;
+  if (!canSync()) { clearTimeout(timer); timer = null; return; }
   const now = Date.now();
   if (!timer) firstChange = now;
   clearTimeout(timer);
-  timer = setTimeout(() => { timer = null; syncNow(); }, Math.max(0, Math.min(ms, firstChange + MAX_WAIT - now)));
+  // Edits and the regular poll must respect an outstanding retry deadline.
+  const due = Math.max(retryAt, Math.min(now + ms, firstChange + MAX_WAIT));
+  timer = setTimeout(() => { timer = null; syncNow(); }, Math.max(0, due - now));
 }
 function changed(key) {
   if (applying) return;
@@ -323,7 +336,7 @@ function changed(key) {
 }
 let lastPull = 0;
 function pull() {
-  if (!account.get() || document.visibilityState !== 'visible' || Date.now() - lastPull < 5e3) return;
+  if (!canSync() || document.visibilityState !== 'visible' || Date.now() - lastPull < 5e3) return;
   lastPull = Date.now();
   syncNow();
 }
@@ -335,10 +348,18 @@ export async function initSync() {
   // every store write announces its key (store.js); the key and Trakt tokens count too
   addEventListener('streamora:changed', e => (syncable(e.detail) || e.detail === 'tbkey-state' || e.detail === 'trakt-rev') && changed(e.detail));
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') pull();
-    else if (timer) { clearTimeout(timer); timer = null; syncNow(); } // leaving: save now while the page still runs
+    if (document.visibilityState === 'visible') {
+      if (retryAt || ls.get('sync-changed', 0) > ls.get('gd-clean', -1)) syncNow(); else pull();
+    }
+    else {
+      const pending = timer != null;
+      clearTimeout(timer); timer = null;
+      // One immediate save on leaving, never an early backoff retry.
+      if (pending && Date.now() >= retryAt) startSync(true);
+    }
   });
-  addEventListener('online', () => { lastPull = 0; pull(); });
+  addEventListener('offline', () => { clearTimeout(timer); timer = null; });
+  addEventListener('online', () => { retryDelay = 0; retryAt = 0; lastPull = 0; pull(); });
   setInterval(pull, POLL);
   account.subscribe(a => { if (a) syncNow(); });
   if (account.get()) syncNow();

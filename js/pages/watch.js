@@ -3,7 +3,7 @@
 import { html, useState, useEffect, useRef } from '../../vendor/preact-htm.js';
 import { Btn, Icon, Reel, Img, Modal, Chip, cx, fmtTime, loadCSS, toast } from '../ui/components.js';
 import { meta as getMeta, backdropOf } from '../core/meta.js';
-import { streams, rankStreams, fmtSize, isPhone, noMkv } from '../core/sources.js';
+import { streams, rankStreams, fmtSize, isPhone, webPrefs } from '../core/sources.js';
 import { resolveStream, resolveLink, torrents, webStreamingRefused } from '../core/tb.js';
 import { resumeAt } from '../core/progress.js';
 import { settings, progress } from '../core/store.js';
@@ -74,7 +74,7 @@ function Session({ params, query }) {
     const id = video ? video.id : meta.id;
     const binge = (progress.get()[meta.id] || {}).source?.binge;
     // on the web 4K files only cost start-up time unless "original" is chosen
-    const prefs = { cachedOnly: s.cachedOnly !== false, preferSmall: isPhone(), preferMp4: noMkv(), mp4First: !isNative() && webStreamingRefused() && noMkv(), preferBinge: binge, audioLang: s.audioLang, maxQuality: s.quality === 'original' ? '2160p' : '1080p' };
+    const prefs = { cachedOnly: s.cachedOnly !== false, preferSmall: isPhone(), ...webPrefs(webStreamingRefused()), preferBinge: binge, audioLang: s.audioLang, maxQuality: s.quality === 'original' ? '2160p' : '1080p' };
     Promise.all([streams(meta.type, id), torrents(1, 100).catch(() => [])]).then(([list, mine]) => {
       if (list.failed && list.failed.length && list.length) toast(`${list.failed.join(', ')} didn't answer. Showing the rest.`, { kind: 'warn', icon: 'warn' });
       // sources already in the account start instantly (no new torrent added), so they go first
@@ -91,7 +91,8 @@ function Session({ params, query }) {
       if (query.hash) {
         const h = query.hash.toLowerCase();
         const pinned = all.find(x => x.infoHash.toLowerCase() === h) || { infoHash: h, fileIdx: query.file != null ? +query.file : undefined, filename: query.fn || null, release: query.fn || 'Chosen source', quality: '?', cached: true };
-        setCands([pinned, ...mineFirst(rankStreams(list, prefs)).filter(x => x.infoHash.toLowerCase() !== h)]);
+        const chosen = { ...pinned, ...(query.file != null ? { fileIdx: +query.file } : {}), ...(query.fn != null ? { filename: query.fn } : {}) };
+        setCands([chosen, ...mineFirst(rankStreams(list, prefs)).filter(x => x.infoHash.toLowerCase() !== h)]);
       } else {
         const ranked = mineFirst(rankStreams(list, prefs));
         setCands(ranked);
@@ -142,7 +143,7 @@ function Session({ params, query }) {
     if (pos > 0) setStartAt(Math.floor(pos));
     if (!cands) return setErr(e);
     const i = cands.findIndex(c => !tried.current.has(c.infoHash));
-    if (i < 0) setErr(e); else { setStep('That stream hiccuped. Trying another source…'); tryFrom(cands, i); }
+    if (i < 0) { setReady(null); setErr(e); } else { setStep('That stream hiccuped. Trying another source…'); tryFrom(cands, i); }
   };
 
   const onBack = backTo(params.type, params.id);

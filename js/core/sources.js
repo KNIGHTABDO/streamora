@@ -2,6 +2,7 @@
 // cached; the addons' flags ([TB+], ⚡) only count when that check can't answer.
 import { getTbKey } from './store.js';
 import { fetchT } from './net.js';
+import { canRemuxMkv, hevcInMse } from '../player/mkv-plan.js';
 
 export const TORRENTIO = 'https://torrentio.strem.fun';
 
@@ -115,6 +116,12 @@ export function rankStreams(list, prefs = {}) {
     if (prefs.preferMp4 && mp4) x += 55;
     // browsers often can't decode these inside an mp4 either, so plain h264/aac copies go first
     if (prefs.mp4First && mp4) x += /x265|hevc|h\.?265|e?ac-?3|ddp|dd[+ .]?5|dts|truehd/i.test(`${s.filename} ${s.release}`) ? 500 : 700;
+    if (prefs.remux) {
+      const text = `${s.filename} ${s.release}`;
+      if (/\bdts\b|dts-?hd|truehd/i.test(text)) x -= 400;
+      if (prefs.avoidHevc && /x265|hevc|h\.?265/i.test(text)) x -= 250;
+      if (mp4 && /e?ac-?3|ddp|dd[+ .]?5/i.test(text)) x -= 100;
+    }
     const gb = s.size / 1e9;
     // huge remuxes transcode slowly; favour sane sizes, more so on phones
     x -= prefs.preferSmall ? gb * 4 : gb * 2 + Math.max(0, gb - 20) * 6;
@@ -134,3 +141,11 @@ export const fmtSize = b => !b ? '' : b >= 1e9 ? `${(b / 1e9).toFixed(b >= 1e10 
 // true where the browser can't play mkv itself (Safari/iOS), so mp4 releases go first (the app's VLC player plays mkv)
 export const noMkv = () => typeof document !== 'undefined' && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())
   && !document.createElement('video').canPlayType('video/x-matroska');
+
+// The caller supplies the plan's streaming refusal; keep this module independent of tb.js.
+export function webPrefs(webStreamingRefused = false) {
+  const native = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.();
+  const remux = !native && canRemuxMkv();
+  const preferMp4 = noMkv();
+  return { preferMp4, mp4First: preferMp4 && webStreamingRefused && !remux, remux, avoidHevc: remux && !hevcInMse() };
+}

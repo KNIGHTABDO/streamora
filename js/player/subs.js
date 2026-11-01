@@ -56,8 +56,8 @@ function parseAss(text) {
   return out.sort((x, y) => x.start - y.start);
 }
 
-/** SRT, WebVTT or ASS/SSA text -> [{ start, end, text }] (text keeps <i>/<b>, drops other tags) */
-export function parseSubs(text) {
+/** Parse timing and format-specific overrides before the common HTML sanitizer. */
+function parseRawSubs(text) {
   if (/^\s*\[Script Info\]|^Dialogue:/im.test(text)) return parseAss(text);
   const out = [];
   const blocks = text.replace(/\r/g, '').replace(/^﻿/, '').split(/\n{2,}/);
@@ -68,11 +68,19 @@ export function parseSubs(text) {
     const [a, z] = lines[i].split('-->');
     const body = lines.slice(i + 1).join('\n')
       .replace(/\{\\[^}]*\}/g, '')                      // ASS override tags
-      .replace(/<(?!\/?[ib]>)[^>]+>/gi, '')             // keep only <i> <b>
       .trim();
     if (body) out.push({ start: ts(a), end: ts(z), text: body });
   }
   return out.sort((x, y) => x.start - y.start);
+}
+
+// Escape first; only exact, attribute-free formatting tags may become markup again.
+const sanitize = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/&lt;(\/?)(i|b|u|em|strong|br)&gt;/gi, (_, close, tag) => `<${close}${tag.toLowerCase()}>`);
+
+/** SRT, WebVTT and ASS/SSA all use the same strict formatting whitelist. */
+export function parseSubs(text) {
+  return parseRawSubs(text).map(cue => ({ ...cue, text: sanitize(cue.text) }));
 }
 
 /** cues -> WebVTT (for the iOS native-fullscreen <track> fallback) */
@@ -110,9 +118,9 @@ if (typeof process !== 'undefined' && process.argv && process.argv[1] && process
   const assert = (await import('node:assert')).default;
   const c = parseSubs('1\n00:00:43,480 --> 00:00:48,646\n<font color="#808080">KELLER:</font> <i>Our Father</i>\n\n2\n00:00:49,280 --> 00:00:51,123\nThy kingdom\n');
   assert.equal(c.length, 2);
-  assert.equal(c[0].text, 'KELLER: <i>Our Father</i>');
+  assert.equal(c[0].text, '&lt;font color="#808080"&gt;KELLER:&lt;/font&gt; <i>Our Father</i>');
   assert.equal(c[0].start, 43.48);
-  assert.deepEqual(cuesAt(c, 45), ['KELLER: <i>Our Father</i>']);
+  assert.deepEqual(cuesAt(c, 45), ['&lt;font color="#808080"&gt;KELLER:&lt;/font&gt; <i>Our Father</i>']);
   assert.deepEqual(cuesAt(c, 48.9), []);
   assert.ok(toVTT(c).startsWith('WEBVTT\n\n00:00:43.480 --> 00:00:48.646'));
   const a = parseSubs('[Script Info]\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.50,0:00:03.00,Default,,0,0,0,,{\\an8}Hello,\\Nworld\n');

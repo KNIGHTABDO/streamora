@@ -146,3 +146,60 @@ console.log('integrations: all passed');
   const im = imdbItems({ d: [{ id: 'tt2043822', l: 'Baya Al Maut', y: 2011, qid: 'movie', i: { imageUrl: 'p' } }, { id: 'nm1', l: 'A person' }, { id: 'tt1', l: 'Game', qid: 'videoGame' }] }, 'all');
   assert.deepEqual(im.map(x => [x.id, x.type, x.name, x.year, x.poster]), [['tt2043822', 'movie', 'Baya Al Maut', 2011, 'p']]);
 }
+
+// ---- browser MKV fallback (only an existing account item; never creates a torrent)
+{
+  const { resolveStream } = await import('../js/core/tb.js');
+  const { ls, saveTbKey, forgetTbKey } = await import('../js/core/store.js');
+  const oldWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const oldStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  const savedFetch = globalThis.fetch;
+  const data = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
+    getItem: k => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: k => data.delete(k),
+  } });
+  let filename = 'A.2020.1080p.mkv', paid = false, requests = 0;
+  const infoHash = 'b'.repeat(40);
+  globalThis.fetch = async url => {
+    const path = String(url);
+    if (path.includes('/torrents/mylist')) return Response.json({ success: true, data: [{
+      id: 7, hash: infoHash, download_present: true, files: [{ id: 2, name: filename, size: 1234 }],
+    }] });
+    if (path.includes('/stream/createstream')) return paid
+      ? Response.json({ success: true, data: { hls_url: 'https://media.test/play.m3u8' } })
+      : Response.json({ success: false, error: 'PLAN_RESTRICTED_FEATURE' }, { status: 500 });
+    if (path.includes('/torrents/requestdl')) { requests++; return Response.json({ success: true, data: 'https://media.test/file' }); }
+    assert.fail('Unexpected TorBox operation');
+  };
+  const reset = () => { ls.del('resolved'); ls.del('tb-noweb'); };
+  try {
+    await saveTbKey('mock-key');
+    globalThis.window = { MediaSource: function () {} };
+    let out = await resolveStream({ infoHash, filename });
+    assert.equal(out.remux, true, 'MSE fallback enables remux after streaming refusal');
+    assert.equal(out.direct, 'https://media.test/file');
+    // Streaming is now remembered as refused: the early filename gate must still allow MKV.
+    const before = requests;
+    out = await resolveStream({ infoHash, filename });
+    assert.equal(out.remux, true);
+    assert.equal(requests, before + 1, 'remembered refusal still mints a fresh MKV link');
+    reset(); globalThis.window = {};
+    await assert.rejects(resolveStream({ infoHash, filename }), e => e.code === 'webplan');
+    for (const ext of ['avi', 'wmv']) {
+      reset(); globalThis.window = { MediaSource: function () {} }; filename = `A.2020.1080p.${ext}`;
+      await assert.rejects(resolveStream({ infoHash, filename }), e => e.code === 'webplan');
+    }
+    reset(); filename = 'A.2020.1080p.mkv';
+    out = await resolveStream({ infoHash, filename, direct: true });
+    assert.equal(out.remux, false, 'native direct MKV bypasses remux');
+    reset(); paid = true;
+    out = await resolveStream({ infoHash, filename });
+    assert.equal(out.hls.original, 'https://media.test/play.m3u8');
+    assert.equal(out.remux, false, 'paid HLS keeps its existing engine');
+    console.log('TorBox MKV fallback: all passed');
+  } finally {
+    forgetTbKey(); globalThis.fetch = savedFetch;
+    if (oldWindow) Object.defineProperty(globalThis, 'window', oldWindow); else delete globalThis.window;
+    if (oldStorage) Object.defineProperty(globalThis, 'localStorage', oldStorage); else delete globalThis.localStorage;
+  }
+}

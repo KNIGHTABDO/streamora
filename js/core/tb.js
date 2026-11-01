@@ -1,6 +1,7 @@
 // TorBox client. All calls go through our same-origin relay (/api/tb/*).
 import { getTbKey, ls } from './store.js';
 import { fetchT } from './net.js';
+import { canRemuxMkv } from '../player/mkv-plan.js';
 
 export class TBError extends Error {
   constructor(msg, code, status) { super(msg); this.code = code; this.status = status; }
@@ -133,12 +134,13 @@ export function pickFile(files, { fileIdx, filename, season, episode }) {
   return pool.slice().sort((a, b) => b.bytes - a.bytes)[0];
 }
 
-// ---- playback on the web: browsers play mp4 from the file; anything else needs TorBox's streaming feature (not on every plan)
+// ---- web playback: direct browser files, TorBox HLS, or client-side MKV remuxing
+const mkvFile = name => /\.mkv$/i.test(name || '');
 const browserFile = name => /\.(mp4|m4v|webm)$/i.test(name || '');
 const hevc = name => /x265|hevc|h\.?265/i.test(name || '');
 /** true once TorBox has told us this plan has no browser streaming (remembered for a day, then asked again). */
 export const webStreamingRefused = () => Date.now() - ls.get(NOWEB, 0) < 864e5;
-const webPlanError = () => new TBError('This copy is not an MP4, and browsers can only play MKV through TorBox\'s web streaming, which your plan doesn\'t include. Pick an MP4 source, or play it in the Streamora app.', 'webplan', 0);
+const webPlanError = () => new TBError("This file's format can't play in this browser. Pick another source, or play it in the Streamora app.", 'webplan', 0);
 
 async function webHls(id, fileId, kind) {
   if (webStreamingRefused()) return null;
@@ -158,11 +160,11 @@ async function finish(t, file, direct) {
   let hls = null;
   if (!direct && (!browserFile(file.path) || hevc(file.path))) {
     hls = await webHls(t.id, file.id, kind);
-    if (!hls && !browserFile(file.path)) throw webPlanError();
+    if (!hls && !browserFile(file.path) && !(mkvFile(file.path) && canRemuxMkv())) throw webPlanError();
   }
   const url = await tb(`${kind === 'web' ? 'webdl' : 'torrents'}/requestdl?${q(kind === 'web' ? { web_id: t.id, file_id: file.id } : { torrent_id: t.id, file_id: file.id })}`);
   if (!url) throw new TBError('TorBox has no link for this file. Pick another source.', 'nolink', 0);
-  return { downloadId: `${t.id}:${file.id}`, filename: file.path.split('/').pop(), filesize: file.bytes, direct: url, torrentId: t.id, mime: file.mime, hls };
+  return { downloadId: `${t.id}:${file.id}`, filename: file.path.split('/').pop(), filesize: file.bytes, direct: url, torrentId: t.id, mime: file.mime, hls, remux: !direct && !hls && mkvFile(file.path) };
 }
 
 const resolveCache = () => ls.get('resolved', {});
@@ -185,12 +187,12 @@ async function findInAccount(h) {
 /**
  * Turn a source into a playable file. A copy already in the account is used as is; otherwise it's added (TorBox answers
  * at once when cached). onStep(text) reports progress. direct=true (the app's VLC player) plays any file as it is.
- * Returns { downloadId, filename, filesize, direct, hls, torrentId, mime }.
+ * Returns { downloadId, filename, filesize, direct, hls, remux, torrentId, mime }.
  */
 export async function resolveStream({ infoHash, fileIdx, filename, season, episode, direct = false }, onStep = () => {}) {
   infoHash = infoHash.toLowerCase();
-  // a known MKV can't play here: don't fill the account with copies we can't use
-  if (!direct && webStreamingRefused() && filename && !browserFile(filename)) throw webPlanError();
+  // Do not add a known unsupported format when this plan has already refused streaming.
+  if (!direct && webStreamingRefused() && filename && !browserFile(filename) && !(mkvFile(filename) && canRemuxMkv())) throw webPlanError();
   const cacheKey = ['tb1', infoHash, fileIdx ?? '', filename || '', season ?? '', episode ?? ''].join('|');
   const hit = resolveCache()[cacheKey];
   if (hit && Date.now() - hit.at < 6 * 3600e3) {

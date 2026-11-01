@@ -45,7 +45,11 @@ const nativeHls = v => isSafari || isIOS ? !!v.canPlayType('application/vnd.appl
  * attach(video, url, { start, onFatal }) -> detach()
  * start = seconds to begin at. onFatal(err, pos) when the stream can't be played; pos = video.currentTime then.
  */
-export async function attach(video, url, { start = 0, onFatal = () => {} } = {}) {
+export async function attach(video, url, { start = 0, onFatal = () => {}, remux = false, audioLang, signal } = {}) {
+  if (remux) {
+    const { attachMkv } = await import('./mkv.js');
+    return attachMkv(video, url, { start, audioLang, onFatal, signal });
+  }
   const isHls = /\.m3u8(\?|$)/.test(url);
   const seek = () => { if (start > 0) try { video.currentTime = start; } catch {} };
   const fatal = e => onFatal(e, video.currentTime || start);

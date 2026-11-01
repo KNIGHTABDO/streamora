@@ -111,7 +111,10 @@
 
 /* ============================================================ base */
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; background: var(--paper); overflow-x: hidden; overflow-x: clip; }
+html { -webkit-text-size-adjust: 100%; background: var(--paper); overflow-x: hidden; overflow-x: clip; touch-action: manipulation; }
+:where(a, button, input, select, textarea, label, [role="button"]) { touch-action: manipulation; }
+html.native-app { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+html.native-app input, html.native-app textarea { -webkit-user-select: text; user-select: text; }
 body {
   margin: 0; min-height: 100dvh;
   background: var(--paper);
