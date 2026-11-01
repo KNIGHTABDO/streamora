@@ -3,9 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Streamora</title>
-  <meta name="description" content="A sketchbook that plays movies. Your TorBox, your profiles, saved in your own Google Drive." />
-  <meta name="theme-color" content="#f3e6cf" />
+  <!-- Night modes built on Dark Reader (Brave on iOS) repaint the ink pale and leave the paper art alone. The site already has its own night theme. -->
+  <meta name="darkreader-lock" />
+  <script>(function(){var r=document.documentElement,o;function c(){document.querySelectorAll('style.darkreader').forEach(function(e){if(e.media!=='not all')e.media='not all'});if(r.hasAttribute('data-darkreader-mode'))r.removeAttribute('data-darkreader-mode');if(r.hasAttribute('data-darkreader-scheme'))r.removeAttribute('data-darkreader-scheme')}o=new MutationObserver(c);o.observe(r,{attributes:true,attributeFilter:['data-darkreader-mode'],childList:true});o.observe(document.head,{childList:true})})()</script>
+  <title>Streamora: your movies, shows and anime, kept in your own Drive</title>
+  <meta name="description" content="Streamora plays movies, shows and anime through your own TorBox account, and keeps profiles, watchlists and progress in your own Google Drive." />
+  <meta name="theme-color" content="#05060c" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -14,32 +17,310 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="art/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="art/icon-180.png" />
-  <link rel="preconnect" href="https://v3-cinemeta.strem.io" crossorigin />
-  <link rel="preconnect" href="https://anime-kitsu.strem.fun" crossorigin />
-  <link rel="preconnect" href="https://images.metahub.space" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat+Brush&family=Patrick+Hand&family=Special+Elite&display=swap" />
-  <link rel="stylesheet" href="css/paper.css" />
-  <link rel="stylesheet" href="css/components.css" />
-  <link rel="stylesheet" href="css/app.css" />
-  <link rel="modulepreload" href="vendor/preact-htm.js" />
+  <!-- Only what the first paint needs. Everything else is loaded per surface by the boot script below. -->
+  <style>
+    html { background: var(--boot-bg, #05060c); }
+    body { margin: 0; }
+    html[data-surface="app"] #landing { display: none; }
+    html[data-surface="landing"] #app { display: none; }
+    html[data-surface="landing"] { background: #ecdec2; }
+    html[data-intro] { overflow: hidden; }
+    html[data-intro], html[data-intro] body { background: #05060c; }
+    html[data-intro] #landing { display: none; }
+    html[data-intro] #app { visibility: hidden; }
+    html[data-surface="landing"]:not([data-landing-css]) #landing { visibility: hidden; }
+  </style>
+  <script type="importmap">{"imports":{"mediabunny":"./vendor/mediabunny.min.mjs"}}</script>
   <script>
-    // paint the right theme before the app boots (no flash)
-    try {
-      var p = JSON.parse(localStorage.getItem('streamora:profiles') || '[]');
-      var a = JSON.parse(localStorage.getItem('streamora:activeProfile') || 'null');
-      var me = p.filter(function (x) { return x.id === a; })[0];
-      var s = a && JSON.parse(localStorage.getItem('streamora:p:' + a + ':settings') || '{}') || {};
-      var h = new Date().getHours();
-      document.documentElement.dataset.theme = (s.nightAuto !== false && (h >= 19 || h < 6)) ? 'blueprint' : (me && me.theme) || 'ink';
-    } catch (e) {}
+    // Boot gate. Runs before anything paints and only reads localStorage, so the decision is synchronous:
+    // there is no "checking…" state, no redirect and no reload. It picks one surface and whether the intro plays.
+    (function () {
+      var LONG_AWAY = 30 * 864e5; // the film plays again after 30 days away
+      var root = document.documentElement;
+      function read(k) { try { return JSON.parse(localStorage.getItem('streamora:' + k)); } catch (e) { return null; } }
+      function write(k, v) { try { localStorage.setItem('streamora:' + k, JSON.stringify(v)); } catch (e) {} }
+      function once(fn) { var p; return function () { return p || (p = fn()); }; }
+      function css(href) {
+        return new Promise(function (done) {
+          var l = document.createElement('link');
+          l.rel = 'stylesheet'; l.href = href; l.onload = l.onerror = function () { done(); };
+          document.head.appendChild(l);
+        });
+      }
+
+      var query = new URLSearchParams(location.search);
+      var path = function () { return (location.hash.replace(/^#/, '').split('?')[0] || '/').replace(/\/+$/, '') || '/'; };
+      var profiles = read('profiles') || [];
+      var active = read('activeProfile');
+      var google = read('google');
+      var returning = query.has('state') && (query.has('code') || query.has('error')); // back from Google's page
+      var installed = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())
+        || navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+      var legacy = profiles.length > 0 || !!read('tbkey'); // has local data to move into Drive: the welcome page handles it
+      var mayLand = !google && !returning && !installed && !legacy;
+
+      // the theme's own background, so the first paint is already the right colour
+      var me = profiles.filter(function (x) { return x.id === active; })[0];
+      var settings = active && read('p:' + active + ':settings') || {};
+      var hour = new Date().getHours();
+      var theme = settings.nightAuto !== false && (hour >= 19 || hour < 6) ? 'blueprint' : (me && me.theme) || 'ink';
+      root.dataset.theme = theme;
+
+      var surface = mayLand && path() !== '/welcome' ? 'landing' : 'app';
+      root.dataset.surface = surface;
+      if (surface === 'app') {
+        var bg = { ink: '#f3e6cf', riso: '#f0ece2', blueprint: '#0b0d1f', pencil: '#f4efe4', doodle: '#efd2d1' }[theme] || '#f3e6cf';
+        root.style.setProperty('--boot-bg', bg);
+        document.querySelector('meta[name="theme-color"]').content = bg;
+      }
+
+      // Does the film play? Never on the way back from Google or into a film someone chose to open.
+      var seen = read('intro-seen') || 0, last = read('last-seen') || 0;
+      var force = query.has('intro');
+      var intro = force || (!navigator.webdriver && !returning && path().indexOf('/watch/') !== 0 && (!seen || Date.now() - Math.max(seen, last) > LONG_AWAY));
+      if (intro) root.dataset.intro = '';
+
+      // last-seen is written when the visitor leaves, not while they're here
+      function stamp() { if (!root.hasAttribute('data-intro')) write('last-seen', Date.now()); }
+      addEventListener('pagehide', stamp);
+      document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') stamp(); });
+
+      var markMounted;
+      var mounted = new Promise(function (done) { markMounted = done; });
+      var loadApp = once(function () {
+        return Promise.all(['css/paper.css', 'css/components.css', 'css/app.css'].map(css))
+          .then(function () { return import('./js/main.js'); });
+      });
+      var loadLanding = once(function () {
+        var scroll = !intro && 'scrollRestoration' in history;
+        if (scroll) history.scrollRestoration = 'manual';
+        return Promise.all([css('css/landing.css').then(function () { root.dataset.landingCss = ''; }), import('./js/landing.js')])
+          .then(function (m) { m[1].default(window.__streamora); });
+      });
+      // Landing → app without a page load: the app mounts behind the landing, which then lifts away.
+      var entering = null;
+      function enterApp() {
+        if (entering) return entering;
+        if (location.hash !== '#/welcome') location.hash = '#/welcome';
+        return entering = loadApp().then(function () { return mounted; }).then(function () {
+          var land = document.getElementById('landing');
+          var y = window.scrollY;
+          Object.assign(land.style, { position: 'fixed', inset: '0', top: -y + 'px', bottom: 'auto', width: '100%', zIndex: 1000 });
+          window.scrollTo(0, 0);
+          root.dataset.surface = 'app';
+          land.style.display = 'block';
+          land.getBoundingClientRect();
+          land.style.transition = 'opacity 240ms ease-out';
+          land.style.opacity = '0';
+          return new Promise(function (done) { setTimeout(done, 260); }).then(function () {
+            land.removeAttribute('style');
+            entering = null;
+            syncChrome();
+          });
+        });
+      }
+      // The signed-out app asks for this on Back or sign-out, so the landing returns without a load.
+      function showLanding() {
+        if (root.dataset.surface === 'landing') return;
+        root.dataset.surface = 'landing';
+        root.style.removeProperty('--boot-bg');
+        syncChrome();
+        loadLanding();
+        window.scrollTo(0, 0);
+      }
+      function mayLandNow() { return !installed && !returning && !read('google') && !(read('profiles') || []).length && !read('tbkey'); }
+      // The app listens for this and re-applies its theme colour; the landing and intro keep the stage colour.
+      function syncChrome() {
+        if (root.dataset.surface === 'landing' || root.hasAttribute('data-intro')) document.querySelector('meta[name="theme-color"]').content = root.hasAttribute('data-intro') ? '#05060c' : '#ecdec2';
+        dispatchEvent(new Event('streamora:chrome'));
+      }
+      function showApp() { if (root.dataset.surface !== 'app') { root.dataset.surface = 'app'; syncChrome(); } }
+
+      // a plain link, Forward or a typed address into sign-in works even if landing.js never loaded
+      addEventListener('hashchange', function () { if (root.dataset.surface === 'landing' && path() === '/welcome') enterApp(); });
+
+      window.__streamora = {
+        surface: surface, intro: intro, force: force,
+        who: function () { var p = (read('profiles') || []).filter(function (x) { return x.id === read('activeProfile'); })[0], g = read('google'); return (p && p.name) || (g && g.name && g.name.split(' ')[0]) || ''; },
+        signedIn: function () { return !!read('google'); },
+        wasSeen: !!seen,
+        loadApp: loadApp, loadLanding: loadLanding, enterApp: enterApp, showLanding: showLanding, showApp: showApp, mayLand: mayLandNow,
+        mounted: mounted, markMounted: markMounted,
+        finishIntro: function () {
+          var t = Date.now();
+          write('intro-seen', t); write('last-seen', t);
+          root.removeAttribute('data-intro');
+          window.__streamora.intro = false;
+          syncChrome();
+        },
+      };
+
+      // Get things moving. The app waits for intro.js to call loadApp near the film's end, so it never competes with the video.
+      if (surface === 'landing') loadLanding();
+      if (intro) import('./js/intro.js').then(function (m) { m.default(window.__streamora); }, function () { window.__streamora.finishIntro(); loadApp(); });
+      else if (surface === 'app') loadApp();
+    })();
   </script>
 </head>
 <body>
   <div id="app"></div>
-  <noscript>Streamora needs JavaScript to draw itself.</noscript>
-  <script type="importmap">{"imports":{"mediabunny":"./vendor/mediabunny.min.mjs"}}</script>
-  <script type="module" src="js/main.js"></script>
+  <!-- landing:start -->
+  <main id="landing" class="ld" aria-label="Streamora">
+    <a class="ld-skip" href="#ld-hero">Skip to content</a>
+    <div class="ld-glow" aria-hidden="true"></div>
+    <ol class="ld-punch" aria-hidden="true"><li></li><li></li><li></li><li></li><li></li><li></li></ol>
+
+    <header class="ld-nav">
+      <a class="ld-logo" href="#ld-hero" aria-label="Streamora, top of page"><i>S</i><b>streamora</b></a>
+      <nav aria-label="On this page">
+        <a href="#ld-film">The film</a><a href="#ld-diary">Diary</a><a href="#ld-moods">Moods</a><a href="#ld-town">Inside</a><a href="#ld-questions">Questions</a>
+      </nav>
+      <button class="ld-sound" type="button" aria-pressed="true" aria-label="Sound effects"><span class="ld-sound-dot"></span><em>Sound</em></button>
+      <a class="ld-stamp ld-stamp-s" href="#/welcome" data-start>Get started</a>
+    </header>
+
+    <!-- Hero -->
+    <section class="ld-scene ld-hero-scene" id="ld-hero" data-scene="hero">
+      <div class="ld-pin"><div class="ld-sheet">
+        <div class="ld-hero-copy">
+          <div class="ld-postmark op-mark" aria-hidden="true">
+            <img src="media/ticket/st-waves.webp" alt="" class="pm-waves" width="300" height="149">
+            <div class="pm-ring"><img src="media/ticket/st-ring.webp" alt="" width="300" height="217"><time class="pm-date"></time></div>
+          </div>
+          <h1 class="ld-h1"><span class="ln"><span class="w">Your</span> <span class="w">next</span> <span class="w">watch.</span></span><span class="ln"><span class="w">Your</span> <span class="w">own</span> <span class="w ld-under-host">world.<img class="ld-under" src="media/ticket/st-under.webp" alt="" width="420" height="103"></span></span></h1>
+          <p class="ld-lead op-up">Movies, shows and anime in one place, with your taste and your history kept in your own Google Drive.</p>
+          <a class="ld-stamp op-stamp" href="#/welcome" data-start>Get started <span aria-hidden="true">→</span></a>
+          <p class="ld-fine op-up">Bring a paid TorBox account. Sign in with Google.</p>
+        </div>
+        <div class="ld-photos" aria-hidden="true">
+          <figure class="print p-hero tilt" data-depth=".1" id="ld-hero-print"><div class="deckle"><img src="media/ticket/ph-hero.webp" alt="" width="1100" height="733" fetchpriority="high" decoding="async"></div><i class="gloss"></i></figure>
+          <figure class="print p-tree tilt" data-depth=".32"><div class="deckle"><img src="media/ticket/ph-tree.webp" alt="" width="640" height="427" decoding="async"></div><i class="gloss"></i></figure>
+          <figure class="print p-girl tilt" data-depth=".5"><div class="deckle"><img src="media/ticket/ph-girl.webp" alt="" width="640" height="427" decoding="async"></div><i class="gloss"></i></figure>
+          <img class="ld-branch" data-depth=".75" src="media/ticket/branch.webp" alt="" width="820" height="617" decoding="async">
+          <img class="ld-lantern" src="media/ticket/lantern.webp" alt="" width="300" height="499" decoding="async">
+        </div>
+        <ul class="ld-strip">
+          <li class="ic-act ic-a"><img src="media/ticket/ic-profiles.webp" alt="" width="160" height="110" loading="lazy"><h2>Profiles</h2><p>A space for each person, with their own history and theme.</p></li>
+          <li class="ic-act ic-b"><img src="media/ticket/ic-diary.webp" alt="" width="160" height="110" loading="lazy"><h2>Watch Diary</h2><p>Log, rate and revisit what you’ve seen.</p></li>
+          <li class="ic-act ic-c"><img src="media/ticket/ic-wheel.webp" alt="" width="160" height="160" loading="lazy"><h2>Mood Wheel</h2><p>Spin it, and start from a feeling.</p></li>
+          <li class="ic-act ic-d"><img src="media/ticket/ic-library.webp" alt="" width="160" height="110" loading="lazy"><h2>One place</h2><p>Movies, shows and anime together.</p></li>
+        </ul>
+        <img class="cat cat-walk" data-cat="walk" src="media/ticket/cat-walk.webp" alt="" width="360" height="292" loading="lazy">
+        <div class="ld-sheet-dark" aria-hidden="true"></div>
+      </div></div>
+    </section>
+
+    <!-- The film -->
+    <section class="ld-page ld-film-page" id="ld-film" aria-labelledby="ld-film-title">
+      <hgroup class="ld-head reveal"><p class="ld-kicker">Now showing</p><h2 id="ld-film-title">The feeling, in motion.</h2><p>Thirty-one seconds, sound on.</p></hgroup>
+      <div class="ld-cinema-wrap"><div id="ld-cinema"></div><img class="cat cat-stalk" data-cat="stalk" src="media/ticket/cat-stalk.webp" alt="" width="360" height="146" loading="lazy"></div>
+    </section>
+
+    <!-- Diary -->
+    <section class="ld-scene ld-diary-scene" id="ld-diary" data-scene="diary" aria-labelledby="ld-diary-title">
+      <div class="ld-pin">
+        <div class="ld-diary-copy">
+          <p class="ld-kicker">The watch diary</p>
+          <h2 id="ld-diary-title">Some stories stay with you. Keep a little of every one.</h2>
+          <p>Log what you watched, leave a rating and add a note. The Diary keeps the details, stats reveal your habits, and Year in Review brings your watching year back into view.</p>
+        </div>
+        <div class="ld-stubs" aria-hidden="true">
+          <img class="cat cat-back" src="media/ticket/cat-back.webp" alt="" width="360" height="582" loading="lazy">
+          <article class="stub s4"><header><b>Watch Diary</b><em data-serial></em></header><img src="media/ticket/stub-elephants.webp" alt="" loading="lazy"><div><h3>Elephants Dream</h3><p class="stars">★★★½</p><p class="hand"><span>Strange, and I can’t stop</span><span>thinking about it.</span></p><time class="dstamp" data-ago="44"></time></div></article>
+          <article class="stub s3"><header><b>Watch Diary</b><em data-serial></em></header><img src="media/ticket/stub-bunny.webp" alt="" loading="lazy"><div><h3>Big Buck Bunny</h3><p class="stars">★★★★</p><p class="hand"><span>Laughed out loud.</span><span>The squirrel deserved it.</span></p><time class="dstamp" data-ago="23"></time></div></article>
+          <article class="stub s2"><header><b>Watch Diary</b><em data-serial></em></header><img src="media/ticket/stub-sintel.webp" alt="" loading="lazy"><div><h3>Sintel</h3><p class="stars">★★★★★</p><p class="hand"><span>That ending. I need</span><span>a minute.</span></p><time class="dstamp" data-ago="9"></time></div></article>
+          <article class="stub s1 stub-fall"><header><b>Year in Review</b><em data-serial></em></header><div class="stub-year"><img src="media/ticket/ic-projector.webp" alt="" loading="lazy"><p>Your watching year,<br>brought back into view.</p></div></article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Moods -->
+    <section class="ld-scene ld-mood-scene" id="ld-moods" data-scene="mood" aria-labelledby="ld-mood-title">
+      <img class="cat cat-leap" src="media/ticket/cat-leap.webp" alt="" width="360" height="219" loading="lazy">
+      <div class="ld-pin">
+        <div class="ld-mood-light" aria-hidden="true"></div>
+        <div class="ld-mood-copy">
+          <p class="ld-kicker">The mood wheel</p>
+          <h2 id="ld-mood-title">What are you in the mood for?</h2>
+          <p>Comfort watch? Something strange? A little adrenaline? Spin the wheel to find a direction, then explore the picks. Go on, grab it.</p>
+          <p class="ld-mood-now" aria-live="polite"><span>Tonight feels like</span> <b></b></p>
+        </div>
+        <div class="ld-wheel-wrap"><div id="ld-wheel"></div><img class="cat cat-bat" src="media/ticket/cat-bat.webp" alt="" width="360" height="339" loading="lazy"></div>
+      </div>
+    </section>
+
+    <!-- Pop-up town -->
+    <section class="ld-scene ld-town-scene" id="ld-town" data-scene="town" aria-labelledby="ld-town-title">
+      <div class="ld-pin">
+        <hgroup class="ld-head"><p class="ld-kicker">Open the book</p><h2 id="ld-town-title">A whole town to wander.</h2></hgroup>
+        <div class="ld-book"><div class="ld-book-page ld-book-back"></div><div class="ld-book-page">
+          <div class="pop z1" style="--x:4%;--w:88%"><img src="media/ticket/town-wall.webp" alt="" loading="lazy"></div>
+          <div class="pop z2" style="--x:6%;--w:20%"><img src="media/ticket/town-tower.webp" alt="" loading="lazy"></div>
+          <div class="pop z2" style="--x:26%;--w:42%"><img src="media/ticket/town-houses.webp" alt="" loading="lazy"></div>
+          <div class="pop z3" style="--x:62%;--w:32%"><img src="media/ticket/town-gate.webp" alt="" loading="lazy"></div>
+          <div class="pop z4" style="--x:-1%;--w:17%"><img src="media/ticket/town-palm.webp" alt="" loading="lazy"></div>
+          <div class="pop z4" style="--x:83%;--w:19%"><img src="media/ticket/town-tree.webp" alt="" loading="lazy"></div>
+        </div></div>
+        <ul class="ld-tags">
+          <li><b>The tower.</b> Follow a show, see what’s coming in the Calendar, and get new-episode notifications.</li>
+          <li><b>The houses.</b> A profile for each person, with their own watchlist, progress, diary and theme.</li>
+          <li><b>The gate.</b> Title pages, subtitles, skip intro where timings exist, Picture in Picture, MKV in the browser.</li>
+          <li><b>The palm.</b> Collections, decades and world cinema, for the scenic route to your next favourite.</li>
+          <li><b>The orange tree.</b> Themes from warm paper to dark Blueprint, and reduced motion if you prefer.</li>
+          <li><b>The wall.</b> Your data lives in your own Drive. Streamora can only see files it created.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Sunset to night -->
+    <section class="ld-scene ld-dusk-scene" id="ld-dusk" data-scene="dusk" aria-labelledby="ld-dusk-title">
+      <div class="ld-pin">
+        <div class="ld-dusk-art" aria-hidden="true">
+          <img class="d-day" src="media/ticket/ph-sunset.webp" alt="" loading="lazy" decoding="async">
+          <img class="d-night" src="media/ticket/ph-night.webp" alt="" loading="lazy" decoding="async">
+        </div>
+        <div class="ld-note">
+          <img class="ld-note-seal" src="media/ticket/st-seal.webp" alt="" width="300" height="219" loading="lazy">
+          <h2 id="ld-dusk-title">Your evening starts here.</h2>
+          <ol>
+            <li><i></i><div><b>Bring your TorBox key.</b> You need a paid TorBox account. Copy the API key from its settings.</div></li>
+            <li><i></i><div><b>Sign in with Google.</b> Connect your own Drive, so Streamora has a place to keep your watching life.</div></li>
+            <li><i></i><div><b>Create your profile.</b> Choose a name and a theme, then find something that fits the night.</div></li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- Questions -->
+    <section class="ld-page ld-faq" id="ld-questions" aria-labelledby="ld-faq-title">
+      <hgroup class="ld-head reveal"><p class="ld-kicker">A few good questions</p><h2 id="ld-faq-title">Before you settle in.</h2></hgroup>
+      <div id="ld-flaps">
+        <details class="lp-flap"><summary>What do I need to use Streamora?</summary><div class="lp-flap-a">A paid TorBox account, its API key, a Google account and a compatible browser or the iPhone app. Streamora uses TorBox for playback and your own Google Drive for your data. You’re responsible for what you choose to stream.</div></details>
+        <details class="lp-flap"><summary>Does it cost anything?</summary><div class="lp-flap-a">TorBox is a paid service and needs a separate subscription. Streamora does not include one.</div></details>
+        <details class="lp-flap"><summary>What can Streamora see in my Drive?</summary><div class="lp-flap-a">Only files Streamora created, kept in a Streamora folder in your own Drive. You can delete the saved data and revoke access in Settings → Privacy.</div></details>
+        <details class="lp-flap"><summary>Which devices can I use?</summary><div class="lp-flap-a">Phone, laptop and TV browsers, plus the iPhone and iPad app, which is installed by sideloading. TV navigation works with a remote. Changes sync after a short moment, and other devices catch up while open.</div></details>
+        <details class="lp-flap"><summary>Can the browser play MKV files?</summary><div class="lp-flap-a">Yes, Streamora remuxes MKV in the browser, including on TorBox Essential. H.264 works in browsers with Media Source Extensions; HEVC needs device support. DTS and TrueHD audio need the iPhone app’s player.</div></details>
+      </div>
+    </section>
+
+    <!-- The ticket -->
+    <section class="ld-page ld-finale" id="ld-ticket" aria-labelledby="ld-ticket-title">
+      <h2 id="ld-ticket-title" class="reveal">One ticket. It’s yours.</h2>
+      <div class="ticket" data-ticket>
+        <img class="cat cat-sleep" src="media/ticket/cat-sleep.webp" alt="" width="360" height="256" loading="lazy">
+        <div class="tk-stub"><span class="tk-admit">Admit<br>one</span><span class="tk-serial" data-serial></span></div>
+        <a class="tk-main" href="#/welcome" data-start aria-label="Tear the ticket: get started">
+          <span class="tk-brand">streamora</span>
+          <span class="tk-go">Get started <i aria-hidden="true">→</i></span>
+          <time class="tk-date"></time>
+          <span class="tk-hint" aria-hidden="true">Tear along the holes</span>
+        </a>
+      </div>
+      <footer class="ld-foot"><p>Film frames: Sintel, Big Buck Bunny and Elephants Dream, © Blender Foundation.</p><p><a href="privacy.html">Privacy</a> · <a href="https://github.com/KNIGHTABDO/streamora/releases/latest" rel="noopener">iPhone app</a></p></footer>
+    </section>
+    <div class="ld-marks" aria-hidden="true"></div>
+  </main>
+  <!-- landing:end -->
+  <noscript>Streamora needs JavaScript to run.</noscript>
 </body>
 </html>

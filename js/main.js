@@ -62,7 +62,8 @@ export function applyTheme() {
   el.dataset.motion = s.reduceMotion ? 'reduce' : '';
   if (p && p.ink) el.style.setProperty('--profile-ink', p.ink);
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = getComputedStyle(el).getPropertyValue('--paper').trim() || '#f3e6cf';
+  // the intro and the landing own the status-bar colour while they're up
+  if (meta && el.dataset.surface !== 'landing' && !el.hasAttribute('data-intro')) meta.content = getComputedStyle(el).getPropertyValue('--paper').trim() || '#f3e6cf';
 }
 // the night-mode clock only ticks while night mode is on
 let themeTimer = null;
@@ -76,6 +77,7 @@ profiles.subscribe(syncTheme);
 activeProfileId.subscribe(syncTheme);
 settings.subscribe(syncTheme);
 syncTheme();
+addEventListener('streamora:chrome', applyTheme);
 
 // store.js fires this when localStorage is full
 addEventListener('streamora:quota', () => toast('Storage is full, so that last change was not saved. Try clearing old history in Settings.', { kind: 'error', ms: 6000 }));
@@ -231,7 +233,11 @@ function App() {
   const open = route.path === '/welcome';
   const ready = google && key.set;
   // redirect by rewriting the URL quietly and rendering the target now (navigating mid-render got lost on fresh loads)
-  const gate = !ready && !open ? '#/welcome' : ready && !profile && !open && route.path !== '/profiles' ? '#/profiles' : null;
+  // signed out on a browser, the public landing page is the front door: it needs no page load, Back returns to it
+  const boot = window.__streamora;
+  const toLanding = !google && !open && !!boot && boot.mayLand();
+  useEffect(() => { if (boot) toLanding ? boot.showLanding() : boot.showApp(); }, [toLanding]);
+  const gate = toLanding ? null : !ready && !open ? '#/welcome' : ready && !profile && !open && route.path !== '/profiles' ? '#/profiles' : null;
   if (gate) { history.replaceState(history.state, '', gate); route = parseHash(gate); }
   else if (route.redirect) history.replaceState(history.state, '', route.redirect);
 
@@ -252,6 +258,7 @@ function App() {
   }, []);
 
   const chromeless = route.path.startsWith('/watch/') || route.path === '/welcome' || (route.path === '/profiles' && !profile);
+  if (toLanding) return html`<${Toasts} />`;
   return html`
     <${Offline} />
     ${!chromeless && html`<${TopNav} route=${route} profile=${profile} onMore=${() => setMore(true)} moreOpen=${more} badge=${badge} />`}
@@ -276,6 +283,7 @@ function AppBanner() {
 }
 
 render(html`<${App} />`, document.getElementById('app'));
+requestAnimationFrame(() => requestAnimationFrame(() => window.__streamora && window.__streamora.markMounted()));
 
 if ('serviceWorker' in navigator && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});

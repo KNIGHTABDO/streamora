@@ -13,9 +13,10 @@ const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png',
   '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
+  '.mp4': 'video/mp4', '.webp': 'image/webp',
 };
 const FILES = new Set(['index.html', 'privacy.html', 'manifest.webmanifest', 'sw.js']);
-const DIRS = new Set(['css', 'js', 'vendor', 'art']);
+const DIRS = new Set(['css', 'js', 'vendor', 'art', 'media']);
 
 // [url prefix, function file, param name, catch-all?]
 const FUNCS = [
@@ -75,6 +76,14 @@ http.createServer(async (req, res) => {
   try {
     if (!(await stat(p)).isFile()) throw 0;
     const body = await readFile(p);
+    // the same Range answers functions/media gives on Cloudflare (Safari won't play video without them)
+    const range = extname(p) === '.mp4' && /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+    if (range) {
+      const start = range[1] ? +range[1] : Math.max(0, body.length - +range[2]);
+      const end = range[1] && range[2] ? Math.min(+range[2], body.length - 1) : body.length - 1;
+      res.writeHead(206, { 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes', 'Content-Range': `bytes ${start}-${end}/${body.length}`, 'Content-Length': end - start + 1, 'Cache-Control': 'no-cache' });
+      return res.end(body.subarray(start, end + 1));
+    }
     res.writeHead(200, { 'Content-Type': TYPES[extname(p)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
     res.end(body);
   } catch { res.writeHead(404); res.end('not found'); }

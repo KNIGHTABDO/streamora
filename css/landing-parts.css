@@ -1,0 +1,73 @@
+.lp-wheel { width: 100%; max-width: 540px; margin-inline: auto; color: var(--ink); }
+.lp-wheel-machine { position: relative; padding-bottom: 175px; isolation: isolate; }
+.lp-wheel-dial { position: relative; z-index: 2; width: 100%; aspect-ratio: 1; cursor: grab; touch-action: pan-y; border-radius: 50%; outline-offset: 7px; -webkit-tap-highlight-color: transparent; }
+.lp-wheel-dial:focus-visible { outline: 3px solid var(--red); }
+.lp-wheel-dragging { cursor: grabbing; }
+.lp-wheel-window { width: 100%; height: 100%; border-radius: 50%; overflow: hidden; box-shadow: 0 10px 10px -7px #382314a6, 0 2px 2px #38231470; }
+.lp-wheel-rotor { width: 100%; height: 100%; will-change: transform; transform: rotate(0deg); border-radius: 50%; }
+.lp-wheel-art { display: block; width: 100%; height: 100%; user-select: none; pointer-events: none; }
+.lp-wheel-label { fill: var(--ink); font: 17px var(--font-body), Georgia, serif; text-anchor: middle; }
+.lp-wheel-symbol { fill: #372b21; font: 44px Georgia, serif; text-anchor: middle; }
+.lp-wheel-pointer { position: absolute; width: 8.5%; height: 12%; left: 45.75%; top: -.6%; transform-origin: 50% 12%; clip-path: polygon(8% 0, 92% 0, 100% 18%, 50% 100%, 0 18%); background: radial-gradient(circle at 50% 18%, #4d351d 0 5%, #f0d490 6% 10%, transparent 11%), linear-gradient(110deg, #7c5327, #e4c27b 40%, #a57936 72%, #634522); }
+.lp-wheel-hub { position: absolute; display: grid; place-items: center; width: 14%; height: 14%; left: 43%; top: 43%; border: 2px solid #6f4b25; border-radius: 50%; background: radial-gradient(circle at 32% 28%, #ffe3a0, #c59e52 35%, #8a602e 69%, #d0ae6c 74%, #67491e 94%); box-shadow: 0 3px 5px #2e1d1370, inset 0 0 0 3px #c9aa6c; font: italic clamp(18px, 4vw, 30px) var(--font-display), Georgia, serif; color: #684522; pointer-events: none; }
+.lp-wheel-slot { position: absolute; z-index: 1; height: 9px; width: 65%; left: 17.5%; bottom: 166px; background: #302216; border-radius: 50%; box-shadow: 0 2px 0 #d6bd8e; }
+.lp-wheel-ticket-pocket { position: absolute; width: 66%; height: 188px; bottom: -2px; left: 17%; overflow: hidden; z-index: 0; padding: 0 7px 6px; box-sizing: border-box; }
+.lp-wheel-ticket { position: relative; margin-top: 5px; min-height: 156px; box-sizing: border-box; padding: 18px 10px 12px; background: var(--paper) url('../media/ticket/paper.webp'); border: 1px solid #8c6c4580; box-shadow: 2px 3px 4px #3f2d1740; text-align: center; transform: translateY(-110%); }
+.lp-wheel-ticket-printed { transform: translateY(0) rotate(1deg); }
+.lp-wheel-ticket::before, .lp-wheel-ticket::after { content: ''; position: absolute; width: 15px; height: 15px; border-radius: 50%; top: 31px; background: var(--paper-2); }
+.lp-wheel-ticket::before { left: -8px; }
+.lp-wheel-ticket::after { right: -8px; }
+.lp-ticket-admit { display: block; border-bottom: 1px dashed #795e3b99; padding-bottom: 8px; color: var(--red); font: 13px var(--font-type), monospace; letter-spacing: .14em; }
+.lp-ticket-mood { display: block; font: clamp(17px, 3.8vw, 25px)/1.1 var(--font-display), Georgia, serif; margin: 9px 0; }
+.lp-ticket-meta { display: block; font: 10px var(--font-type), monospace; }
+.lp-ticket-wait { display: block; font: 23px/1.3 var(--font-hand), cursive; }
+.lp-wheel-help { margin: 12px auto 0; max-width: 34ch; text-align: center; font: 16px/1.4 var(--font-body), Georgia, serif; }
+.lp-cinema { max-width: 1000px; margin-inline: auto; color: var(--ink); }
+.lp-cinema-pediment { position: relative; text-align: center; padding: 20px 8px 16px; margin-inline: 4%; background: var(--paper-2) url('../media/ticket/paper.webp'); border: 1px solid #74502f; border-bottom: 3px double #74502f; box-shadow: 0 3px 0 #7c523c; font: clamp(10px, 2.5vw, 18px) var(--font-type), monospace; letter-spacing: .15em; clip-path: polygon(0 19%, 10% 19%, 12% 0, 88% 0, 90% 19%, 100% 19%, 100% 100%, 0 100%); }
+.lp-cinema-star { color: var(--red); }
+.lp-cinema-frame { padding: clamp(9px, 2vw, 22px); border: 1px solid #6a402c; background: repeating-linear-gradient(92deg, #663a2b 0 2px, #724433 4px, #8a5440 7px, #6a3c2c 10px); box-shadow: 0 8px 9px -5px #291b12a0, inset 0 0 0 5px #b28a53, inset 0 0 0 7px #5d3b26; transform: rotate(-.4deg); }
+.lp-cinema-screen { position: relative; overflow: hidden; aspect-ratio: 16 / 9; background: #17130f; box-shadow: 0 0 0 2px #2f2419; }
+.lp-cinema-poster, .lp-cinema-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.lp-cinema-poster { object-fit: cover; }
+.lp-cinema-video { opacity: 0; pointer-events: none; }
+.lp-cinema-started .lp-cinema-video { opacity: 1; pointer-events: auto; }
+.lp-cinema-curtain { position: absolute; z-index: 2; inset-block: 0; width: 51%; background: repeating-linear-gradient(95deg, #57261f 0%, #874033 6%, #ac6050 11%, #79372c 18%, #4d211c 23%, #924b3b 29%); transform: translateX(0); transition: transform 650ms cubic-bezier(.22,.9,.32,1.08); pointer-events: none; box-shadow: inset 0 -6px 0 #b98b50; }
+.lp-cinema-curtain::after { content: ''; position: absolute; inset: 0; background: url('../media/ticket/paper.webp'); mix-blend-mode: multiply; opacity: .33; }
+.lp-cinema-curtain-left { left: 0; clip-path: polygon(0 0, 100% 0, 100% 94%, 85% 100%, 66% 95%, 46% 100%, 25% 95%, 0 100%); }
+.lp-cinema-curtain-right { right: 0; clip-path: polygon(0 0, 100% 0, 100% 100%, 75% 95%, 54% 100%, 34% 95%, 15% 100%, 0 94%); }
+.lp-cinema-curtain-art { display: block; width: 100%; height: 100%; object-fit: fill; }
+.lp-cinema-curtain-art[hidden] { display: none; }
+.lp-cinema-open .lp-cinema-curtain-left { transform: translateX(-104%); }
+.lp-cinema-open .lp-cinema-curtain-right { transform: translateX(104%); }
+.lp-cinema-valance { position: absolute; z-index: 3; inset: 0 0 auto; height: 8%; background: linear-gradient(#6e3328, #974d3c); border-bottom: 3px solid #b08a45; clip-path: polygon(0 0, 100% 0, 100% 60%, 90% 100%, 70% 65%, 50% 100%, 30% 65%, 10% 100%, 0 60%); pointer-events: none; }
+.lp-cinema-playbill { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 22px 5px 0; }
+.lp-cinema-note { font: clamp(22px, 4vw, 32px) var(--font-hand), cursive; }
+.lp-cinema-watch { min-width: 44px; min-height: 48px; padding: 10px 18px; border: 3px double var(--red); background: var(--paper) url('../media/ticket/paper.webp'); color: var(--red); font: 17px var(--font-type), monospace; cursor: pointer; transform: rotate(-2deg); box-shadow: 1px 2px 0 #6a43212b; }
+.lp-cinema-watch:hover { transform: rotate(0deg) translateY(-1px); }
+.lp-cinema-watch:focus-visible { outline: 3px solid var(--ink); outline-offset: 5px; }
+.lp-cinema-status { min-height: 1.4em; margin: 12px 0 0; color: var(--red); font: 17px/1.4 var(--font-body), Georgia, serif; }
+.lp-flaps { position: relative; overflow-anchor: none; }
+.lp-flap { position: relative; margin-block: 0 18px; padding: 0; border-block: 1px solid #96765080; border-inline: 1px solid #96765040; background: var(--paper) url('../media/ticket/paper.webp'); box-shadow: 1px 3px 3px #432c162b; }
+.lp-flap::after { content: ''; position: absolute; inset: auto 0 -4px; height: 5px; background: var(--paper-2); clip-path: polygon(0 0, 100% 0, 100% 40%, 95% 80%, 89% 35%, 82% 100%, 75% 40%, 65% 70%, 56% 25%, 45% 100%, 33% 30%, 19% 80%, 5% 40%, 0 100%); }
+.lp-flap > summary { position: relative; display: flex; align-items: center; box-sizing: border-box; min-height: 64px; padding: 18px 52px 18px 22px; list-style: none; cursor: pointer; font: clamp(19px, 2.5vw, 24px)/1.2 var(--font-body), Georgia, serif; }
+.lp-flap > summary::-webkit-details-marker { display: none; }
+.lp-flap > summary::after { position: absolute; content: '+'; right: 20px; top: 50%; transform: translateY(-50%); color: var(--red); font: 26px var(--font-type), monospace; }
+.lp-flap[open] > summary::after { content: '−'; }
+.lp-flap > summary:focus-visible { outline: 3px solid var(--red); outline-offset: 3px; }
+.lp-flap-a { padding: 0 22px 24px; max-width: 64ch; font: 20px/1.45 var(--font-body), Georgia, serif; }
+.lp-flap-a > :first-child { margin-top: 0; }
+.lp-flap-a > :last-child { margin-bottom: 0; }
+.lp-flap-leaf { position: absolute; z-index: 3; inset: 0; transform-origin: 50% 100%; pointer-events: none; opacity: 0; background: var(--paper) url('../media/ticket/paper.webp'); border-bottom: 1px solid #8d6f4a80; backface-visibility: hidden; }
+.lp-flap-leaf-copy { display: flex; box-sizing: border-box; min-height: 100%; align-items: center; padding: 18px 52px 18px 22px; }
+.lp-flap-shade { position: absolute; inset: 0; background: linear-gradient(0deg, #3e291aaa, transparent 80%); opacity: 0; }
+@media (max-width: 480px) {
+  .lp-wheel-machine { padding-bottom: 171px; }
+  .lp-wheel-ticket-pocket { width: 76%; left: 12%; }
+  .lp-cinema-playbill { gap: 12px; }
+  .lp-cinema-watch { font-size: 15px; }
+  .lp-cinema-note { font-size: 26px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-cinema-curtain { transition: none; }
+  .lp-wheel-rotor { will-change: auto; }
+}

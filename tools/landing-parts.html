@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Streamora · Ticket Stub parts</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/css/landing-parts.css">
+<style>
+@font-face { font-family: 'Young Serif'; src: url('/art/fonts/young-serif-normal.woff2') format('woff2'); font-display: swap; }
+@font-face { font-family: 'Newsreader'; src: url('/art/fonts/newsreader-normal.woff2') format('woff2'); font-display: swap; }
+@font-face { font-family: 'Special Elite'; src: url('/art/fonts/special-elite-normal.woff2') format('woff2'); font-display: swap; }
+@font-face { font-family: 'Reenie Beanie'; src: url('/art/fonts/reenie-beanie-normal.woff2') format('woff2'); font-display: swap; }
+.lp-preview { margin: 0; background: #bdab8b; }
+.lp-preview-paper { --ink:#1c1712; --red:#a8281e; --paper:#ecdec2; --paper-2:#e2d1ad; --brass:#b08a45; --font-display:'Young Serif'; --font-body:'Newsreader'; --font-type:'Special Elite'; --font-hand:'Reenie Beanie'; box-sizing: border-box; max-width: 1280px; min-height: 100vh; margin: 0 auto; padding: 32px clamp(16px, 5vw, 72px) 70px; background: var(--paper) url('/media/ticket/paper.webp'); color: var(--ink); border-inline: 1px dashed #7c633d; }
+.lp-preview-masthead { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 3px double #816643; padding-bottom: 24px; }
+.lp-preview-brand { font: 30px var(--font-display), Georgia, serif; }
+.lp-preview-sound { min-width: 44px; min-height: 44px; padding: 8px 12px; background: transparent; border: 1px solid var(--ink); color: var(--ink); font: 13px var(--font-type), monospace; cursor: pointer; }
+.lp-preview-sound:focus-visible { outline: 3px solid var(--red); outline-offset: 3px; }
+.lp-preview-section { padding-block: 54px; border-bottom: 1px dashed #826748; }
+.lp-preview-wheel-section { display: grid; grid-template-columns: .9fr 1.1fr; gap: 40px; align-items: center; }
+.lp-preview-kicker { color: var(--red); font: 16px var(--font-type), monospace; letter-spacing: .08em; text-transform: uppercase; }
+.lp-preview-title { font: clamp(30px, 4.8vw, 55px)/1.1 var(--font-display), Georgia, serif; letter-spacing: -.04em; margin: 16px 0; }
+.lp-preview-copy { max-width: 38ch; font: 22px/1.4 var(--font-body), Georgia, serif; }
+.lp-preview-caption { color: #6c5132; font: 15px var(--font-type), monospace; }
+.lp-preview-faq { max-width: 790px; margin: 0 auto; }
+.lp-preview-footer { padding-top: 30px; font: 24px var(--font-hand), cursive; }
+@media(max-width:700px) { .lp-preview-wheel-section { display: block; } .lp-preview-section { padding-block: 32px; } .lp-preview-wheel-section .lp-wheel { margin-top: 26px; } .lp-preview-brand { font-size: 25px; } }
+</style>
+<body class="lp-preview">
+<main class="lp-preview-paper" id="landing">
+  <header class="lp-preview-masthead"><span class="lp-preview-brand">Ⓢ streamora</span><button type="button" class="lp-preview-sound" aria-pressed="true">Sound on</button></header>
+  <section class="lp-preview-section lp-preview-wheel-section" aria-labelledby="wheel-heading">
+    <div><p class="lp-preview-kicker">No. 03 · The mood wheel</p><h1 class="lp-preview-title" id="wheel-heading">What are you<br>in the mood for?</h1><p class="lp-preview-copy">Spin the wheel, pick a feeling, and let Streamora find the perfect watch for you.</p><p class="lp-preview-caption">One feeling. A whole world waiting.</p></div>
+    <div class="lp-preview-wheel"></div>
+  </section>
+  <section class="lp-preview-section" aria-labelledby="cinema-heading"><p class="lp-preview-kicker">A seat is saved for you</p><h2 class="lp-preview-title" id="cinema-heading">Your world, in motion.</h2><div class="lp-preview-cinema"></div></section>
+  <section class="lp-preview-section lp-preview-faq" aria-labelledby="faq-heading"><p class="lp-preview-kicker">Before the lights go down</p><h2 class="lp-preview-title" id="faq-heading">A few little things.</h2>
+    <div class="lp-preview-flaps">
+      <details class="lp-flap"><summary>What is Streamora?</summary><div class="lp-flap-a">Your own home for movies, shows and anime. Keep a watch diary, build a library, and find something that fits your mood.</div></details>
+      <details class="lp-flap"><summary>Can everyone have their own world?</summary><div class="lp-flap-a">Yes. Each profile has its own identity, taste, library and watching life. Make room for every side of you.</div></details>
+      <details class="lp-flap"><summary>What if I don’t know what to watch?</summary><div class="lp-flap-a">Start with a feeling. Spin the mood wheel for a little nudge, from one-blanket cozy to wonderfully weird.</div></details>
+    </div>
+  </section>
+  <footer class="lp-preview-footer">The next ticket has your name on it.</footer>
+</main>
+<script type="module">
+import { sfx } from '/js/landing/sfx.js';
+import { initWheel } from '/js/landing/wheel.js';
+import { initCinema } from '/js/landing/cinema.js';
+import { initFlaps } from '/js/landing/flaps.js';
+const unlock = () => sfx.unlock();
+document.addEventListener('pointerdown', unlock, { passive: true });
+document.addEventListener('keydown', unlock, { passive: true });
+const sound = document.querySelector('.lp-preview-sound');
+function soundLabel() { sound.textContent = `Sound ${sfx.on ? 'on' : 'off'}`; sound.setAttribute('aria-pressed', String(sfx.on)); }
+sound.addEventListener('click', () => { sfx.toggle(); soundLabel(); }, { passive: true }); soundLabel();
+const wheel = initWheel(document.querySelector('.lp-preview-wheel'), { sfx });
+const cinema = initCinema(document.querySelector('.lp-preview-cinema'), { sfx });
+const flaps = initFlaps(document.querySelector('.lp-preview-flaps'), { sfx });
+window.landingParts = { wheel, cinema, flaps, sfx };
+</script>
+</body>
+</html>

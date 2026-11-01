@@ -1,66 +1,113 @@
 <!doctype html>
-<html lang="en" data-theme="ink">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="darkreader-lock" />
+  <script>(function(){var r=document.documentElement,o;function c(){document.querySelectorAll('style.darkreader').forEach(function(e){if(e.media!=='not all')e.media='not all'});if(r.hasAttribute('data-darkreader-mode'))r.removeAttribute('data-darkreader-mode');if(r.hasAttribute('data-darkreader-scheme'))r.removeAttribute('data-darkreader-scheme')}o=new MutationObserver(c);o.observe(r,{attributes:true,attributeFilter:['data-darkreader-mode'],childList:true});o.observe(document.head,{childList:true})})()</script>
+  <meta name="color-scheme" content="light" />
+  <meta name="theme-color" content="#ecdec2" />
   <title>Streamora · Privacy</title>
+  <meta name="description" content="What Streamora stores, where it stores it, who else receives what, and how to delete it." />
   <meta name="referrer" content="no-referrer" />
   <link rel="icon" href="art/icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat+Brush&family=Patrick+Hand&family=Special+Elite&display=swap" />
-  <link rel="stylesheet" href="css/paper.css" />
   <style>
-    body { margin: 0; background: var(--paper); color: var(--ink); font: 19px/1.5 var(--font-hand); }
-    main { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; }
-    h1 { font: 52px/1.1 var(--font-display); margin: 0 0 4px; }
-    h2 { font: 28px var(--font-display); margin: 28px 0 6px; }
-    .kicker { font-family: var(--font-type); font-size: 14px; color: var(--ink-3); }
-    a { color: var(--a2); }
-    code { font-family: var(--font-type); font-size: 15px; }
+    @font-face { font-family: 'Young Serif'; src: url('art/fonts/young-serif-normal.woff2') format('woff2'); font-display: swap; }
+    @font-face { font-family: 'Newsreader'; src: url('art/fonts/newsreader-normal.woff2') format('woff2'); font-display: swap; }
+    @font-face { font-family: 'Special Elite'; src: url('art/fonts/special-elite-normal.woff2') format('woff2'); font-display: swap; }
+    :root { color-scheme: light; --ink: #1c1712; --ink-2: #3f3528; --red: #94201a; --paper: #ecdec2; --card: #f6ecd6; --rule: #b9a47c; }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; background: var(--paper); }
+    body { margin: 0; color: var(--ink); background: var(--paper) url('media/ticket/paper.webp') 0 0 / 512px; font: 400 clamp(17px, 1.3vw, 19px)/1.55 'Newsreader', Georgia, serif; }
+    main { max-width: 760px; margin: 0 auto; padding: max(28px, env(safe-area-inset-top)) clamp(18px, 5vw, 32px) 72px; }
+    a { color: var(--red); text-underline-offset: 2px; overflow-wrap: anywhere; }
+    a:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+    .back { display: inline-flex; align-items: center; min-height: 44px; font: 400 15px 'Special Elite', 'Courier New', monospace; color: var(--ink); }
+    .kicker { margin: 28px 0 8px; font: 400 14px/1.3 'Special Elite', 'Courier New', monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--red); }
+    h1, h2 { font-family: 'Young Serif', Georgia, serif; font-weight: 400; letter-spacing: -.012em; text-wrap: balance; }
+    h1 { margin: 0 0 14px; font-size: clamp(40px, 8vw, 64px); line-height: 1.04; }
+    h2 { margin: 44px 0 10px; padding-top: 18px; border-top: 2px dashed var(--rule); font-size: clamp(25px, 4vw, 32px); line-height: 1.12; }
+    p { margin: 0 0 14px; }
+    b { font-weight: 400; font-family: 'Young Serif', Georgia, serif; }
+    code { font: 400 .86em 'Special Elite', 'Courier New', monospace; overflow-wrap: anywhere; }
+    .lead { font-size: 1.15em; line-height: 1.45; }
+    .stub { margin: 26px 0 0; padding: 18px clamp(16px, 4vw, 24px); background: var(--card); border: 1.5px solid var(--ink); }
+    .stub p:first-child { margin-bottom: 8px; font: 400 14px 'Special Elite', 'Courier New', monospace; letter-spacing: .06em; text-transform: uppercase; color: var(--red); }
+    .stub ul { margin: 0; padding-left: 20px; }
+    .stub li { margin: 5px 0; }
+    .table { margin: 14px 0 0; padding: 0; list-style: none; border-top: 1.5px solid var(--ink); }
+    .table li { display: grid; grid-template-columns: minmax(0, 13em) minmax(0, 1fr); gap: 4px 20px; padding: 13px 0; border-bottom: 1px solid var(--rule); }
+    .table small { display: block; font: 400 12.5px/1.35 'Special Elite', 'Courier New', monospace; color: var(--ink-2); overflow-wrap: anywhere; }
+    @media (max-width: 560px) { .table li { grid-template-columns: minmax(0, 1fr); } }
+    footer { margin-top: 48px; padding-top: 18px; border-top: 2px dashed var(--rule); }
   </style>
 </head>
 <body>
 <main>
-  <div class="kicker">last updated 7 October 2026</div>
-  <h1>Streamora privacy</h1>
-  <p>Streamora is a web app that plays movies and shows from your own TorBox account. It has no accounts or servers that keep your data. This page explains what it stores and where.</p>
+  <a class="back" href="./">← Back to Streamora</a>
+  <p class="kicker">Last updated 1 November 2026</p>
+  <h1>Your data stays yours.</h1>
+  <p class="lead">Streamora plays movies, shows and anime from your own TorBox account. It has no Streamora accounts and no database of its own. This page says what it stores, where, and who else receives what.</p>
+
+  <section class="stub" aria-label="The short version">
+    <p>The short version</p>
+    <ul>
+      <li>Your library lives in one file in your own Google Drive, and a copy lives on your device.</li>
+      <li>Streamora can't see any other file in your Drive.</li>
+      <li>Your TorBox key is shared with TorBox and the built-in source services, because they need it to find sources for your account.</li>
+      <li>No analytics, no ads, no tracking cookies. Your data is never sold.</li>
+      <li>You can delete it all from <b>Settings → Privacy</b>.</li>
+    </ul>
+  </section>
 
   <h2>Google sign-in and Drive</h2>
-  <p>When you sign in with Google, Streamora asks for your name, email address and profile picture (to show which account you're using) and for access to <b>only the files Streamora creates in your Google Drive</b> (the <code>drive.file</code> permission). Streamora makes one folder, "Streamora", with one data file in it, and can't see any of your other files.</p>
-  <p>That file holds your profiles, watchlists, watch progress and history, diary, settings, your TorBox API key and, if you connected it, your Trakt sign-in. This lets every device you sign in on stay in step. The file is read and written directly by the app in your browser. It isn't copied anywhere else.</p>
+  <p>When you sign in with Google, Streamora asks for your name, email address and profile picture, to show which account you're using. It also asks for access to <b>only the files Streamora creates in your Drive</b> (the <code>drive.file</code> permission). It makes one folder called "Streamora" with one data file inside.</p>
+  <p>That file holds your profiles, watchlists, watch progress and history, diary, settings, your TorBox API key and, if you connected it, your Trakt sign-in. This is how your devices stay in step. The app in your browser reads and writes the file directly.</p>
   <p>Streamora's use of information received from Google APIs follows the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements. Your Google data is used only to save and load your Streamora data. It is never sold, shared, used for ads or used to train AI models.</p>
 
   <h2>On your device</h2>
-  <p>A copy of the same data is kept in your browser (localStorage) so the app is instant and works offline. Your TorBox key is encrypted there. Sign-in tokens for Google and Trakt are kept in the browser's IndexedDB.</p>
+  <p>A copy of your data is kept in your browser's localStorage, so the app opens quickly and works offline. Your TorBox key is encrypted there. Sign-in tokens for Google and Trakt are kept in the browser's IndexedDB.</p>
+  <p>The welcome film and landing page store a few small notes in localStorage: whether you've seen the film, when you last visited (so the film can return after a long absence), and whether you turned page sounds on. These stay on your device.</p>
 
-  <h2>Servers in between</h2>
-  <p>Streamora's own server functions only relay requests: <code>/api/tb</code> passes requests to TorBox (which blocks browsers) along with your IP address when asking for a video link, so TorBox can pick a nearby server; <code>/api/imdb</code> looks up titles the main catalog lacks; and <code>/api/google</code> completes the Google sign-in (which needs the app's client secret). They store and log nothing.</p>
-  <p>Catalogs and artwork come from Cinemeta and Kitsu, and sources come from Torrentio, Comet and MediaFusion, which receive your TorBox key to find sources for your account (as in Stremio). If you connect Trakt, Trakt sees what you watch. Streamora has no analytics, ads or tracking cookies.</p>
-
-  <h2>Third-party services</h2>
-  <p>The app contacts these services directly from your browser. Here is what each one receives.</p>
-  <ul>
-    <li><b>Cinemeta</b> (v3-cinemeta.strem.io): the titles you browse and the words you search for.</li>
-    <li><b>Kitsu</b> (anime-kitsu.strem.fun): the same, for anime.</li>
-    <li><b>Torrentio</b> (torrentio.strem.fun): the title you open, and your TorBox key, to find sources.</li>
-    <li><b>TorBox</b> (torbox.app, through our <code>/api/tb</code> relay; video streams from *.tb-cdn.st and similar TorBox hosts): your API key and the torrents and links the app manages in your account.</li>
-    <li><b>OpenSubtitles</b> (opensubtitles-v3.strem.io): the title and episode you are watching, to find subtitles.</li>
-    <li><b>Kitsu mappings and AniSkip</b> (kitsu.io, api.aniskip.com): for anime, the MyAnimeList id and episode number, to find intro and outro times.</li>
-    <li><b>Metahub</b> (images.metahub.space): posters, backdrops and logos. The image addresses show which titles you see.</li>
-    <li><b>Wikipedia</b> (en.wikipedia.org): cast names, to fetch their photos.</li>
-    <li><b>Google</b> (accounts.google.com, googleapis.com): sign-in, and your Streamora data file in Drive (see above).</li>
-    <li><b>Trakt</b> (api.trakt.tv, only if you connect it): what you watch and the history you import. Sign-in goes through our <code>/api/trakt</code> relay.</li>
-    <li><b>Google Fonts</b> (fonts.googleapis.com, fonts.gstatic.com): your IP address and browser, when the fonts load.</li>
-    <li><b>YouTube</b> (youtube-nocookie.com): the trailer's video id, when you open a trailer.</li>
-    <li><b>Add-ons you add</b> (Settings → Connect): the title and episode you ask for, sent to that add-on's own address.</li>
-    <li><b>GitHub</b> (github.com): the iOS app checks api.github.com about once a day for a newer release (no personal data is sent), and the download link opens github.com.</li>
+  <h2>Streamora's relays</h2>
+  <p>A few small server functions on Cloudflare Pages forward requests that a browser can't make itself. Our code doesn't save or log what passes through them. Cloudflare hosts the site, so it handles your IP address and request details as any web host does.</p>
+  <ul class="table">
+    <li><span><code>/api/tb</code></span><span>Passes requests to TorBox with your API key. When asking for a video link, it also passes your IP address, so TorBox can pick a nearby server.</span></li>
+    <li><span><code>/api/google</code></span><span>Completes Google sign-in, which needs the app's client secret.</span></li>
+    <li><span><code>/api/trakt</code></span><span>Completes Trakt sign-in, for the same reason.</span></li>
+    <li><span><code>/api/imdb</code></span><span>Looks up titles the main catalog lacks.</span></li>
+    <li><span><code>/api/addon</code></span><span>Fetches results from add-ons that browsers can't reach directly. The add-on sees the request come from the relay.</span></li>
   </ul>
 
-  <h2>Deleting your data</h2>
-  <p>In Streamora, go to <b>Settings → Privacy → Delete everything from Drive</b>. This removes the file from your Drive, removes the copy on that device and revokes Streamora's access to your Google account. You can also remove Streamora at any time at <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener">myaccount.google.com/connections</a>.</p>
+  <h2>Other services</h2>
+  <p>Your browser contacts these services directly unless noted. Here is what each one receives.</p>
+  <ul class="table">
+    <li><span><b>TorBox</b><small>torbox.app, *.tb-cdn.st and other TorBox hosts</small></span><span>Your API key, the items and links the app manages in your account, and the video requests when you play something.</span></li>
+    <li><span><b>Torrentio, Comet, MediaFusion</b><small>torrentio.strem.fun, comet.elfhosted.com, mediafusionfortheweebs.midnightignite.me</small></span><span>The title you open <b>and your TorBox key</b>, to find sources for your account. These are independent services, each with its own privacy practices.</span></li>
+    <li><span><b>Meteor</b><small>meteorfortheweebs.midnightignite.me</small></span><span>The title you open. It doesn't receive your key.</span></li>
+    <li><span><b>Add-ons you add</b><small>Settings → Connect</small></span><span>The title and episode you ask for, sent to that add-on's address.</span></li>
+    <li><span><b>Cinemeta</b><small>v3-cinemeta.strem.io</small></span><span>The titles you browse and the words you search for.</span></li>
+    <li><span><b>Kitsu</b><small>anime-kitsu.strem.fun, kitsu.io</small></span><span>The same, for anime, plus lookups that match an anime to its other ids.</span></li>
+    <li><span><b>AniSkip</b><small>api.aniskip.com</small></span><span>For anime, the MyAnimeList id and episode number, to find intro and outro times.</span></li>
+    <li><span><b>OpenSubtitles</b><small>opensubtitles-v3.strem.io</small></span><span>The title and episode you are watching, to find subtitles.</span></li>
+    <li><span><b>Metahub</b><small>images.metahub.space</small></span><span>Requests for posters, backdrops and logos. The image addresses show which titles you see.</span></li>
+    <li><span><b>Wikipedia</b><small>en.wikipedia.org</small></span><span>Cast names, to fetch their photos.</span></li>
+    <li><span><b>YouTube</b><small>youtube-nocookie.com</small></span><span>The trailer's video id, when you open a trailer.</span></li>
+    <li><span><b>Google</b><small>accounts.google.com, googleapis.com</small></span><span>Sign-in, and your Streamora file in Drive.</span></li>
+    <li><span><b>Trakt</b><small>api.trakt.tv, only if you connect it</small></span><span>What you watch and the history you import.</span></li>
+    <li><span><b>GitHub</b><small>api.github.com, github.com</small></span><span>The iOS app checks about once a day for a newer release, with no personal data added. The download link opens github.com.</span></li>
+  </ul>
+  <p style="margin-top:14px">Any service you connect to also sees your IP address and browser details, as any website does. The landing page's film, pictures, sounds and fonts come from Streamora's own site, not from a third party.</p>
 
-  <h2>Contact</h2>
-  <p>Questions: <a href="mailto:knight007youtu@gmail.com">knight007youtu@gmail.com</a>.</p>
-  <p><a href="./">← back to Streamora</a></p>
+  <h2>Deleting your data</h2>
+  <p>Go to <b>Settings → Privacy → Delete everything from Drive</b>. This removes the file from your Drive, clears the copy on that device and revokes Streamora's access to your Google account. Other devices keep their local copy until you sign out there or clear the site's data.</p>
+  <p>You can also remove Streamora's access at <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener">myaccount.google.com/connections</a>. Your TorBox account and any history in Trakt are managed with those services.</p>
+
+  <footer>
+    <h2 style="margin-top:0;padding-top:0;border:0">Questions?</h2>
+    <p>Write to <a href="mailto:knight007youtu@gmail.com">knight007youtu@gmail.com</a>.</p>
+    <a class="back" href="./">← Back to Streamora</a>
+  </footer>
 </main>
 </body>
 </html>
