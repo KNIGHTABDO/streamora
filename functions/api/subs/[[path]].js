@@ -139,8 +139,11 @@ async function search(env, url) {
 async function file(env, url) {
   const src = url.searchParams.get('src'), ref = url.searchParams.get('ref') || '', s = url.searchParams.get('s'), e = url.searchParams.get('e');
   let r;
-  if (src === 'subdl' && /^\d+-\d+$/.test(ref)) r = await fetch(`https://dl.subdl.com/subtitle/${ref}.zip`, { signal: AbortSignal.timeout(15000) });
-  else if (src === 'subsource' && /^\d+$/.test(ref) && env.SUBSOURCE_API_KEY) r = await fetch(`${SS}/subtitles/${ref}/download`, { headers: { 'X-API-Key': env.SUBSOURCE_API_KEY }, signal: AbortSignal.timeout(15000) });
+  if (src === 'subdl' && /^\d+-\d+$/.test(ref)) {
+    r = await fetch(`https://dl.subdl.com/subtitle/${ref}.zip`, { signal: AbortSignal.timeout(15000) }).catch(() => null);
+    // SubDL rate-limits Cloudflare's IPs at times; SubSource has the same subtitle under the same id
+    if ((!r || !r.ok) && env.SUBSOURCE_API_KEY) r = await fetch(`${SS}/subtitles/${ref.split('-')[1]}/download`, { headers: { 'X-API-Key': env.SUBSOURCE_API_KEY }, signal: AbortSignal.timeout(15000) });
+  } else if (src === 'subsource' && /^\d+$/.test(ref) && env.SUBSOURCE_API_KEY) r = await fetch(`${SS}/subtitles/${ref}/download`, { headers: { 'X-API-Key': env.SUBSOURCE_API_KEY }, signal: AbortSignal.timeout(15000) });
   else return json({ error: 'bad_ref' }, 400);
   if (!r.ok) return json({ error: 'upstream', status: r.status }, 502);
   const buf = await r.arrayBuffer();
