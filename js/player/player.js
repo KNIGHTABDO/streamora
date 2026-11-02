@@ -112,6 +112,8 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const [started, setStarted] = useState(false);       // first frame shown (drop the backdrop behind the video)
   const [ui, setUi] = useState(true);                  // controls visible
   const [menu, setMenu] = useState(null);              // null | 'settings' | 'subs' | 'audio' | 'episodes'
+  const menuRef = useRef(null);                       // the timer below reads it: an open menu stays open while playing
+  menuRef.current = menu;
   const [flash, setFlash] = useState(null);            // double-tap feedback
   // A live transcode only serves segments near where it is converting, so a far seek
   // can't just set currentTime: it re-requests the playlist with ?t=<seconds>, which restarts the
@@ -135,7 +137,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const poke = useCallback(() => {
     setUi(true);
     clearTimeout(hideT.current);
-    hideT.current = setTimeout(() => { const v = vRef.current; if (v && !v.paused) { setUi(false); setMenu(m => (m === 'episodes' ? m : null)); } }, 3200);
+    hideT.current = setTimeout(() => { const v = vRef.current; if (v && !v.paused && !menuRef.current) setUi(false); }, 3200);
   }, []);
 
   // Playback events for scrobblers (Trakt): window 'streamora:playback' { state: 'start'|'pause'|'stop', meta, video, progress 0-100 }
@@ -481,6 +483,8 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     }
     setSt(s0 => ({ ...s0, t: T }));
   };
+  // closing a menu while playing starts the usual hide countdown again
+  useEffect(() => { if (!menu) poke(); }, [menu]);
   const seekBy = d => { const x = v(); if (!x) return; seekTo(realNow(x) + d); poke(); };
   const seekRef = useRef(seekTo);
   seekRef.current = seekTo;
