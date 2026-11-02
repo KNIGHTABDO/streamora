@@ -136,10 +136,20 @@ export function decodeSubs(buf, lang) {
   return new TextDecoder(cp).decode(buf);
 }
 
+/** Downloads and parses a subtitle. A zip (SubDL season packs come straight from dl.subdl.com) is opened here and the
+ *  episode named in the URL's #s=…&e=… is taken out of it. */
 export async function loadSubFile(url, lang) {
   const r = await fetch(url);
   if (!r.ok) throw new Error('Subtitle download failed');
-  return parseSubs(decodeSubs(await r.arrayBuffer(), lang));
+  let buf = new Uint8Array(await r.arrayBuffer());
+  const { isZip, zipEntries, pickEntry, zipRead } = await import('../lib/zip.js');
+  if (isZip(buf)) {
+    const ep = new URLSearchParams(String(url).split('#')[1] || '');
+    const entry = pickEntry(zipEntries(buf), ep.get('s'), ep.get('e'));
+    if (!entry) throw new Error('No subtitle for this episode in that pack');
+    buf = await zipRead(buf, entry);
+  }
+  return parseSubs(decodeSubs(buf, lang));
 }
 
 // Self-check: node js/player/subs.js
