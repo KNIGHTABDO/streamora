@@ -214,6 +214,25 @@ function PageHost({ route }) {
   return html`<div class="page-enter" key=${route.path}><${Comp} params=${route.params} query=${route.query} /></div>`;
 }
 
+// ------------------------------------------------------------ first Drive round
+// Drive sync starts before the first render. Signed in but missing the key or a profile on this device (fresh
+// install, cleared storage, a key this browser can't decrypt), the app waits for Drive's copy behind one loading
+// screen instead of flashing Welcome, then a spinner, then Home. Never longer than WAIT.
+const WAIT = 8000;
+const firstSync = initSync().catch(() => {});
+const needsDrive = () => !!account.get() && !(keyStore.get().set && profiles.get().some(p => p.id === activeProfileId.get()));
+function useDriveSettled() {
+  const [settled, setSettled] = useState(() => !needsDrive());
+  useEffect(() => {
+    if (settled) return;
+    const done = () => setSettled(true);
+    const t = setTimeout(done, WAIT);
+    firstSync.then(done);
+    return () => clearTimeout(t);
+  }, []);
+  return settled;
+}
+
 // ------------------------------------------------------------ app
 function App() {
   let route = useRoute();
@@ -223,6 +242,7 @@ function App() {
   const activeId = useStore(activeProfileId);
   const [more, setMore] = useState(false);
   const profile = list.find(p => p.id === activeId);
+  const settled = useDriveSettled();
 
   const q = new URLSearchParams(route.query).toString();
   const badge = badgeCount(useStore(newEps));
@@ -237,7 +257,9 @@ function App() {
   const boot = window.__streamora;
   const toLanding = !google && !open && !!boot && boot.mayLand();
   useEffect(() => { if (boot) toLanding ? boot.showLanding() : boot.showApp(); }, [toLanding]);
-  const gate = toLanding ? null : !ready && !open ? '#/welcome' : ready && !profile && !open && route.path !== '/profiles' ? '#/profiles' : null;
+  // first launch on this device: hold one loading screen (keeping the URL) until Drive's key and profiles arrive
+  const hold = !settled && google && !open;
+  const gate = toLanding || hold ? null : !ready && !open ? '#/welcome' : ready && !profile && !open && route.path !== '/profiles' ? '#/profiles' : null;
   if (gate) { history.replaceState(history.state, '', gate); route = parseHash(gate); }
   else if (route.redirect) history.replaceState(history.state, '', route.redirect);
 
@@ -257,6 +279,7 @@ function App() {
     return () => { removeEventListener('touchstart', start); removeEventListener('touchend', end); };
   }, []);
 
+  if (hold) return html`<main class="page center-fill shell-boot"><${Spinner} label="Getting your things from Drive…" /></main>`;
   const chromeless = route.path.startsWith('/watch/') || route.path === '/welcome' || (route.path === '/profiles' && !profile);
   if (toLanding) return html`<${Toasts} />`;
   return html`
@@ -289,8 +312,7 @@ if ('serviceWorker' in navigator && !['localhost', '127.0.0.1', '[::1]'].include
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
-// Drive sync starts right away (it never blocks the UI); Trakt and the daily new-episode check after first paint
-initSync().catch(() => {});
+// Trakt and the daily new-episode check start after first paint
 setTimeout(() => {
   import('./core/trakt.js').then(m => m.initTrakt()).catch(() => {});
   checkForUpdate().catch(() => {});

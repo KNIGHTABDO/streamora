@@ -1,5 +1,5 @@
 // Read-only relay for Stremio addons that don't send CORS headers. GET /api/addon?url=https://…
-// Only manifest.json and /stream/<type>/<id>.json, https, public hosts, 10s, 2 MB. Never runs addon code: it's JSON.
+// Only manifest.json, /stream/<type>/<id>.json and /subtitles/<type>/<id>[/extra].json, https, public hosts, 10s, 2 MB. Never runs addon code: it's JSON.
 // same-origin only (the Origin / Sec-Fetch-Site headers browsers send)
 const sameOrigin = request => {
   const origin = request.headers.get('Origin'), site = request.headers.get('Sec-Fetch-Site');
@@ -19,7 +19,7 @@ export function allowedUrl(raw) {
   if (!h.includes('.') || /^(localhost|.*\.local|.*\.internal|.*\.localhost)$/.test(h)) return null;
   if (/^[\d.]+$/.test(h) || h.includes(':')) return null;
   const p = u.pathname;
-  if (!(p.endsWith('/manifest.json') || /\/stream\/[^/]+\/[^/]+\.json$/.test(p))) return null;
+  if (!(p.endsWith('/manifest.json') || /\/stream\/[^/]+\/[^/]+\.json$/.test(p) || /\/subtitles\/[^/]+\/[^/]+(\/[^/]+)?\.json$/.test(p))) return null;
   return u;
 }
 

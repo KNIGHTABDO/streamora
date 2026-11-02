@@ -1,4 +1,4 @@
-// Subtitles: OpenSubtitles (Stremio addon, CORS ok) + SRT/VTT parsing for our own overlay.
+// Subtitles: OpenSubtitles + SubDL/SubSource (our server) + SubSense + user subtitle addons (Stremio addons, CORS ok) + SRT/VTT parsing for our own overlay.
 // Embedded tracks inside the file can't be fetched separately; they are burned in
 // through the transcode URL's {subtitles} slot instead (see engine.js).
 
@@ -16,21 +16,50 @@ export const langName = code => LANG_NAMES[code] || (code || '?').toUpperCase();
 
 // "Show.S01E02.1080p.WEB-DL.x264-GRP.mkv" and "Show S01E02 1080p WEB DL x264 GRP [TGx]" are the same release
 const relKey = s => String(s || '').toLowerCase().replace(/\.(mkv|mp4|m4v|avi|webm)$/, '').replace(/[^a-z0-9]+/g, ' ').trim();
-const sameRelease = (a, b) => { a = relKey(a); b = relKey(b); return a.length > 8 && b.length > 8 && (a.includes(b) || b.includes(a)); };
+// a season pack ("Show.S01.WEB.H264-RBB") is the same release as its episodes ("Show.S01E02.1080p.WEB.h264-RBB"): same season, same group
+const packKey = k => { const m = /\bs(\d{1,2})(?:e\d{1,3})?\b.*\b([a-z0-9]{2,12})$/.exec(k); return m && !/^(web|webrip|dl|x264|x265|h264|h265|hevc|1080p|720p|2160p|aac|ddp5|nf|amzn)$/.test(m[2]) ? `${+m[1]}|${m[2]}` : null; };
+const sameRelease = (a, b) => {
+  a = relKey(a); b = relKey(b);
+  if (a.length <= 8 || b.length <= 8) return false;
+  if (a.includes(b) || b.includes(a)) return true;
+  const pa = packKey(a);
+  return !!pa && pa === packKey(b);
+};
 
-/** [{ id, lang, label, url, release, match }] for a movie id or an episode video id. With the release filename
- *  being played, subtitles of that release come first (match: true). */
-export async function openSubs(type, id, filename) {
+async function openSubtitlesOrg(type, id, filename) {
   try {
     const extra = filename ? `/filename=${encodeURIComponent(filename)}` : '';
-    const r = await fetch(`${OPENSUBS}/subtitles/${type}/${encodeURIComponent(id)}${extra}.json`);
+    const r = await fetch(`${OPENSUBS}/subtitles/${type}/${encodeURIComponent(id)}${extra}.json`, { signal: AbortSignal.timeout(12000) });
     if (!r.ok) return [];
     const j = await r.json();
-    return (j.subtitles || []).map(s => {
-      const release = s.movieReleaseName || s.subtitleFileName || '';
-      return { id: 'os:' + s.id, lang: s.lang, label: langName(s.lang), release, match: !!filename && sameRelease(release, filename), url: s.url };
-    }).sort((a, b) => b.match - a.match);
+    return (j.subtitles || []).map(s => ({ id: 'os:' + s.id, lang: s.lang, url: s.url, release: s.movieReleaseName || s.subtitleFileName || '', source: 'OpenSubtitles' }));
   } catch { return []; }
+}
+
+// SubDL + SubSource through our server (it holds the API keys): lots of Arabic, season packs unzipped there
+async function subdlSubsource(type, id, want) {
+  if (!/^tt\d+/.test(id)) return [];
+  try {
+    const langs = [...new Set(['ara', ...want, 'eng'])].join(',');
+    const r = await fetch(`/api/subs/search?${new URLSearchParams({ type, id, langs })}`, { signal: AbortSignal.timeout(15000) });
+    return r.ok ? (await r.json()).subtitles || [] : [];
+  } catch { return []; }
+}
+
+/** [{ id, lang, label, url, release, match, source }] for a movie id or an episode video id, from OpenSubtitles,
+ *  SubDL, SubSource, SubSense and any subtitle addons the user added. `want` are extra languages to ask for (Arabic and
+ *  English always are). With the release filename being played, subtitles of that release come first (match: true). */
+export async function openSubs(type, id, filename, want = []) {
+  want = want.filter(l => l && l !== 'off');
+  const [os, sx, more] = await Promise.all([
+    openSubtitlesOrg(type, id, filename),
+    subdlSubsource(type, id, want),
+    import('../core/addons.js').then(m => m.addonSubtitles(type, id, filename, want)).catch(() => []),
+  ]);
+  const seen = new Set();
+  return [...os, ...sx, ...more].filter(s => s.url && !seen.has(s.url) && seen.add(s.url))
+    .map(s => ({ ...s, label: langName(s.lang), match: !!filename && [s.release, ...(s.releases || [])].some(r => sameRelease(r, filename)) }))
+    .sort((a, b) => b.match - a.match);
 }
 
 const ts = s => {
@@ -126,5 +155,7 @@ if (typeof process !== 'undefined' && process.argv && process.argv[1] && process
   const a = parseSubs('[Script Info]\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.50,0:00:03.00,Default,,0,0,0,,{\\an8}Hello,\\Nworld\n');
   assert.deepEqual(a, [{ start: 1.5, end: 3, text: 'Hello,\nworld' }]);
   assert.equal(decodeSubs(new Uint8Array([0xc7, 0xe1]), 'ara'), 'ال');
+  assert.ok(sameRelease('Daily.Dose.Of.Sunshine.S01.WEB.H264-RBB', 'Daily.Dose.of.Sunshine.S01E02.1080p.WEB.h264-RBB.mkv'));
+  assert.ok(!sameRelease('Daily.Dose.Of.Sunshine.S01.WEB.H264-RBB', 'Daily.Dose.of.Sunshine.S01E02.1080p.WEB.h264-EDITH.mkv'));
   console.log('subs.js ok');
 }

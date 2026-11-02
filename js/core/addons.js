@@ -1,4 +1,4 @@
-// Extra Stremio addons (stream resource only), built in and user-added. We only read their JSON; addon code never runs here.
+// Extra Stremio addons (stream and subtitles resources), built in and user-added. We only read their JSON; addon code never runs here.
 // Direct fetch first (most addons send CORS headers), then the /api/addon relay.
 import { store } from './store.js';
 
@@ -22,15 +22,29 @@ async function getJson(u) {
   return r.json();
 }
 
-/** Validates a manifest: needs the 'stream' resource. Returns the saved addon entry. */
+const resourceOf = (m, name) => (Array.isArray(m.resources) ? m.resources : []).find(r => r === name || (r && r.name === name));
+// { types, idPrefixes } for one resource, or null when it serves neither movies nor series
+function scopeOf(m, name) {
+  const res = resourceOf(m, name);
+  if (!res) return null;
+  const types = (res.types || m.types || []).filter(t => typeof t === 'string');
+  if (!types.some(t => t === 'movie' || t === 'series')) return null;
+  const idPrefixes = res.idPrefixes || m.idPrefixes || null;
+  return { types, idPrefixes: Array.isArray(idPrefixes) ? idPrefixes.filter(p => typeof p === 'string') : null };
+}
+
+/** Validates a manifest: needs the 'stream' or 'subtitles' resource. Returns the saved addon entry
+ *  ({ url, id, name, types, idPrefixes } for streams, plus subs: { types, idPrefixes } for subtitles). */
 export function checkManifest(m, url) {
   if (!m || typeof m !== 'object' || typeof m.id !== 'string' || typeof m.name !== 'string') throw new Error("That link isn't a Stremio addon manifest.");
-  const res = (Array.isArray(m.resources) ? m.resources : []).find(r => r === 'stream' || (r && r.name === 'stream'));
-  if (!res) throw new Error(`${m.name} doesn't provide streams, so Streamora can't use it.`);
-  const types = (res.types || m.types || []).filter(t => typeof t === 'string');
-  if (!types.some(t => t === 'movie' || t === 'series')) throw new Error(`${m.name} has no movie or series streams.`);
-  const idPrefixes = res.idPrefixes || m.idPrefixes || null;
-  return { url, id: m.id, name: m.name.slice(0, 60), types, idPrefixes: Array.isArray(idPrefixes) ? idPrefixes.filter(p => typeof p === 'string') : null };
+  const stream = scopeOf(m, 'stream'), subs = scopeOf(m, 'subtitles');
+  if (!stream && !subs) {
+    if (!resourceOf(m, 'stream') && !resourceOf(m, 'subtitles')) throw new Error(`${m.name} doesn't provide streams or subtitles, so Streamora can't use it.`);
+    throw new Error(`${m.name} has nothing for movies or series.`);
+  }
+  const a = { url, id: m.id, name: m.name.slice(0, 60), types: stream ? stream.types : [], idPrefixes: stream ? stream.idPrefixes : null };
+  if (subs) a.subs = subs;
+  return a;
 }
 
 export async function addAddon(input) {
@@ -115,11 +129,58 @@ const getDirect = async u => { const r = await fetch(u, { signal: AbortSignal.ti
 
 /** Streams from the built-ins (with a TorBox key) and every added addon that handles this type/id, deduped by infoHash. Never throws. */
 export async function addonStreams(type, id, tbKey) {
-  const list = addons.get().filter(a => a.types.includes(type) && (!a.idPrefixes || a.idPrefixes.some(p => id.startsWith(p))));
+  const list = addons.get().filter(a => (a.types || []).includes(type) && (!a.idPrefixes || a.idPrefixes.some(p => id.startsWith(p))));
   const all = await Promise.allSettled([
     ...(tbKey && /^tt\d+/.test(id) ? BUILTIN.map(async b => fromAddon(b.name, await b.base(tbKey), type, id, getDirect)) : []),
     ...list.map(a => fromAddon(a.name, baseOf(a.url), type, id, getJson)),
   ]);
   const seen = new Set();
   return all.flatMap(r => (r.status === 'fulfilled' ? r.value : [])).filter(s => s && !seen.has(s.infoHash) && seen.add(s.infoHash));
+}
+
+// ------------------------------------------------------------ subtitles
+// SubSense (keyless): OpenSubtitles, Gestdown, YIFY, BetaSeries, TVsubtitles, AnimeTosho in the languages asked for.
+// Arabic and English are always asked for. A SubSense link the user configured with free SubDL / SubSource keys
+// (much more Arabic) is added in Settings like any other addon and searched next to this one.
+const SUBSENSE = 'https://subsense.nepiraw.com';
+const ISO1 = { ara: 'ar', eng: 'en', fre: 'fr', fra: 'fr', spa: 'es', ger: 'de', deu: 'de', ita: 'it', por: 'pt', pob: 'pt-br', tur: 'tr',
+  rus: 'ru', dut: 'nl', nld: 'nl', per: 'fa', fas: 'fa', heb: 'he', hin: 'hi', jpn: 'ja', kor: 'ko', chi: 'zh', zho: 'zh', ind: 'id', pol: 'pl' };
+const ISO2 = { ar: 'ara', en: 'eng', fr: 'fre', es: 'spa', de: 'ger', it: 'ita', pt: 'por', 'pt-br': 'pob', tr: 'tur', ru: 'rus', nl: 'dut',
+  fa: 'per', he: 'heb', hi: 'hin', ja: 'jpn', ko: 'kor', zh: 'chi', id: 'ind', pl: 'pol', arabic: 'ara', english: 'eng' };
+/** Any addon's language tag ("ar", "ara", "Arabic", "pt-BR") -> the 3-letter code OpenSubtitles uses. */
+export const subLang = l => {
+  const k = String(l || '').trim().toLowerCase();
+  if (ISO2[k]) return ISO2[k];
+  if (/^[a-z]{3}$/.test(k)) return k;
+  return ISO2[k.split(/[-_]/)[0]] || k;
+};
+export const subsenseBase = (want = []) => {
+  const languages = [...new Set(['ar', 'en', ...want.map(l => ISO1[l] || (/^[a-z]{2}$/.test(l) ? l : null)).filter(Boolean)])];
+  return `${SUBSENSE}/streamra-${encodeURIComponent(JSON.stringify({ languages }))}`;
+};
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
+
+/** One addon subtitle -> { id, lang, url, release, source }, or null. */
+export function normalizeSub(s, addonName) {
+  if (!s || typeof s !== 'object' || typeof s.url !== 'string' || !/^https:\/\//.test(s.url)) return null;
+  const str = v => (typeof v === 'string' ? v : '');
+  return {
+    id: `${addonName}:${str(s.id) || s.url}`, lang: subLang(s.lang), url: s.url,
+    release: str(s.releaseName) || str(s.fileName) || str(s.label) || '', source: addonName,
+  };
+}
+
+/** Subtitles from SubSense and every added addon with the subtitles resource, deduped by url. Never throws. */
+export async function addonSubtitles(type, id, filename, want = []) {
+  const extra = filename ? `/filename=${encodeURIComponent(filename)}` : '';
+  const path = `/subtitles/${type}/${encodeURIComponent(id)}${extra}.json`;
+  const list = addons.get().filter(a => a.subs && a.subs.types.includes(type) && (!a.subs.idPrefixes || a.subs.idPrefixes.some(p => id.startsWith(p))));
+  const from = (name, base, get) => withTimeout(get(base + path), 12000)
+    .then(j => (Array.isArray(j && j.subtitles) ? j.subtitles : []).map(s => normalizeSub(s, name)));
+  const all = await Promise.allSettled([
+    ...(/^(tt|kitsu)/.test(id) ? [from('SubSense', subsenseBase(want), getDirect)] : []),
+    ...list.map(a => from(a.name, baseOf(a.url), getJson)),
+  ]);
+  const seen = new Set();
+  return all.flatMap(r => (r.status === 'fulfilled' ? r.value : [])).filter(s => s && !seen.has(s.url) && seen.add(s.url));
 }

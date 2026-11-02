@@ -86,13 +86,19 @@ export const follows   = pstore('follows', []);     // [{id,type,name,poster}] s
 export const hidden    = pstore('hidden', []);      // meta ids removed from Continue Watching
 export const settings  = pstore('settings', {
   quality: 'auto',          // auto | original | high | high_low | medium | medium_low | low | low_low
-  subsLang: 'eng', videoFit: 'contain', subsSize: 100, subsColor: '#fffbe8', subsBg: .35,
+  subsLang: 'ara', videoFit: 'contain', subsSize: 100, subsColor: '#fffbe8', subsBg: .35,
   audioLang: 'eng',
   autoNext: true, autoPlay: true, skipIntroSec: 85,
   nightAuto: true,          // switch to blueprint theme after sunset
   sounds: false, reduceMotion: false,
   cachedOnly: true,
 });
+// what each profile's subtitle picks taught the player (see player/subpick.js): { f: {feature: [good, bad]}, d: {subId: delay} }
+export const subTaste  = pstore('subtaste', {});
+// Arabic became everyone's subtitle language (2026-11): once per profile, even where English was saved before
+const arabicOnce = () => { const s = settings.get(); if (activeProfileId.get() && s && s.subsV !== 2) settings.update(x => ({ ...x, subsLang: 'ara', subsV: 2 })); };
+activeProfileId.subscribe(arabicOnce);
+arabicOnce();
 
 export function useStore(s) {
   const [v, setV] = useState(() => s.get());

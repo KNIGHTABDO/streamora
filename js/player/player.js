@@ -10,7 +10,7 @@ import { html, useState, useEffect, useRef, useMemo, useCallback } from '../../v
 import { Icon, Reel, cx, fmtTime, toast, Img } from '../ui/components.js';
 import { registerIcons } from '../ui/icons.js';
 import { underlinePath, scribbleLoop, roughRect, hash } from '../ui/sketch.js';
-import { useStore, settings } from '../core/store.js';
+import { useStore, settings, subTaste } from '../core/store.js';
 import { saveProgress, epState, showPrefs } from '../core/progress.js';
 import { watchHref } from '../lib/play.js';
 import { nextVideo, seasonsOf, isReleased } from '../core/meta.js';
@@ -21,6 +21,7 @@ import { attach, buildUrl, autoQuality, QUALITIES, isIOS, isSafari } from './eng
 import { openSubs, loadSubFile, parseSubs, decodeSubs, cuesAt, toVTT, langName } from './subs.js';
 import { skipTimes } from './skip.js';
 import { createSubtitleLoader } from './subtitle-choice.js';
+import { pickBest, learn } from './subpick.js';
 import { VlcVideo } from './vlc.js';
 
 registerIcons({
@@ -281,7 +282,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const [subQ, setSubQ] = useState('');
   const [extDone, setExtDone] = useState(false);
   const subtitleLoader = useMemo(() => createSubtitleLoader({
-    load: it => it.file ? it.file.arrayBuffer().then(buf => parseSubs(decodeSubs(buf, it.lang))) : loadSubFile(it.url, it.lang),
+    load: it => it.cues ? Promise.resolve(it.cues) : it.file ? it.file.arrayBuffer().then(buf => parseSubs(decodeSubs(buf, it.lang))) : loadSubFile(it.url, it.lang),
     onLoading: it => setCur({ id: it.id, label: it.label, cues: [], loading: true }),
     onCues: (it, cues) => showCues(it, cues),
     onOff: () => setCur(null),
@@ -315,14 +316,24 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     if (inFile) { autoSubbed.current = true; vlc.setSub(inFile.id); return; }
     if (!extDone) return;
     autoSubbed.current = true;
-    const hit = (mem.subId && ext.find(x => x.id === mem.subId)) || ext.find(x => x.lang === want && x.match) || ext.find(x => x.lang === want);
-    if (hit) chooseExt(hit);
+    const before = subtitleLoader.version;
+    bestOf(ext, want).then(hit => { if (hit && subtitleLoader.isCurrent(before)) chooseExt(hit.sub, false, hit.shift); });
   }, [vt, extDone]);
+  // The remembered subtitle of this show, else every candidate of the language loaded and ranked by how well its timing
+  // fits this release (and what this profile kept or dropped before). -> { sub (with cues), shift } | null
+  const ranked = useRef(new Map());   // subtitle id -> timing shift found while ranking
+  const bestOf = async (list, want) => {
+    const kept = mem.subId && list.find(x => x.id === mem.subId);
+    if (kept) return { sub: kept, shift: ((subTaste.get() || {}).d || {})[kept.id] || 0 };
+    const r = await pickBest(list, want, { load: x => loadSubFile(x.url, x.lang), taste: subTaste.get(), duration: realDur(vRef.current) }).catch(() => []);
+    ranked.current = new Map(r.map(x => [x.sub.id, x.shift]));
+    return r[0] ? { sub: { ...r[0].sub, cues: r[0].cues }, shift: r[0].shift } : null;
+  };
   useEffect(() => {
     if (!meta || String(meta.id).startsWith('tb:')) return;
     let gone = false;
     const before = subtitleLoader.version;
-    openSubs(meta.type, video ? video.id : meta.id, release).then(list => {
+    openSubs(meta.type, video ? video.id : meta.id, release, [mem.subLang, s.subsLang]).then(list => {
       if (gone) return;
       setExt(list);
       // auto-pick: this show's remembered language, else the preferred one when the audio isn't in it
@@ -335,14 +346,24 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       const same = aud && aud.lang_iso && !/^(und|unk)$/i.test(aud.lang_iso) && aud.lang_iso === want;
       if (mem.subLang || !same) {
         // the remembered file first, then a language match; with no hit, the file's own track in that language burned in (for a language this show chose)
-        const hit = (mem.subId && list.find(x => x.id === mem.subId)) || list.find(x => x.lang === want && x.match) || list.find(x => x.lang === want);
-        if (hit) chooseExt(hit);
-        else if (mem.subLang) { const em = trackLabels((info && info.details && info.details.subtitles) || {}).find(([, x]) => x.lang_iso === want); if (em) setBurn(em[0]); }
+        bestOf(list, want).then(hit => {
+          if (gone || !subtitleLoader.isCurrent(before)) return;
+          if (hit) chooseExt(hit.sub, false, hit.shift);
+          else if (mem.subLang) { const em = trackLabels((info && info.details && info.details.subtitles) || {}).find(([, x]) => x.lang_iso === want); if (em) setBurn(em[0]); }
+        });
       }
     });
     return () => { gone = true; };
   }, [meta && meta.id, video && video.id]);
-  const chooseExt = async (it, user) => {
+  // learning: an auto pick swapped for another of the same language, or a timing fix, counts against it;
+  // ten minutes of watching with a subtitle counts for it (see subpick.js learn)
+  const auto = useRef(null), onSub = useRef(null);   // auto-picked subtitle | { sub, secs, fixed, done } now showing
+  const teach = (sub, kind, d) => { if (sub && sub.id && !String(sub.id).startsWith('file:')) subTaste.set(learn(subTaste.get(), sub, kind, d)); };
+  const chooseExt = async (it, user, shift) => {
+    if (user && it && auto.current && auto.current.id !== it.id && auto.current.lang === it.lang) teach(auto.current, 'bad');
+    if (user) auto.current = null; else if (it) auto.current = it;
+    onSub.current = it ? { sub: it, secs: 0, fixed: false, done: false } : null;
+    if (it) setDelay(shift ?? ranked.current.get(it.id) ?? ((subTaste.get() || {}).d || {})[it.id] ?? 0);
     if (user) Object.assign(picked.current, { subLang: it ? it.lang : 'off', subId: null, subName: null });
     if (user && it) { picked.current.subId = it.id; settings.update(x => ({ ...x, subsLang: it.lang })); }
     if (vlc && (it || user)) vlc.setSub(-1);
@@ -353,12 +374,27 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     if (!cues.length) { setCur(null); toast('That subtitle file has no lines I can read', { kind: 'warn' }); return; }
     setCur({ id: it.id, label: it.label, cues });
   };
+  const nudge = by => setDelay(d => {
+    const n = +(d + by).toFixed(2), o = onSub.current;
+    if (o) { teach(o.sub, o.fixed ? undefined : 'bad', n); o.fixed = true; }
+    return n;
+  });
+  useEffect(() => {
+    const t = setInterval(() => {
+      const o = onSub.current, x = vRef.current;
+      if (!o || o.done || !x || x.paused || document.hidden) return;
+      if ((o.secs += 30) >= 600) { o.done = true; if (!o.fixed) teach(o.sub, 'good'); }
+    }, 30000);
+    return () => clearInterval(t);
+  }, []);
   const loadLocal = async e => {
     const f = e.currentTarget.files && e.currentTarget.files[0];
     e.currentTarget.value = '';
     if (!f) return;
     setBurn('none');
     autoSubbed.current = true;
+    auto.current = onSub.current = null;
+    setDelay(0);
     await subtitleLoader.choose({ id: 'file:' + f.name, label: f.name, lang: s.subsLang, file: f });
   };
   useEffect(() => {
@@ -636,7 +672,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     const m = new Map();
     const q = subQ.trim().toLowerCase();
     for (const x of ext) {
-      if (q && !`${x.label} ${x.lang} ${x.release}`.toLowerCase().includes(q)) continue;
+      if (q && !`${x.label} ${x.lang} ${x.release} ${x.source || ''}`.toLowerCase().includes(q)) continue;
       if (!m.has(x.lang)) m.set(x.lang, []); m.get(x.lang).push(x);
     }
     return [...m.entries()].sort((a, b) => (b[0] === s.subsLang) - (a[0] === s.subsLang) || a[1][0].label.localeCompare(b[1][0].label));
@@ -714,9 +750,9 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       <${Item} on=${!subsOn} onClick=${() => { chooseExt(null, true); setBurn('none'); }}>Off<//>
       <label class="pl-chip pl-subfile"><${Icon} name="upload" size=${16} /> Load file…<input type="file" accept=".srt,.vtt,.ass,.ssa" onChange=${loadLocal} /></label>
       ${cur && html`<div class="pl-delay"><span>Timing</span>
-        <button type="button" class="pl-chip" onClick=${() => setDelay(d => +(d - .25).toFixed(2))}>−¼s</button>
+        <button type="button" class="pl-chip" onClick=${() => nudge(-.25)}>−¼s</button>
         <span class="type">${delay > 0 ? '+' : ''}${delay.toFixed(2)}s</span>
-        <button type="button" class="pl-chip" onClick=${() => setDelay(d => +(d + .25).toFixed(2))}>+¼s</button>
+        <button type="button" class="pl-chip" onClick=${() => nudge(.25)}>+¼s</button>
       </div>`}
       ${!!v() && 'audioDelay' in v() && html`<div class="pl-delay"><span>Audio delay</span>
         <button type="button" class="pl-chip" onClick=${() => setAudioDelay(ad - .05)}>−50ms</button>
@@ -726,11 +762,11 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       </div>`}
       ${embedded.length > 0 && html`<div class="pl-menu-kicker kicker type">${vlc ? 'in the file' : 'in the file (burned in)'}</div>`}
       ${embedded.map(x => html`<${Item} key=${x.key} on=${x.on} onClick=${x.pick}>${x.label}${x.extra && html` <span class="faint type">${x.extra}</span>`}<//>`)}
-      ${ext.length > 0 && html`<div class="pl-menu-kicker kicker type">opensubtitles</div>
+      ${ext.length > 0 && html`<div class="pl-menu-kicker kicker type">online</div>
         <input type="search" class="pl-subfilter" placeholder="Filter by language or release…" value=${subQ} onInput=${e => setSubQ(e.currentTarget.value)} aria-label="Filter subtitles" />`}
       ${extByLang.map(([lang, list]) => html`<details class="pl-sublang" open=${lang === s.subsLang || !!subQ}>
         <summary>${list[0].label} <span class="faint type">${list.length}</span></summary>
-        ${list.slice(0, subQ ? 30 : 8).map(x => html`<${Item} on=${cur && cur.id === x.id} onClick=${() => { setBurn('none'); chooseExt(x, true); }}><span class="pl-sub-rel">${x.release || x.label}</span><//>`)}
+        ${list.slice(0, subQ ? 30 : 8).map(x => html`<${Item} on=${cur && cur.id === x.id} onClick=${() => { setBurn('none'); chooseExt(x, true); }}><span class="pl-sub-rel">${x.release || x.label}</span>${x.source && x.source !== 'OpenSubtitles' && html` <span class="faint type">${x.source}</span>`}<//>`)}
       </details>`)}
       ${subQ && !extByLang.length && html`<p class="faint">Nothing matches “${subQ}”.</p>`}
       ${!embedded.length && !ext.length && html`<p class="faint">No subtitles found for this one.</p>`}

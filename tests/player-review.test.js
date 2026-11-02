@@ -15,6 +15,7 @@ function fixture(hls = null, options = {}) {
     settings: { update: fn => Object.assign(prefs, fn(prefs)) }, useStore: () => prefs,
     showPrefs: () => ({}), epState: () => null, nextVideo: () => null, isReleased: () => true,
     cx: (...x) => x.filter(Boolean).join(' '), fmtTime: String, langName: () => 'English', toast() {},
+    subTaste: { get: () => ({}), set() {} }, learn: t => t, pickBest: async (list, lang) => list.filter(x => x.lang === lang).slice(0, 1).map(sub => ({ sub, cues: null, shift: 0 })),
     openSubs: async () => options.list || items, loadSubFile: url => { downloads.push(url); return ({ a, b })[url].promise; },
   }, 'Player');
   host.mount(Player, { meta: { id: 'test', type: 'movie', name: 'Test' }, stream: { filename: 'test.mkv', remux: true, direct: 'mock-file', hls }, info: null });

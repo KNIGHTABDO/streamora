@@ -234,10 +234,10 @@ function AddonsCard() {
     try { const a = await addAddon(url); setUrl(''); toast(`${a.name} added`, { icon: 'plus' }); } catch (x) { setErr(x); } finally { setBusy(false); }
   };
   return html`<div class="panel stack">
-    <h3><${Icon} name="layers" /> Source addons</h3>
-    <p class="muted">Torrentio, Comet and MediaFusion are built in. Add more Stremio addons to search for sources next to them. Only torrent sources are used.</p>
+    <h3><${Icon} name="layers" /> Addons</h3>
+    <p class="muted">Torrentio, Comet and MediaFusion are built in for sources; OpenSubtitles, SubDL, SubSource and SubSense for subtitles (Arabic first, the best-timed one picked for you). Add more Stremio addons to search next to them: source addons (only torrent sources are used) and subtitle addons.</p>
     ${list.length > 0 && html`<ul class="st-addons">${list.map(a => html`<li key=${a.url}>
-      <div><b>${a.name}</b><div class="type faint st-addon-url">${a.url.replace(/^https:\/\//, '').replace(/\/manifest\.json$/, '')}</div></div>
+      <div><b>${a.name}</b> <span class="faint type">${[a.types && a.types.length && 'sources', a.subs && 'subtitles'].filter(Boolean).join(' · ')}</span><div class="type faint st-addon-url">${a.url.replace(/^https:\/\//, '').replace(/\/manifest\.json$/, '')}</div></div>
       <${IconBtn} icon="trash" label=${`Remove ${a.name}`} onClick=${() => removeAddon(a.url)} />
     </li>`)}</ul>`}
     <form class="stack" onSubmit=${add}>
@@ -341,7 +341,7 @@ function About() {
       <li><b>Cinemeta</b> for movie and series catalogs and art</li>
       <li><b>Kitsu</b> (anime-kitsu addon) for anime catalogs</li>
       <li><b>Torrentio</b>, <b>Comet</b> and <b>MediaFusion</b> for sources and cache flags</li>
-      <li><b>OpenSubtitles</b> for subtitles</li>
+      <li><b>OpenSubtitles</b>, <b>SubDL</b>, <b>SubSource</b> and <b>SubSense</b> for subtitles</li>
       <li><b>TorBox</b> for streaming</li>
       <li>Preact, htm, hls.js, qrcode-generator</li>
     </ul>

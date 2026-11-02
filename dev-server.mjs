@@ -25,6 +25,7 @@ const FUNCS = [
   ['/api/google/', 'functions/api/google/[[path]].js', 'path', true],
   ['/api/trakt/', 'functions/api/trakt/[[path]].js', 'path', true],
   ['/api/addon', 'functions/api/addon.js', 'x', false],
+  ['/api/subs/', 'functions/api/subs/[[path]].js', 'path', true],
 ];
 // same variables the functions get on Cloudflare: [vars] from wrangler.toml, secrets from .dev.vars (gitignored)
 const vars = file => {

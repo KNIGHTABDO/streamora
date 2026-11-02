@@ -342,6 +342,7 @@ function pull() {
 }
 
 let started = false;
+/** Starts syncing. Resolves after this launch's first round (or right away when signed out). */
 export async function initSync() {
   if (started) return;
   started = true;
@@ -362,5 +363,6 @@ export async function initSync() {
   addEventListener('online', () => { retryDelay = 0; retryAt = 0; lastPull = 0; pull(); });
   setInterval(pull, POLL);
   account.subscribe(a => { if (a) syncNow(); });
-  if (account.get()) syncNow();
+  // resolves when the first round is done, so the app can wait for a key or profile that only Drive has
+  if (account.get()) return syncNow();
 }
