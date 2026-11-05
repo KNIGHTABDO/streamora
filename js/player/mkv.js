@@ -1,5 +1,6 @@
 // Lazy, client-only Matroska -> fragmented MP4. Video packets stay encoded.
 import { canRemuxMkv, planAudio } from './mkv-plan.js';
+import { workerState } from './mkv-worker.js';
 
 let ac3Ready;
 const failure = (code, message) => Object.assign(new Error(message), { code });
@@ -7,8 +8,90 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /** Like attach(), with an optional signal so leaving during metadata loading also cancels the fetches. */
 export async function attachMkv(video, url, { start = 0, audioLang, onFatal = () => {}, signal } = {}) {
-  if (!canRemuxMkv()) throw failure('mkvvideo', 'This browser cannot play MKV. Pick another source.');
-  const MS = window.MediaSource || window.ManagedMediaSource;
+  let enabled = true;
+  try { enabled = window.localStorage?.getItem('streamora:mkvWorker') !== '0'; } catch {}
+  if (enabled && window.MediaSource?.canConstructInDedicatedWorker === true && typeof Worker !== 'undefined') {
+    try { return await attachWorker(video, url, { start, audioLang, onFatal, signal }); }
+    catch (e) { start = e.position ?? start; }
+  }
+  return attachMkvMain(video, url, { start, audioLang, onFatal, signal });
+}
+
+// Only playback state crosses the boundary; no encoded packets run through the page.
+function attachWorker(video, url, { start, audioLang, onFatal, signal }) {
+  return new Promise((resolve, reject) => {
+    let worker, timer, state = 'starting', epoch = 0, attached = false;
+    const clean = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', stop);
+      for (const name of ['timeupdate', 'seeking', 'canplay', 'loadedmetadata']) video.removeEventListener(name, playback);
+      video.removeEventListener('error', failed);
+      if (worker) {
+        worker.onmessage = worker.onerror = worker.onmessageerror = null;
+        try { worker.postMessage({ type: 'stop' }); } catch {}
+        worker.terminate(); worker = null;
+      }
+      if (attached) { attached = false; video.srcObject = null; video.removeAttribute('src'); video.load(); }
+    };
+    function stop() {
+      if (['stopped', 'fallback', 'failed'].includes(state)) return;
+      state = workerState(state, { type: 'stop' }); clean(); resolve(stop);
+    }
+    function failed(message = {}) {
+      const next = workerState(state, { type: 'error' });
+      if (next === state) return;
+      state = next;
+      const position = video.currentTime || start;
+      clean();
+      if (state === 'fallback') reject(Object.assign(failure('mkvvideo', 'Worker startup failed.'), { position }));
+      else onFatal(failure(message.code === 'mkvaudio' ? 'mkvaudio' : 'mkvvideo', message.code === 'mkvaudio'
+        ? 'This copy’s audio cannot play here. Pick another source.' : 'This MKV could not be played. Pick another source.'), position);
+    }
+    function playback(event) {
+      if (!worker) return;
+      if (event.type === 'seeking') epoch++;
+      worker.postMessage({ type: 'playback', time: video.currentTime, event: event.type, epoch });
+    }
+    const watchdog = () => { clearTimeout(timer); timer = setTimeout(failed, 5000); };
+    signal?.addEventListener('abort', stop, { once: true });
+    if (signal?.aborted) { stop(); return; }
+    try {
+      worker = new Worker(new URL('./mkv-worker.js', import.meta.url), { type: 'module' });
+      worker.onerror = event => { event.preventDefault(); failed(); };
+      worker.onmessageerror = failed;
+      worker.onmessage = ({ data }) => {
+        if (['stopped', 'fallback', 'failed'].includes(state)) return;
+        const next = workerState(state, data);
+        if (data.type === 'error') { failed(data); return; }
+        if (data.type === 'started') clearTimeout(timer); // metadata/network work may take longer than boot
+        if (data.type === 'handle' && next !== state) {
+          state = next; attached = true;
+          try { video.srcObject = data.handle; watchdog(); } catch { failed(); }
+          return;
+        }
+        if (data.type === 'opened') clearTimeout(timer);
+        if (data.type === 'position' && data.epoch === epoch && Number.isFinite(data.time)) {
+          // A pre-metadata currentTime write need not emit 'seeking'. Preserve
+          // that newer request if the worker's initial position arrives later.
+          if (video.currentTime > 0 && Math.abs(video.currentTime - data.time) > .15) playback({ type: 'seeking' });
+          else try { video.currentTime = data.time; } catch { failed(); }
+        }
+        if (data.type === 'ready' && next !== state) { state = next; clearTimeout(timer); resolve(stop); }
+      };
+      for (const name of ['timeupdate', 'seeking', 'canplay', 'loadedmetadata']) video.addEventListener(name, playback);
+      video.addEventListener('error', failed);
+      watchdog();
+      // Relative media URLs belong to the document, not the worker script.
+      worker.postMessage({ type: 'start', url: new URL(url, video.ownerDocument.baseURI).href, start, audioLang, time: video.currentTime });
+    } catch { failed(); }
+  });
+}
+
+// The same buffering loop runs in either realm. The worker supplies only the
+// MediaSource attachment and a video facade driven by playback messages.
+export async function attachMkvMain(video, url, { start = 0, audioLang, onFatal = () => {}, signal } = {}, host = {}) {
+  if (!host.MS && !canRemuxMkv()) throw failure('mkvvideo', 'This browser cannot play MKV. Pick another source.');
+  const MS = host.MS || window.MediaSource || window.ManagedMediaSource;
   let input, ms, sb, objectUrl, conversion, execution, timer, abortRun, serial = Promise.resolve();
   let dead = false, generation = 0, conversionGeneration = -1, reported = false, duration = 0, pendingPosition = null;
   const lifetime = new AbortController();
@@ -110,7 +193,7 @@ export async function attachMkv(video, url, { start = 0, audioLang, onFatal = ()
   signal?.addEventListener('abort', detach, { once: true });
   if (signal?.aborted) { detach(); return detach; }
   try {
-    const { Input, UrlSource, MATROSKA, EncodedPacketSink, Output, Mp4OutputFormat, StreamTarget, Conversion, canEncodeAudio } = await import('mediabunny');
+    const { Input, UrlSource, MATROSKA, EncodedPacketSink, Output, Mp4OutputFormat, StreamTarget, Conversion, canEncodeAudio } = await (host.load ? host.load() : import('mediabunny'));
     if (dead) return detach;
     input = new Input({ source: new UrlSource(url, { getRetryDelay: n => n <= 3 ? n : null, handleUnhandledError: e => fatal(e, generation) }), formats: [MATROSKA] });
     const videoTrack = await input.getPrimaryVideoTrack();
@@ -119,7 +202,7 @@ export async function attachMkv(video, url, { start = 0, audioLang, onFatal = ()
     if (!videoCodec || !supported(`video/mp4; codecs="${videoCodec}"`)) throw failure('mkvvideo', 'This copy’s video cannot play here. Pick another source.');
     const audioTracks = await input.getAudioTracks();
     if (audioTracks.some(t => /^(ac3|eac3)$/.test(t.codec)) && !supported('audio/mp4; codecs="ec-3"')) {
-      ac3Ready ||= import('../../vendor/mediabunny-ac3.min.mjs').then(m => m.registerAc3Decoder()).catch(e => { ac3Ready = null; throw e; });
+      ac3Ready ||= (host.loadAc3 ? host.loadAc3() : import('../../vendor/mediabunny-ac3.min.mjs')).then(m => m.registerAc3Decoder()).catch(e => { ac3Ready = null; throw e; });
       await ac3Ready;
     }
     if (dead) return detach;
@@ -137,12 +220,16 @@ export async function attachMkv(video, url, { start = 0, audioLang, onFatal = ()
     duration = await input.getDurationFromMetadata() ?? await input.computeDuration();
     if (dead) return detach;
     ms = new MS();
-    if (!window.MediaSource) video.disableRemotePlayback = true;
-    objectUrl = URL.createObjectURL(ms);
     const opened = event(ms, 'sourceopen');
-    video.src = objectUrl;
+    if (host.attachSource) host.attachSource(ms);
+    else {
+      if (!window.MediaSource) video.disableRemotePlayback = true;
+      objectUrl = URL.createObjectURL(ms);
+      video.src = objectUrl;
+    }
     await opened;
     if (dead) return detach;
+    host.opened?.();
     ms.duration = duration;
     video.addEventListener('seeking', seeking);
     video.addEventListener('canplay', position);
@@ -178,6 +265,7 @@ export async function attachMkv(video, url, { start = 0, audioLang, onFatal = ()
             await event(sb, 'updateend', () => sb.appendBuffer(data));
           }
           if (!active(g)) return;
+          host.appended?.();
           position();
           await remove(video.currentTime - 60);
         },

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { source, evaluate, deferred, flush } from './helpers/source.js';
 import { planAudio } from '../js/player/mkv-plan.js';
+import { workerState } from '../js/player/mkv-worker.js';
 
 for (const defaultPosition of [false, true]) test(defaultPosition ? 'a pre-metadata seek is not overwritten by the initial playback position' : 'a seek that supersedes the initial keyframe lookup can create the first SourceBuffer', async () => {
   const keyframe = deferred(), restarted = deferred();
@@ -25,9 +26,9 @@ for (const defaultPosition of [false, true]) test(defaultPosition ? 'a pre-metad
   Object.defineProperty(video, 'src', { set() { queueMicrotask(() => ms.dispatchEvent(new Event('sourceopen'))); } });
   const track = { id: 1, codec: 'avc', getCodecParameterString: async () => 'avc1.640028' };
   const fatal = [];
-  const attach = evaluate(source('js/player/mkv.js').replace("await import('mediabunny')", 'bunny'), {
+  const attach = evaluate(source('js/player/mkv.js').replace("import('mediabunny')", 'bunny').replace('import.meta.url', "'https://streamora.test/js/player/mkv.js'"), {
     window: { MediaSource: class { static isTypeSupported = MS.isTypeSupported; constructor() { return ms; } } },
-    canRemuxMkv: () => true, planAudio, AbortController, WritableStream,
+    canRemuxMkv: () => true, planAudio, workerState, AbortController, WritableStream,
     URL: { createObjectURL: () => 'blob:test', revokeObjectURL() {} }, setTimeout, clearTimeout,
     bunny: {
       Input: class { async getPrimaryVideoTrack() { return track; } async getAudioTracks() { return []; } async getDurationFromMetadata() { return 1000; } dispose() {} },
