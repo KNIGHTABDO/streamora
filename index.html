@@ -101,6 +101,11 @@
       var loadApp = once(function () {
         var home = path() === '/', watch = path().indexOf('/watch/') === 0;
         preload(PRELOAD.boot.concat(home ? PRELOAD.home : [], watch ? PRELOAD.watch || [] : []));
+        // Otherwise the player modules warm once the app is up and idle, so the first Play doesn't wait on a module waterfall
+        // (the service worker covers later visits). Skipped on Save-Data.
+        if (!watch && !(navigator.connection && navigator.connection.saveData)) mounted.then(function () {
+          (window.requestIdleCallback || function (f) { setTimeout(f, 2000); })(function () { preload(PRELOAD.watch || []); }, { timeout: 5000 });
+        });
         // Home's hero image is known from the last visit: start it now instead of after the modules and catalogs.
         var hero = home && read('hero-next');
         var heroImg = hero && hero.items && hero.items[0] && (hero.items[0].background || hero.items[0].poster);
