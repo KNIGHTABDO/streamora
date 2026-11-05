@@ -73,7 +73,18 @@ function trackLabels(tracks) {
   });
 }
 
-export function Player({ meta, video, stream, info, start = 0, source, noProgress, live, onFatal, onPickSource, onBack, engine = 'web' }) {
+// Metadata may already be available (VLC can open before effects run). The callback fires once.
+export function afterMetadata(video, start, delay = 1500) {
+  if (!video || video.readyState >= 1) { start(); return () => {}; }
+  let fired = false;
+  const cancel = () => { clearTimeout(timer); video.removeEventListener('loadedmetadata', run); };
+  const run = () => { if (fired) return; fired = true; cancel(); start(); };
+  const timer = setTimeout(run, delay);
+  video.addEventListener('loadedmetadata', run, { once: true });
+  return () => { fired = true; cancel(); };
+}
+
+export function Player({ meta, video, stream, info, start = 0, source, noProgress, live, onFatal, onPickSource, onBack, onUpNext, engine = 'web' }) {
   const s = useStore(settings);
   const fitCover = s.videoFit === 'cover';   // fill the frame (cropped) instead of letterboxing; remembered in settings
   // VLC mode: a stand-in for the <video> element (same properties and events), so everything below works on both
@@ -278,19 +289,21 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
 
   // ------------------------------------------------ subtitles (external, own overlay)
   const [ext, setExt] = useState([]);               // available OpenSubtitles
+  const requests = useRef(null);
+  if (!requests.current && typeof AbortController === 'function') requests.current = new AbortController();
   const [cur, setCur] = useState(null);             // { id, label, cues }
   const [delay, setDelay] = useState(0);
   const [line, setLine] = useState([]);
   const [subQ, setSubQ] = useState('');
   const [extDone, setExtDone] = useState(false);
   const subtitleLoader = useMemo(() => createSubtitleLoader({
-    load: it => it.cues ? Promise.resolve(it.cues) : it.file ? it.file.arrayBuffer().then(buf => parseSubs(decodeSubs(buf, it.lang))) : loadSubFile(it.url, it.lang),
+    load: it => it.cues ? Promise.resolve(it.cues) : it.file ? it.file.arrayBuffer().then(buf => parseSubs(decodeSubs(buf, it.lang))) : loadSubFile(it.url, it.lang, { signal: requests.current?.signal }),
     onLoading: it => setCur({ id: it.id, label: it.label, cues: [], loading: true }),
     onCues: (it, cues) => showCues(it, cues),
     onOff: () => setCur(null),
     onError: () => { setCur(null); toast('That subtitle file would not load', { kind: 'warn' }); },
   }), []);
-  useEffect(() => () => subtitleLoader.dispose(), []);
+  useEffect(() => () => { requests.current?.abort(); subtitleLoader.dispose(); }, []);
   // VLC: the file's audio / subtitle tracks as VLC lists them
   const [vt, setVt] = useState({ audio: [], subs: [], audioId: -1, subId: -1 });
   useEffect(() => {
@@ -327,7 +340,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const bestOf = async (list, want) => {
     const kept = mem.subId && list.find(x => x.id === mem.subId);
     if (kept) return { sub: kept, shift: ((subTaste.get() || {}).d || {})[kept.id] || 0 };
-    const r = await pickBest(list, want, { load: x => loadSubFile(x.url, x.lang), taste: subTaste.get(), duration: realDur(vRef.current) }).catch(() => []);
+    const r = await pickBest(list, want, { load: x => loadSubFile(x.url, x.lang, { signal: requests.current?.signal }), taste: subTaste.get(), duration: realDur(vRef.current) }).catch(() => []);
     ranked.current = new Map(r.map(x => [x.sub.id, x.shift]));
     return r[0] ? { sub: { ...r[0].sub, cues: r[0].cues }, shift: r[0].shift } : null;
   };
@@ -335,27 +348,30 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     if (!meta || String(meta.id).startsWith('tb:')) return;
     let gone = false;
     const before = subtitleLoader.version;
-    openSubs(meta.type, video ? video.id : meta.id, release, [mem.subLang, s.subsLang]).then(list => {
+    const cancelStart = afterMetadata(vRef.current, () => {
       if (gone) return;
-      setExt(list);
-      // auto-pick: this show's remembered language, else the preferred one when the audio isn't in it
-      // (unknown / 'und' audio counts as "not in it")
-      setExtDone(true);
-      if (vlc || !subtitleLoader.isCurrent(before)) return;   // VLC: see the effect below (the file's own tracks count too)
-      const want = mem.subLang || s.subsLang;
-      if (!want || want === 'off') return;
-      const aud = info && info.details && info.details.audio && audio && info.details.audio[audio];
-      const same = aud && aud.lang_iso && !/^(und|unk)$/i.test(aud.lang_iso) && aud.lang_iso === want;
-      if (mem.subLang || !same) {
-        // the remembered file first, then a language match; with no hit, the file's own track in that language burned in (for a language this show chose)
-        bestOf(list, want).then(hit => {
-          if (gone || !subtitleLoader.isCurrent(before)) return;
-          if (hit) chooseExt(hit.sub, false, hit.shift);
-          else if (mem.subLang) { const em = trackLabels((info && info.details && info.details.subtitles) || {}).find(([, x]) => x.lang_iso === want); if (em) setBurn(em[0]); }
-        });
-      }
+      openSubs(meta.type, video ? video.id : meta.id, release, [mem.subLang, s.subsLang], { signal: requests.current?.signal }).then(list => {
+        if (gone) return;
+        setExt(list);
+        // auto-pick: this show's remembered language, else the preferred one when the audio isn't in it
+        // (unknown / 'und' audio counts as "not in it")
+        setExtDone(true);
+        if (vlc || !subtitleLoader.isCurrent(before)) return;   // VLC: see the effect below (the file's own tracks count too)
+        const want = mem.subLang || s.subsLang;
+        if (!want || want === 'off') return;
+        const aud = info && info.details && info.details.audio && audio && info.details.audio[audio];
+        const same = aud && aud.lang_iso && !/^(und|unk)$/i.test(aud.lang_iso) && aud.lang_iso === want;
+        if (mem.subLang || !same) {
+          // the remembered file first, then a language match; with no hit, the file's own track in that language burned in (for a language this show chose)
+          bestOf(list, want).then(hit => {
+            if (gone || !subtitleLoader.isCurrent(before)) return;
+            if (hit) chooseExt(hit.sub, false, hit.shift);
+            else if (mem.subLang) { const em = trackLabels((info && info.details && info.details.subtitles) || {}).find(([, x]) => x.lang_iso === want); if (em) setBurn(em[0]); }
+          });
+        }
+      }).catch(() => {});
     });
-    return () => { gone = true; };
+    return () => { gone = true; cancelStart(); };
   }, [meta && meta.id, video && video.id]);
   // learning: an auto pick swapped for another of the same language, or a timing fix, counts against it;
   // ten minutes of watching with a subtitle counts for it (see subpick.js learn)
@@ -447,10 +463,11 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const [count, setCount] = useState(10);
   // anime: AniSkip opening / ending times (null until loaded, or when unknown → heuristics below)
   const [skip, setSkip] = useState(null);
-  useEffect(() => { let ok = true; skipTimes(meta, video).then(x => ok && setSkip(x)); return () => { ok = false; }; }, []);
+  useEffect(() => { let ok = true; skipTimes(meta, video, { signal: requests.current?.signal }).then(x => ok && setSkip(x)); return () => { ok = false; }; }, []);
   const credits = skip && skip.ed && skip.ed[0] > 60 ? st.t >= skip.ed[0] : st.dur - st.t < 22;
   const [stillAsk, setStillAsk] = useState(false);   // "Still watching?" after STILL_AFTER auto-played episodes
   const showNext = !!next && isReleased(next) && !nextDismissed && !stillAsk && st.dur > 0 && (st.ended || credits) && sleep.id !== 'end' && !asleep;
+  useEffect(() => { if (showNext) onUpNext?.(); }, [showNext]);
   useEffect(() => {
     if (!showNext || !s.autoNext) return;
     if (count <= 0) {

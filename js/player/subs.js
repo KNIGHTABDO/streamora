@@ -2,6 +2,8 @@
 // Embedded tracks inside the file can't be fetched separately; they are burned in
 // through the transcode URL's {subtitles} slot instead (see engine.js).
 
+import { fetchT } from '../core/net.js';
+
 export const OPENSUBS = 'https://opensubtitles-v3.strem.io';
 
 const LANG_NAMES = {
@@ -26,35 +28,34 @@ const sameRelease = (a, b) => {
   return !!pa && pa === packKey(b);
 };
 
-async function openSubtitlesOrg(type, id, filename) {
+async function openSubtitlesOrg(type, id, filename, signal) {
   try {
     const extra = filename ? `/filename=${encodeURIComponent(filename)}` : '';
-    const r = await fetch(`${OPENSUBS}/subtitles/${type}/${encodeURIComponent(id)}${extra}.json`, { signal: AbortSignal.timeout(12000) });
-    if (!r.ok) return [];
-    const j = await r.json();
+    const j = await fetchT(`${OPENSUBS}/subtitles/${type}/${encodeURIComponent(id)}${extra}.json`, { signal }, 12000, 'OpenSubtitles', r => r.ok ? r.json() : {});
     return (j.subtitles || []).map(s => ({ id: 'os:' + s.id, lang: s.lang, url: s.url, release: s.movieReleaseName || s.subtitleFileName || '', source: 'OpenSubtitles' }));
   } catch { return []; }
 }
 
 // SubDL + SubSource through our server (it holds the API keys): lots of Arabic, season packs unzipped there
-async function subdlSubsource(type, id, want) {
+async function subdlSubsource(type, id, want, signal) {
   if (!/^tt\d+/.test(id)) return [];
   try {
     const langs = [...new Set(['ara', ...want, 'eng'])].join(',');
-    const r = await fetch(`/api/subs/search?${new URLSearchParams({ type, id, langs })}`, { signal: AbortSignal.timeout(15000) });
-    return r.ok ? (await r.json()).subtitles || [] : [];
+    const j = await fetchT(`/api/subs/search?${new URLSearchParams({ type, id, langs })}`, { signal }, 15000, 'Subtitles', r => r.ok ? r.json() : {});
+    return j.subtitles || [];
   } catch { return []; }
 }
 
 /** [{ id, lang, label, url, release, match, source }] for a movie id or an episode video id, from OpenSubtitles,
  *  SubDL, SubSource, SubSense and any subtitle addons the user added. `want` are extra languages to ask for (Arabic and
  *  English always are). With the release filename being played, subtitles of that release come first (match: true). */
-export async function openSubs(type, id, filename, want = []) {
+export async function openSubs(type, id, filename, want = [], { signal } = {}) {
+  if (signal?.aborted) return [];
   want = want.filter(l => l && l !== 'off');
   const [os, sx, more] = await Promise.all([
-    openSubtitlesOrg(type, id, filename),
-    subdlSubsource(type, id, want),
-    import('../core/addons.js').then(m => m.addonSubtitles(type, id, filename, want)).catch(() => []),
+    openSubtitlesOrg(type, id, filename, signal),
+    subdlSubsource(type, id, want, signal),
+    import('../core/addons.js').then(m => m.addonSubtitles(type, id, filename, want, { signal })).catch(() => []),
   ]);
   const seen = new Set();
   return [...os, ...sx, ...more].filter(s => s.url && !seen.has(s.url) && seen.add(s.url))
@@ -138,8 +139,8 @@ export function decodeSubs(buf, lang) {
 
 /** Downloads and parses a subtitle. A zip (SubDL season packs come straight from dl.subdl.com) is opened here and the
  *  episode named in the URL's #s=…&e=… is taken out of it. */
-export async function loadSubFile(url, lang) {
-  const r = await fetch(url);
+export async function loadSubFile(url, lang, { signal } = {}) {
+  const r = await fetch(url, { signal });
   if (!r.ok) throw new Error('Subtitle download failed');
   let buf = new Uint8Array(await r.arrayBuffer());
   const { isZip, zipEntries, pickEntry, zipRead } = await import('../lib/zip.js');

@@ -1,7 +1,9 @@
 // Finding sources for a title via Torrentio and the built-in debrid addons. TorBox's own cache check decides what's
 // cached; the addons' flags ([TB+], ⚡) only count when that check can't answer.
-import { getTbKey } from './store.js';
+import { getTbKey, keyStore } from './store.js';
 import { fetchT } from './net.js';
+import { addonStreams } from './addons.js';
+import { checkCached } from './tb.js';
 import { canRemuxMkv, hevcInMse } from '../player/mkv-plan.js';
 
 export const TORRENTIO = 'https://torrentio.strem.fun';
@@ -58,37 +60,102 @@ export const trimStreams = (list, uncached = 60) => {
  * streams('movie', 'tt1392214')  |  streams('series', 'tt0944947:1:1')  |  streams('series', 'kitsu:7442:3')
  * For series pass the *video id* (episode id), for movies the meta id.
  */
-export async function streams(type, id) {
+export async function streams(type, id, { signal, onPartial } = {}) {
+  const started = Date.now();
   const key = await getTbKey();
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   const cfg = key ? `/sort=qualitysize|torbox=${key}` : '/sort=qualitysize';
-  const extraP = import('./addons.js').then(m => m.addonStreams(type, id, key)).catch(() => []);
-  const load = async () => {
-    const r = await fetchT(`${TORRENTIO}${cfg}/stream/${type}/${encodeURIComponent(id)}.json`, {}, 12000, 'Torrentio');
-    if (!r.ok) throw new Error(`Source search failed (${r.status})`);
-    return r.json();
+  const byHash = new Map(), checking = new Set(), checked = new Map(), readyHashes = new Set(), failed = [];
+  let grace = false, tio = false, returned = false, finished = 0, pending = 0, timer;
+  let resolve, reject;
+  const first = new Promise((yes, no) => { resolve = yes; reject = no; });
+  const snapshot = () => {
+    const out = trimStreams([...byHash.values()].filter(s => readyHashes.has(s.infoHash.toLowerCase())).map(s => ({ ...s, cached: checked.has(s.infoHash.toLowerCase()) ? checked.get(s.infoHash.toLowerCase()) : s.cached })));
+    Object.defineProperty(out, 'complete', { value: finished === 2 && pending === 0 });
+    if (failed.length) Object.defineProperty(out, 'failed', { value: [...failed], enumerable: false });
+    return out;
   };
-  let j, err;
-  try { j = await load(); }
-  catch { try { await new Promise(r => setTimeout(r, 600)); j = await load(); } catch (e) { err = e; } } // one retry
-  const extra = await extraP;
-  // Torrentio down: the other addons' sources still count; only when nothing answered is it an error
-  if (err && !extra.length) throw err;
-  // one entry per release; if any addon says it's cached, it is (until TorBox itself says otherwise below)
-  const byHash = new Map();
-  for (const s of [...(err ? [] : j.streams || []), ...extra].map(parseStream)) {
-    if (!s.infoHash) continue;
-    const h = s.infoHash.toLowerCase(), had = byHash.get(h);
-    if (!had) byHash.set(h, s); else if (s.cached) had.cached = true;
-  }
-  let out = [...byHash.values()];
-  if (key && out.length) {
-    const { checkCached } = await import('./tb.js');
-    const have = await checkCached([...byHash.keys()]).catch(() => null);
-    if (have) out.forEach(s => { s.cached = have.has(s.infoHash.toLowerCase()); });
-  }
-  out = trimStreams(out);
-  if (err) Object.defineProperty(out, 'failed', { value: ['Torrentio'], enumerable: false }); // sources that didn't answer
-  return out;
+  const stop = () => { clearTimeout(timer); signal?.removeEventListener('abort', stop); if (!returned) reject(new DOMException('Aborted', 'AbortError')); };
+  signal?.addEventListener('abort', stop, { once: true });
+  const publish = () => {
+    if (signal?.aborted) return;
+    const done = finished === 2 && pending === 0;
+    // Torrentio (answered or failed) always counts; the other addons only get the grace window.
+    if (!returned && ((tio && grace && readyHashes.size) || done)) {
+      returned = true; clearTimeout(timer);
+      if (!byHash.size && failed.length) reject(Object.assign(new Error('The sources did not answer'), { code: 'sources' }));
+      else resolve(snapshot());
+    } else if (returned) onPartial?.(snapshot());
+    if (done) { clearTimeout(timer); signal?.removeEventListener('abort', stop); }
+  };
+  const receive = async rows => {
+    if (signal?.aborted) return;
+    const hashes = [];
+    for (const s of rows.map(parseStream)) {
+      if (!s.infoHash) continue;
+      const h = s.infoHash.toLowerCase(), had = byHash.get(h);
+      if (!had) byHash.set(h, s); else if (s.cached) had.cached = true;
+      if (!key) readyHashes.add(h);
+      if (key && !checking.has(h)) { checking.add(h); hashes.push(h); }
+    }
+    if (hashes.length) {
+      pending++;
+      try {
+        const have = await checkCached(hashes, { signal });
+        if (have && !signal?.aborted) hashes.forEach(h => checked.set(h, have.has(h)));
+      } catch (e) { if (!signal?.aborted && (e.code === 'badkey' || e.code === 'nokey')) failed.push('TorBox'); }
+      finally { hashes.forEach(h => readyHashes.add(h)); pending--; }
+    }
+    publish();
+  };
+  timer = setTimeout(() => { grace = true; publish(); }, Math.max(0, 1500 - (Date.now() - started)));
+  const torrentio = async () => {
+    const load = async () => {
+      const r = await fetchT(`${TORRENTIO}${cfg}/stream/${type}/${encodeURIComponent(id)}.json`, { signal }, 12000, 'Torrentio', r => {
+        if (!r.ok) throw new Error(`Source search failed (${r.status})`);
+        return r.json();
+      });
+      return r;
+    };
+    let j;
+    try { j = await load(); }
+    catch (e) { if (signal?.aborted) throw e; j = await load(); }
+    await receive(j.streams || []);
+  };
+  // Each addon publishes independently. Waiting for one never holds up another's cache check.
+  torrentio().catch(() => { if (!signal?.aborted) failed.push('Torrentio'); }).finally(() => { tio = true; finished++; publish(); });
+  addonStreams(type, id, key, { signal, onPartial: rows => { receive(rows).catch(() => {}); } })
+    .then(rows => receive(rows))
+    .catch(() => { if (!signal?.aborted) failed.push('Addons'); }).finally(() => { finished++; publish(); });
+  return first;
+}
+
+// Speculation only discovers sources and checks cache status. It never resolves a download link.
+const speculative = new Map();
+keyStore.subscribe(() => speculative.clear());
+const sourceKey = (type, id, videoId) => JSON.stringify([type, id, videoId || id]);
+export function peekStreams(type, id, videoId) {
+  const k = sourceKey(type, id, videoId), hit = speculative.get(k);
+  if (!hit || Date.now() - hit.at >= 600e3) { speculative.delete(k); return null; }
+  return hit.list;
+}
+export async function prefetchStreams(type, id, videoId, { signal } = {}) {
+  if (peekStreams(type, id, videoId)) return;
+  const k = sourceKey(type, id, videoId);
+  const save = list => {
+    if (signal?.aborted) return;
+    speculative.set(k, { at: Date.now(), list });
+    if (speculative.size > 20) speculative.delete(speculative.keys().next().value);
+  };
+  save(await streams(type, videoId || id, { signal, onPartial: save }));
+}
+export function speculateWhenIdle(meta, video) {
+  if (!meta || globalThis.navigator?.connection?.saveData) return;
+  const ac = new AbortController();
+  const run = () => { prefetchStreams(meta.type, meta.id, video?.id, { signal: ac.signal }).catch(() => {}); };
+  const idle = typeof requestIdleCallback === 'function';
+  const ticket = idle ? requestIdleCallback(run) : setTimeout(run, 100);
+  return () => { ac.abort(); if (idle) cancelIdleCallback(ticket); else clearTimeout(ticket); };
 }
 
 // Torrentio tags non-English releases with flag emojis. A release flagged only with other languages
