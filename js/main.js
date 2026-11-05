@@ -1,11 +1,11 @@
 // Streamora app shell: theme, gates (Google → key → profile), navigation chrome, lazy pages.
 import './lib/diag.js'; // first, so its error hooks see the modules below too
-import { html, render, useState, useEffect, useRef, useErrorBoundary } from '../vendor/preact-htm.js';
+import { html, render, Component, useState, useEffect, useRef, useErrorBoundary } from '../vendor/preact-htm.js';
 import { installSketch } from './ui/sketch.js';
 import { Icon, Spinner, Toasts, ErrorNote, Btn, cx, toast } from './ui/components.js';
 import { Avatar } from './ui/avatars.js';
 import { useRoute, navigate, parseHash, back, hasBack, settleScroll } from './router.js';
-import { useStore, keyStore, profiles, activeProfileId, settings } from './core/store.js';
+import { useStore, keyStore, profiles, activeProfileId, settings, Away } from './core/store.js';
 import { account } from './core/google.js';
 import { initSync } from './core/sync.js';
 import { initFocus } from './ui/focus.js';
@@ -202,6 +202,25 @@ function MoreDrawer({ open, onClose, badge }) {
 
 // ------------------------------------------------------------ lazy page host
 const pageCache = new Map();
+// Home stays mounted (hidden and inert) while a title or player opened from it is on screen, so Back shows it
+// instantly at the same place instead of rebuilding every shelf. Any other page lets it go.
+const KEEP_HOME_FOR = ['/title/:type/:id', '/watch/:type/:id'];
+class KeptHome extends Component {
+  // The page element is made once per query, so hiding and showing it never re-renders the shelves, and store
+  // changes while it is hidden (progress saves during playback) wait until it comes back.
+  constructor() { super(); this.away = { hidden: false, later: new Map() }; }
+  shouldComponentUpdate(next) { return next.away !== this.props.away || next.query !== this.props.query; }
+  componentDidUpdate() {
+    if (this.props.away || !this.away.later.size) return;
+    const later = [...this.away.later]; this.away.later.clear();
+    later.forEach(([set, s]) => set(s.get()));
+  }
+  render({ Comp, query, away }) {
+    this.away.hidden = away;
+    if (!this.page || this.query !== query) { this.query = query; this.page = html`<${Comp} params=${{}} query=${query} />`; }
+    return html`<div class="page-enter" data-kept hidden=${away} inert=${away}><${Away.Provider} value=${this.away}>${this.page}<//></div>`;
+  }
+}
 function PageHost({ route }) {
   const [, force] = useState(0);
   const [retry, setRetry] = useState(0);
@@ -217,21 +236,47 @@ function PageHost({ route }) {
   }, [key, retry]);
   const full = route.path + '?' + new URLSearchParams(route.query);
   useEffect(() => { if (err) resetErr(); }, [full]);
+
+  const onHome = key === '/';
+  const kept = useRef(null);     // { query } of the Home being kept
+  const homeFocus = useRef(null); // what had focus on Home when it was hidden (TV remotes come back to it)
+  const homeQs = new URLSearchParams(route.query).toString();
+  if (err) kept.current = null;
+  else if (onHome) { if (!kept.current || kept.current.qs !== homeQs) kept.current = { qs: homeQs, query: route.query }; }
+  else if (!KEEP_HOME_FOR.includes(key)) kept.current = null;
+  else if (kept.current && !kept.current.away) {
+    kept.current.away = true;
+    const a = document.activeElement;
+    homeFocus.current = a && a !== document.body && a.closest && a.closest('[data-kept]') ? a : null;
+  }
+  if (kept.current && onHome) kept.current.away = false;
+  const homeEntry = pageCache.get('/');
+  const keep = kept.current && homeEntry && homeEntry.status === 'ok' ? kept.current : null;
+
   // after a path change, move focus to the new page (screen readers + TV remotes start at the top)
   const first = useRef(true);
+  const shown = useRef(null);
   const ready = entry && entry.status;
   useEffect(() => {
     if (ready !== 'ok') return;
     if (first.current) { first.current = false; return; }
-    const main = document.getElementById('main') || document.querySelector('main');
+    const back = onHome && homeFocus.current;
+    homeFocus.current = null;
+    if (back && back.isConnected) { back.focus({ preventScroll: true }); return; }
+    const box = shown.current || document;
+    const main = box.querySelector('main');
     if (main && !main.contains(document.activeElement)) { if (!main.hasAttribute('tabindex')) main.tabIndex = -1; main.focus({ preventScroll: true }); }
   }, [route.path, ready]);
-  if (err) return html`<main class="page"><${ErrorNote} error=${err} retry=${() => { resetErr(); }} /></main>`;
-  if (!route.load) return html`<main class="page center-fill"><div class="empty"><h2>This page fell out of the sketchbook.</h2><${Btn} href="#/" icon="home">Go home<//></div></main>`;
-  if (!entry || entry.status === 'loading') return html`<main class="page center-fill"><${Spinner} /></main>`;
-  if (entry.status === 'error') return html`<main class="page"><${ErrorNote} error=${entry.error} retry=${() => { pageCache.delete(key); setRetry(x => x + 1); }} /></main>`;
-  const Comp = entry.Comp;
-  return html`<div class="page-enter" key=${route.path}><${Comp} params=${route.params} query=${route.query} /></div>`;
+
+  let page;
+  if (err) page = html`<main class="page"><${ErrorNote} error=${err} retry=${() => { resetErr(); }} /></main>`;
+  else if (!route.load) page = html`<main class="page center-fill"><div class="empty"><h2>This page fell out of the sketchbook.</h2><${Btn} href="#/" icon="home">Go home<//></div></main>`;
+  else if (!entry || entry.status === 'loading') page = html`<main class="page center-fill"><${Spinner} /></main>`;
+  else if (entry.status === 'error') page = html`<main class="page"><${ErrorNote} error=${entry.error} retry=${() => { pageCache.delete(key); setRetry(x => x + 1); }} /></main>`;
+  else if (!(onHome && keep)) { const Comp = entry.Comp; page = html`<${Comp} params=${route.params} query=${route.query} />`; }
+  // Always the same two slots, so the kept Home is never remounted when the page next to it changes.
+  return html`${keep ? html`<${KeptHome} key="home" Comp=${homeEntry.Comp} query=${keep.query} away=${!onHome} />` : null}${
+    page ? html`<div class="page-enter" key=${route.path} ref=${shown}>${page}</div>` : null}`;
 }
 
 // ------------------------------------------------------------ first Drive round

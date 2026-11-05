@@ -219,6 +219,8 @@ img { display: block; max-width: 100%; }
 .ink-edge:is(:hover, :focus-visible, .boil)::before { animation: boil calc(var(--boil) * 3) steps(1) infinite; }
 .ink-edge.wide:is(:hover, :focus-visible, .boil)::before { animation-name: boil-wide; }
 .ink-edge.tall:is(:hover, :focus-visible, .boil)::before { animation-name: boil-tall; }
+/* arrow-key travel: only start boiling once focus rests on something, so fast moves don't restart animations */
+.ink-edge:focus-visible:not(:hover)::before { animation-delay: .3s; }
 @keyframes boil {
   0% { -webkit-mask-image: var(--edge-a); mask-image: var(--edge-a); }
   33% { -webkit-mask-image: var(--edge-b); mask-image: var(--edge-b); }

@@ -163,7 +163,13 @@ function Look() {
   const list = useStore(profiles);
   const me = list.find(p => p.id === activeProfileId.get());
   const up = patch => settings.update(x => ({ ...x, ...patch }));
-  const setTheme = theme => profiles.set(list.map(p => (p.id === me.id ? { ...p, theme } : p)));
+  const setTheme = theme => {
+    // Repaint in the new theme now, and save it (which re-renders everything that reads the profile) after
+    // that frame. Night mode keeps blueprint at night, as applyTheme in main.js does.
+    const now = settings.get(), h = new Date().getHours();
+    if (!(now.nightAuto && (h >= 19 || h < 6))) document.documentElement.dataset.theme = theme;
+    requestAnimationFrame(() => setTimeout(() => profiles.set(profiles.get().map(p => (p.id === me.id ? { ...p, theme } : p)))));
+  };
   return html`<div class="stack">
     <div class="panel stack">
       <h3>Theme for ${me ? me.name : 'this profile'}</h3>

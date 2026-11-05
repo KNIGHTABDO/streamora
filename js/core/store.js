@@ -2,7 +2,7 @@
 // - store(key, init): global value persisted in localStorage
 // - pstore(bucket, init): per-profile value, swaps automatically when the active profile changes
 // - useStore(s): Preact hook that re-renders on change
-import { useState, useEffect } from '../../vendor/preact-htm.js';
+import { useState, useEffect, useContext, createContext } from '../../vendor/preact-htm.js';
 
 const NS = 'streamora:';
 
@@ -100,9 +100,15 @@ const arabicOnce = () => { const s = settings.get(); if (activeProfileId.get() &
 activeProfileId.subscribe(arabicOnce);
 arabicOnce();
 
+/** Provided by a page kept mounted but hidden ({ hidden, later: Map }): its store updates wait until it is shown. */
+export const Away = createContext(null);
 export function useStore(s) {
   const [v, setV] = useState(() => s.get());
-  useEffect(() => { setV(s.get()); return s.subscribe(setV); }, [s]);
+  const away = useContext(Away);
+  useEffect(() => {
+    setV(s.get());
+    return s.subscribe(x => { if (away && away.hidden) away.later.set(setV, s); else setV(x); });
+  }, [s]);
   return v;
 }
 
