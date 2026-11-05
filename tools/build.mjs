@@ -38,8 +38,9 @@ for (const f of readdirSync(dist, { recursive: true, withFileTypes: true }).filt
 const build = hash.digest('hex').slice(0, 12);
 const sw = `${dist}/sw.js`;
 // Every app file of this deploy goes into the SW's shell cache, so a launch never waits on the network.
+// index.html stays out: Pages redirects it to /, which './' already caches.
 // The big player libraries (hls, mediabunny) stay out: they load only when a video plays.
-const shell = ['./', ...files.filter(f => /^(index\.html|manifest\.webmanifest|art\/icon\.svg|vendor\/(preact-htm|qrcode)\.js|(css|js)\/.+\.(css|js|mjs))$/.test(f))].map(f => f === './' ? f : './' + f);
+const shell = ['./', ...files.filter(f => /^(manifest\.webmanifest|art\/icon\.svg|vendor\/(preact-htm|qrcode)\.js|(css|js)\/.+\.(css|js|mjs))$/.test(f))].map(f => f === './' ? f : './' + f);
 let swText = readFileSync(sw, 'utf8').replaceAll('__BUILD__', build);
 if (!/^const SHELL = .*\/\/ __SHELL__$/m.test(swText)) throw new Error('sw.js: __SHELL__ marker missing');
 swText = swText.replace(/^const SHELL = .*\/\/ __SHELL__$/m, `const SHELL = ${JSON.stringify(shell)};`);
