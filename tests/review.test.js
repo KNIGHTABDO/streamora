@@ -47,7 +47,7 @@ test('Retry after a failed page import invokes the loader again and renders the 
   const route = { pattern: '/test', path: '/test', query: {}, load: async () => { if (++loads === 1) throw Error('offline'); return { default: Comp }; } };
   const PageHost = evaluate(component('js/main.js', 'PageHost'), {
     ...host.scope, pageCache: new Map(), URLSearchParams, ErrorNote, Spinner: () => {}, Btn: () => {}, KEEP_HOME_FOR: [], KeptHome: () => {},
-    document: { getElementById: () => null, querySelector: () => null },
+    document: { getElementById: () => null, querySelector: () => null }, staleModules: () => false,
   }, 'PageHost');
   host.mount(PageHost, { route });
   let tree = await host.settle();
@@ -65,4 +65,21 @@ test('watch-link file and filename override a matched source, preserving other c
   const defaults = watch({ hash: 'abc' }); await defaults.host.settle();
   assert.equal(defaults.resolved[0].fileIdx, 7);
   assert.equal(defaults.resolved[0].filename, 'addon.mkv');
+});
+
+test('a page module from a newer deploy than the modules in memory reloads the app once, not in a loop', () => {
+  const src = source('js/main.js');
+  const from = src.indexOf('const STALE_MODULE'), body = src.slice(from, src.indexOf('\n}\n', from) + 3);
+  let reloads = 0, now = 1e6;
+  const store = new Map();
+  const scope = { location: { reload: () => reloads++ }, Date: { now: () => now }, String,
+    sessionStorage: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) } };
+  const stale = evaluate(body, scope, 'staleModules');
+  assert.equal(stale(new SyntaxError("Importing binding name 'speculateWhenIdle' is not found.")), true);
+  assert.equal(reloads, 1);
+  assert.equal(stale(new SyntaxError("The requested module './x.js' does not provide an export named 'y'")), false, 'a second failure right after the reload shows the error');
+  now += 61000;
+  assert.equal(stale(new TypeError('Failed to fetch dynamically imported module: https://x/js/pages/detail.js')), true);
+  assert.equal(stale(new Error('offline')), false);
+  assert.equal(reloads, 2);
 });

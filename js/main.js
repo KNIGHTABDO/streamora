@@ -202,6 +202,20 @@ function MoreDrawer({ open, onClose, badge }) {
 }
 
 // ------------------------------------------------------------ lazy page host
+// A deploy that lands while the app is open can pair a new page module with an older module already in memory
+// ("Importing binding name … is not found" on Safari, "does not provide an export named" on Chrome). Retrying can't
+// help (the browser keeps the old module until a reload), so reload once; the guard stops a loop.
+const STALE_MODULE = /binding name|does not provide an export named|dynamically imported module|importing a module script failed|error loading dynamically imported/i;
+function staleModules(error) {
+  if (!STALE_MODULE.test(String(error && error.message || error))) return false;
+  try {
+    const last = +sessionStorage.getItem('streamora:stale-reload') || 0;
+    if (Date.now() - last < 60000) return false;
+    sessionStorage.setItem('streamora:stale-reload', String(Date.now()));
+  } catch { return false; }
+  location.reload();
+  return true;
+}
 const pageCache = new Map();
 // Home stays mounted (hidden and inert) while a title or player opened from it is on screen, so Back shows it
 // instantly at the same place instead of rebuilding every shelf. Any other page lets it go.
@@ -233,7 +247,7 @@ function PageHost({ route }) {
     const e = { status: 'loading' };
     pageCache.set(key, e);
     route.load().then(m => { e.status = 'ok'; e.Comp = m.default; force(x => x + 1); },
-      error => { e.status = 'error'; e.error = error; force(x => x + 1); });
+      error => { if (staleModules(error)) return; e.status = 'error'; e.error = error; force(x => x + 1); });
   }, [key, retry]);
   const full = route.path + '?' + new URLSearchParams(route.query);
   useEffect(() => { if (err) resetErr(); }, [full]);
@@ -382,6 +396,11 @@ Promise.resolve(window.__streamoraCss).then(() => {
 if ('serviceWorker' in navigator && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
   navigator.serviceWorker.register('./sw.js').then(reg => {
     const had = !!navigator.serviceWorker.controller; // first install: nothing to announce
+    // A worker that takes over a page it didn't load (the old network-first worker hands over right away) means the
+    // modules in memory may be from the previous deploy: reload on the next page change, never mid-playback.
+    if (had) navigator.serviceWorker.addEventListener('controllerchange', () => {
+      addEventListener('hashchange', () => location.reload(), { once: true });
+    }, { once: true });
     const watch = w => w && w.addEventListener('statechange', () => w.state === 'installed' && had && setWaiting(w));
     if (reg.waiting && had) setWaiting(reg.waiting);
     watch(reg.installing);
