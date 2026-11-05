@@ -103,7 +103,7 @@ export const ANIME_GENRES = ['Action', 'Adventure', 'Comedy', 'Drama', 'Sci-Fi',
 export async function catalog(type, id, opts = {}, { signal } = {}) {
   const anime = type === 'anime';
   const path = `${type}/${id}${extra(opts)}.json`;
-  const urls = anime ? [`${KITSU}/catalog/${path}`] : [`/api/catalog/${path}`, `https://cinemeta-catalogs.strem.io/catalog/${path}`, `${CINEMETA}/catalog/${path}`];
+  const urls = anime ? [`${KITSU}/catalog/${path}`] : [`/api/catalog/${path}`, `${CINEMETA}/catalog/${path}`];
   let j;
   for (const url of urls) {
     try { j = await getJSON(url, { signal }); break; }

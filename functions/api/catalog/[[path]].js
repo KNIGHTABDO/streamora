@@ -10,7 +10,8 @@ export async function onRequest({ request }) {
   const url = new URL(request.url), path = url.pathname.slice('/api/catalog/'.length);
   if (!/^(movie|series)\/[^/]+(?:\/[^/]+)?\.json$/.test(path)) return json({ error: 'catalog_path' }, 400);
   try {
-    const r = await fetch(`https://cinemeta-catalogs.strem.io/catalog/${path}${url.search}`, {
+    // v3 redirects to the catalog host (whose paths include the catalog id); fetch follows it.
+    const r = await fetch(`https://v3-cinemeta.strem.io/catalog/${path}${url.search}`, {
       signal: request.signal, cf: { cacheTtl: 21600, cacheEverything: true },
     });
     if (!r.ok) return json({ error: 'upstream' }, 502);

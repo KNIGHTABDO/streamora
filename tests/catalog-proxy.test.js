@@ -9,7 +9,7 @@ test('catalog proxy strips episodes and unused fields, retaining hero and browse
   let upstream;
   t.mock.method(globalThis, 'fetch', async url => { upstream = url; return json({ metas: [{ ...item, videos: [{ id: 'episode' }], cast: ['actor'], director: ['director'], trailers: [], links: [], behaviorHints: {} }], cacheMaxAge: 1 }); });
   const r = await onRequest({ request: new Request('https://example.test/api/catalog/series/top/genre=Drama&skip=100.json') });
-  assert.equal(upstream, 'https://cinemeta-catalogs.strem.io/catalog/series/top/genre=Drama&skip=100.json');
+  assert.equal(upstream, 'https://v3-cinemeta.strem.io/catalog/series/top/genre=Drama&skip=100.json');
   assert.equal(r.status, 200);
   assert.match(r.headers.get('Cache-Control'), /max-age=300, s-maxage=21600/);
   assert.match(r.headers.get('Content-Type'), /application\/json/);
@@ -38,11 +38,11 @@ test('catalog uses proxy, direct catalog host, then v3; meta and Kitsu hosts sta
   const calls = [];
   const m = metadata(async url => {
     calls.push(url);
-    if (url.startsWith('/api/catalog/') || url.startsWith('https://cinemeta-catalogs.')) throw Error('down');
+    if (url.startsWith('/api/catalog/')) throw Error('down');
     return json(url.includes('/meta/') ? { meta: { id: 'tt1', name: 'Title' } } : { metas: [] });
   });
   await m.catalog('movie', 'top');
-  assert.deepEqual(calls.splice(0), ['/api/catalog/movie/top.json', 'https://cinemeta-catalogs.strem.io/catalog/movie/top.json', 'https://v3-cinemeta.strem.io/catalog/movie/top.json']);
+  assert.deepEqual(calls.splice(0), ['/api/catalog/movie/top.json', 'https://v3-cinemeta.strem.io/catalog/movie/top.json']);
   await m.meta('movie', 'tt1');
   await m.catalog('anime', 'kitsu-anime-trending');
   assert.deepEqual(calls, ['https://v3-cinemeta.strem.io/meta/movie/tt1.json', 'https://anime-kitsu.strem.fun/catalog/anime/kitsu-anime-trending.json']);
