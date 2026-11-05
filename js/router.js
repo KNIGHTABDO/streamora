@@ -6,7 +6,7 @@ export const ROUTES = [
   ['/movies', () => import('./pages/movies.js')],
   ['/shows', () => import('./pages/shows.js')],
   ['/anime', () => import('./pages/anime.js')],
-  ['/myrd', () => import('./pages/myrd.js')],
+  ['/myrd', () => import('./pages/home.js')],  // My TorBox is hidden (shared key): old links land on Home
   ['/title/:type/:id', () => import('./pages/detail.js')],
   ['/watch/:type/:id', () => import('./pages/watch.js')],            // ?v=videoId&t=seconds&hash=&file=
   ['/search', () => import('./pages/search.js')],                    // ?q=
@@ -128,7 +128,7 @@ export const hasBack = path => !ROOTS.includes(path);
 // Opened directly, with nothing to go back to: the section this page belongs to
 function parentOf(path) {
   const [, a, type, id] = path.split('/');
-  if (a === 'watch') return /^(tt|kitsu)/.test(id || '') ? `#/title/${type}/${id}` : '#/myrd';
+  if (a === 'watch') return /^(tt|kitsu)/.test(id || '') ? `#/title/${type}/${id}` : '#/';
   if (a === 'title') return /^kitsu/.test(id || '') ? '#/anime' : type === 'series' ? '#/shows' : '#/movies';
   return { person: '#/people', genre: '#/genres', collection: '#/collections' }[a] || '#/';
 }

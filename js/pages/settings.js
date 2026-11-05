@@ -97,7 +97,7 @@ function Account() {
           <${Reel} mood="happy" size=${90} />
           <div>
             <div class="kicker type">torbox account</div>
-            <h2>${u.username}</h2>
+            <h2>Connected</h2>
             <div class="type muted">premium until ${new Date(u.expiration).toLocaleDateString()}</div>
           </div>
           <div class=${cx('st-stamp', days < 7 && 'warn')}><span>${u.plan}</span><b>${days}</b><small>days left</small></div>

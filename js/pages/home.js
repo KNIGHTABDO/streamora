@@ -3,9 +3,8 @@ import { html, useState, useEffect, useMemo, useRef } from '../../vendor/preact-
 import { Page, Hero, Row, PosterCard, Btn, IconBtn, Icon, Reel, toast, useAsync, loadCSS, cx, hrefTitle, shuffle } from '../ui/components.js';
 import { useStore, progress, hidden, history, diary, watchlist, profiles, activeProfileId, keyStore, ls } from '../core/store.js';
 import { continueWatching, hideFromContinue } from '../core/progress.js';
-import { catalog, meta as getMeta, resolveTitle } from '../core/meta.js';
-import { torrents, user } from '../core/tb.js';
-import { parse } from '../core/parse.js';
+import { catalog, meta as getMeta } from '../core/meta.js';
+import { user } from '../core/tb.js';
 import { navigate } from '../router.js';
 import { playAction, inWatchlist, toggleWatchlist } from '../lib/play.js';
 import { newEps } from '../lib/newEpisodes.js';
@@ -180,27 +179,6 @@ function PremiumNotice() {
   </div>`;
 }
 
-// ---------------------------------------------------------------- your torbox (lightweight)
-function RDRow() {
-  const q = useAsync(async () => {
-    const list = ((await torrents(1, 30)) || []).filter(t => t.status === 'downloaded');
-    const seen = new Set(), picks = [];
-    for (const t of list) {
-      const info = parse(t.filename);
-      const k = info.title.toLowerCase();
-      if (!info.title || seen.has(k)) continue;
-      seen.add(k); picks.push(info);
-      if (picks.length >= 10) break;
-    }
-    const res = await Promise.allSettled(picks.map(i => resolveTitle(i.title, i.year, i.anime ? 'anime' : i.type)));
-    const out = [], ids = new Set();
-    for (const r of res) if (r.status === 'fulfilled' && r.value && !ids.has(r.value.id)) { ids.add(r.value.id); out.push(r.value); }
-    return out;
-  }, []);
-  if (q.error || (q.data && !q.data.length)) return null;
-  return html`<${Row} title="In your TorBox" kicker="already unlocked" icon="cloud" items=${q.data} loading=${q.loading} href="#/myrd" />`;
-}
-
 function WatchlistRow() {
   const wl = useStore(watchlist);
   if (!wl.length) return null;
@@ -283,7 +261,6 @@ export default function Home() {
         <${WatchlistRow} />
         <${CatRow} title=${`New in ${YEAR}`} kicker="fresh ink" icon="sparkle" type="movie" id="year" opts=${{ genre: YEAR }} />
         <${CatRow} title="Highest rated" kicker="critics & crowds agree" icon="starFill" type="movie" id="imdbRating" />
-        <${RDRow} />
         <${CatRow} title="Edge-of-your-seat thrillers" icon="eye" type="movie" id="top" opts=${{ genre: 'Thriller' }} href="#/genre/movie/Thriller" />
         <${CatRow} title="Laugh out loud" icon="mask" type="series" id="top" opts=${{ genre: 'Comedy' }} href="#/genre/series/Comedy" />
         <${CatRow} title="Best-rated shows of all time" icon="crown" type="series" id="imdbRating" />

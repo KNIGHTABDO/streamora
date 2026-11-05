@@ -88,7 +88,7 @@ export default function Add() {
       </form>
 
       <section class="add-status">
-        ${!job ? html`<div class="add-idle"><${Reel} mood="think" size=${130} /><p class="muted">Whatever you add lands in your TorBox too, under <a class="add-link" href="#/myrd">My TorBox</a>.</p></div>`
+        ${!job ? html`<div class="add-idle"><${Reel} mood="think" size=${130} /><p class="muted">Paste a magnet or link and it plays here.</p></div>`
         : job.step === 'error' ? html`<div class="stack"><${Reel} mood="sad" size=${110} /><${ErrorNote} error=${job.error} /><div class="cluster"><${Btn} icon="refresh" onClick=${go} disabled=${!kind}>Try again<//><${Btn} variant="ghost" onClick=${reset}>Start over<//></div></div>`
         : job.step !== 'ready' ? html`<div class="stack add-working">
             <${Spinner} label=${job.step} />
@@ -96,7 +96,7 @@ export default function Add() {
               <div class="add-name">${info.filename}</div>
               ${info.status === 'downloading' && html`<${Underline} seed=${hash(info.id)} pct=${(info.progress || 0) / 100} class="add-progress" />
                 <div class="type faint">${info.progress || 0}% · ${fmtSize(info.bytes)}${info.speed ? ` · ${fmtSize(info.speed)}/s` : ''}${info.seeders != null ? ` · ${info.seeders} seeders` : ''}</div>
-                <p class="muted add-note">You can leave this page. It keeps downloading, and you'll find it in <a class="add-link" href="#/myrd">My TorBox › Downloads</a>.</p>`}
+                <p class="muted add-note">Keep this page open; it plays as soon as it's ready.</p>`}
             </div>`}
             ${job.torrentId && html`<${Btn} variant="ghost" icon="trash" onClick=${discard}>Cancel & remove<//>`}
           </div>`
@@ -109,7 +109,7 @@ export default function Add() {
               <span class="type faint">${fmtSize(f.bytes)}</span>
               ${VIDEO_RE.test(f.name) ? html`<${Btn} size="sm" variant="primary" icon="play" href=${watchHref(info, f)}>Play<//>` : html`<span></span>`}
             </li>`)}</ul>
-            <div class="cluster"><${Btn} variant="ghost" onClick=${reset}>Add another<//><${Btn} variant="ghost" href="#/myrd" icon="cloud">My TorBox<//></div>
+            <div class="cluster"><${Btn} variant="ghost" onClick=${reset}>Add another<//></div>
           </div>`}
       </section>
     </div>

@@ -220,7 +220,6 @@ function SourcePicker({ open, onClose, list, current, onPick }) {
         <span class="watch-src-body">
           <span class="watch-src-name">${x.release}</span>
           <span class="watch-src-tags">
-            ${x.inAccount && html`<span class="watch-tag rd">in your TorBox</span>`}
             ${x.cached ? html`<span class="watch-tag rd">cached</span>` : html`<span class="watch-tag slow">not cached</span>`}
             ${x.hdr && html`<span class="watch-tag">${x.dv ? 'Dolby Vision' : 'HDR'}</span>`}
             ${x.remux && html`<span class="watch-tag">remux</span>`}
