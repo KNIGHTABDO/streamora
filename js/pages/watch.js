@@ -2,9 +2,9 @@
 // Finds a source, resolves it on TorBox (auto-retrying the next source), asks to resume, then hands off to <Player>.
 import { html, useState, useEffect, useRef } from '../../vendor/preact-htm.js';
 import { Btn, Icon, Reel, Img, Modal, Chip, cx, fmtTime, loadCSS, toast } from '../ui/components.js';
-import { meta as getMeta, backdropOf } from '../core/meta.js';
-import { streams, rankStreams, fmtSize, isPhone, webPrefs } from '../core/sources.js';
-import { resolveStream, resolveLink, torrents, webStreamingRefused } from '../core/tb.js';
+import { meta as getMeta, backdropOf, nextVideo, isReleased } from '../core/meta.js';
+import { streams, rankStreams, fmtSize, isPhone, webPrefs, peekStreams, prefetchStreams } from '../core/sources.js';
+import { resolveStream, resolveLink, torrents, webStreamingRefused, knownTorrents, prefetchOwned, ownedFile } from '../core/tb.js';
 import { resumeAt } from '../core/progress.js';
 import { settings, progress } from '../core/store.js';
 import { navigate, back } from '../router.js';
@@ -14,6 +14,17 @@ import { AppPlayer, isNative } from '../player/native.js';
 loadCSS('css/player.css');
 
 const MAX_AUTO = 4;
+
+export function mp4TailRange(stream, native = false) {
+  return !native && !stream.hls && !stream.remux && /\.mp4$/i.test(stream.filename || '') && Number.isFinite(stream.filesize) && stream.filesize > 0
+    ? `bytes=${Math.max(0, stream.filesize - 262144)}-` : null;
+}
+export function warmMp4Tail(stream, { native = false, signal } = {}) {
+  const range = mp4TailRange(stream, native);
+  if (range && stream.direct && !signal?.aborted) {
+    try { fetch(stream.direct, { mode: 'no-cors', headers: { Range: range }, signal }).catch(() => {}); } catch {}
+  }
+}
 
 export default function Watch({ params, query }) {
   if (params.type === 'tb') return html`<${LibraryWatch} key=${params.id} link=${params.id} name=${query.name} />`;
@@ -51,12 +62,17 @@ function Session({ params, query }) {
   const [ask, setAsk] = useState(0);              // resume seconds to ask about
   const tried = useRef(new Set());
   const gen = useRef(0);
+  const controller = useRef(null);
+  if (!controller.current) controller.current = typeof AbortController === 'function' ? new AbortController() : { abort() {}, signal: undefined };
+  const known = useRef([]);
+  const prefetching = useRef(false);
   const live = useRef(null);      // the player's position (s), kept current by <Player>: a source switch resumes there
   const s = settings.get();
 
   // 1. meta + resume question
   useEffect(() => {
-    getMeta(params.type, params.id).then(m => {
+    getMeta(params.type, params.id, { signal: controller.current.signal }).then(m => {
+      if (controller.current.signal?.aborted) return;
       if (!m) throw new Error('Title not found');
       setMeta(m);
       const v = query.v ? (m.videos || []).find(x => x.id === query.v) || { id: query.v, season: +query.v.split(':').slice(-2)[0] || 1, episode: +query.v.split(':').pop() } : null;
@@ -65,21 +81,33 @@ function Session({ params, query }) {
         const r = resumeAt(m.id, v && v.id);
         if (r > 0) setAsk(r); else setStartAt(0);
       }
-    }).catch(e => setErr(e));
+    }).catch(e => { if (!controller.current.signal?.aborted) setErr(e); });
+    return () => { gen.current++; controller.current.abort(); };
   }, []);
 
   // 2. sources
   useEffect(() => {
-    if (!meta) return;
-    const id = video ? video.id : meta.id;
-    const binge = (progress.get()[meta.id] || {}).source?.binge;
+    const id = query.v || params.id;
+    const signal = controller.current.signal;
+    const binge = (progress.get()[params.id] || {}).source?.binge;
     // on the web 4K files only cost start-up time unless "original" is chosen
     const prefs = { cachedOnly: s.cachedOnly !== false, preferSmall: isPhone(), ...webPrefs(webStreamingRefused()), preferBinge: binge, audioLang: s.audioLang, maxQuality: s.quality === 'original' ? '2160p' : '1080p' };
-    Promise.all([streams(meta.type, id), torrents(1, 100).catch(() => [])]).then(([list, mine]) => {
-      if (list.failed && list.failed.length && list.length) toast(`${list.failed.join(', ')} didn't answer. Showing the rest.`, { kind: 'warn', icon: 'warn' });
-      // sources already in the account start instantly (no new torrent added), so they go first
-      const have = new Set((mine || []).filter(t => t.status === 'downloaded').map(t => t.hash.toLowerCase()));
-      list.forEach(x => { if (have.has(x.infoHash.toLowerCase())) { x.inAccount = true; x.cached = true; } });
+    let gone = false, initial = false, latest = null;
+    const markOwned = list => {
+      const have = new Set(known.current.filter(t => t.status === 'downloaded').map(t => t.hash.toLowerCase()));
+      return list.map(x => have.has(x.infoHash.toLowerCase()) ? { ...x, inAccount: true, cached: true } : x);
+    };
+    const partial = list => { latest = list; if (!gone && initial) setAll(rankStreams(markOwned(list), { ...prefs, cachedOnly: false })); };
+    const cached = typeof peekStreams === 'function' && peekStreams(params.type, params.id, query.v);
+    const sources = cached ? Promise.resolve(cached) : streams(params.type, id, { signal, onPartial: partial });
+    if (cached && !cached.complete) streams(params.type, id, { signal, onPartial: partial }).then(partial).catch(() => {});
+    const account = (typeof knownTorrents === 'function' ? knownTorrents() : Promise.resolve(null))
+      .then(rows => rows || torrents(1, 100, { signal })).catch(() => []);
+    Promise.all([sources, account]).then(([found, mine]) => {
+      if (gone || signal?.aborted) return;
+      known.current = mine || []; initial = true;
+      if (found.failed?.length && found.length) toast(`${found.failed.join(', ')} didn't answer. Showing the rest.`, { kind: 'warn', icon: 'warn' });
+      const list = markOwned(found);
       // a copy already in the account starts a little faster, but only goes first when it's as good as the best one
       const mineFirst = l => {
         const top = l.find(x => x.cached);
@@ -88,6 +116,7 @@ function Session({ params, query }) {
       };
       const all = mineFirst(rankStreams(list, { ...prefs, cachedOnly: false }));
       setAll(all);
+      if (latest) partial(latest);
       if (query.hash) {
         const h = query.hash.toLowerCase();
         const pinned = all.find(x => x.infoHash.toLowerCase() === h) || { infoHash: h, fileIdx: query.file != null ? +query.file : undefined, filename: query.fn || null, release: query.fn || 'Chosen source', quality: '?', cached: true };
@@ -99,10 +128,12 @@ function Session({ params, query }) {
         if (!ranked.length) setErr(Object.assign(new Error('No cached sources'), { code: !list.length && list.failed && list.failed.length ? 'sources' : 'nosources' }));
       }
     }, e => {
+      if (gone || signal?.aborted) return;
       if (query.hash) setCands([{ infoHash: query.hash, fileIdx: query.file != null ? +query.file : undefined, filename: query.fn || null, release: query.fn || 'Chosen source', quality: '?' }]);
       else setErr(Object.assign(new Error('Couldn\'t search for sources: ' + e.message), { code: navigator.onLine === false ? 'network' : 'sources' }));
     });
-  }, [meta, video]);
+    return () => { gone = true; };
+  }, []);
 
   // 3. resolve candidate by candidate
   const tryFrom = async (list, i, manual) => {
@@ -116,9 +147,10 @@ function Session({ params, query }) {
       setAttempt(++n);   // skipped (already tried) sources don't count toward MAX_AUTO
       try {
         const app = isNative();
-        const stream = await resolveStream({ infoHash: c.infoHash, fileIdx: c.fileIdx, filename: c.filename, season: video && video.season, episode: video && video.episode, direct: app },
+        const stream = await resolveStream({ infoHash: c.infoHash, fileIdx: c.fileIdx, filename: c.filename, season: video && video.season, episode: video && video.episode, direct: app, known: known.current, signal: controller.current.signal },
           t => me === gen.current && setStep(t));
         if (me !== gen.current) return;
+        if (typeof warmMp4Tail === 'function') warmMp4Tail(stream, { native: app, signal: controller.current.signal });
         setReady({ stream, info: null, source: c });
         return;
       } catch (e) {
@@ -130,7 +162,7 @@ function Session({ params, query }) {
     }
     if (me === gen.current) setErr(last && last.code === 'webplan' ? last : Object.assign(new Error('None of the best sources would start.'), { code: 'nosources' }));
   };
-  useEffect(() => { if (cands && cands.length) tryFrom(cands, 0); }, [cands]);
+  useEffect(() => { if (meta && cands && cands.length) tryFrom(cands, 0); }, [cands, meta, video]);
 
   // switching source keeps the place: the new copy starts where the old one was (no player yet = keep startAt)
   const pick = c => {
@@ -146,6 +178,22 @@ function Session({ params, query }) {
     if (i < 0) { setReady(null); setErr(e); } else { setStep('That stream hiccuped. Trying another source…'); tryFrom(cands, i); }
   };
 
+  const prefetchNext = async () => {
+    const next = video && nextVideo(meta, video.id);
+    if (!next || !isReleased(next) || prefetching.current || navigator.connection?.saveData) return;
+    prefetching.current = true;
+    const signal = controller.current.signal;
+    try {
+      await prefetchStreams(meta.type, meta.id, next.id, { signal });
+      const list = peekStreams(meta.type, meta.id, next.id) || [];
+      if (signal?.aborted) return;
+      const args = c => ({ ...c, season: next.season, episode: next.episode, known: known.current, direct: isNative(), signal });
+      const available = rankStreams(list, { cachedOnly: false, ...webPrefs(webStreamingRefused()) }).filter(c => known.current.some(t => ownedFile(t, args(c))));
+      const owned = available.find(c => c.infoHash.toLowerCase() === ready?.source?.infoHash?.toLowerCase()) || available[0];
+      if (owned) await prefetchOwned(args(owned));
+    } catch { /* optional read-only warmup */ }
+  };
+
   const onBack = backTo(params.type, params.id);
   const bg = meta && backdropOf(meta);
   const showPlayer = ready && startAt != null;
@@ -153,7 +201,7 @@ function Session({ params, query }) {
   return html`<div class="watch" data-no-paper>
     ${showPlayer
       ? html`<${isNative() ? AppPlayer : Player} meta=${meta} video=${video} stream=${ready.stream} info=${ready.info} start=${startAt} source=${ready.source}
-          live=${live} onFatal=${onFatal} onPickSource=${() => setPicker(true)} onBack=${onBack} />`
+          live=${live} onUpNext=${prefetchNext} onFatal=${onFatal} onPickSource=${() => setPicker(true)} onBack=${onBack} />`
       : html`<${Loading} bg=${bg} meta=${meta} video=${video} step=${step} attempt=${attempt} err=${err}
           onBack=${onBack} onPick=${allCands ? () => setPicker(true) : null}
           onRetry=${() => { tried.current.clear(); cands && cands.length ? tryFrom(cands, 0) : location.reload(); }} />`}
@@ -238,7 +286,9 @@ function SourcePicker({ open, onClose, list, current, onPick }) {
 function LibraryWatch({ link, name }) {
   const [st, setSt] = useState({ ready: null, err: null });
   useEffect(() => {
-    resolveLink(link, { direct: isNative() }).then(stream => setSt({ ready: { stream, info: null } })).catch(err => setSt({ err }));
+    const ac = new AbortController();
+    resolveLink(link, { direct: isNative(), signal: ac.signal }).then(stream => { if (!ac.signal.aborted) { warmMp4Tail(stream, { native: isNative(), signal: ac.signal }); setSt({ ready: { stream, info: null } }); } }).catch(err => { if (!ac.signal.aborted) setSt({ err }); });
+    return () => ac.abort();
   }, []);
   const onBack = () => back();
   const pseudo = st.ready && { id: 'tb:' + st.ready.stream.downloadId, type: 'movie', name: name || st.ready.stream.filename };

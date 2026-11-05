@@ -35,13 +35,16 @@ export default function Search({ query }) {
   const yearFilter = query.y || '';
   const [listening, setListening] = useState(false);
   const input = useRef();
+  const searching = useRef(null);
   const recent = useStore(searches);
 
   useEffect(() => { if (!isPhone() && input.current) input.current.focus(); }, []);
   useEffect(() => { if ((query.q || '') !== text && document.activeElement !== input.current) setText(query.q || ''); }, [query.q]);
   // debounce typing → URL (?q=) → results
   useEffect(() => {
-    const t = setTimeout(() => { if (text.trim() !== q) setQuery({ q: text.trim() }); }, 180);
+    if (text.trim() !== q) searching.current?.abort();
+    const delay = matchMedia('(pointer: coarse)').matches ? 300 : 180;
+    const t = setTimeout(() => { if (text.trim() !== q) setQuery({ q: text.trim() }); }, delay);
     return () => clearTimeout(t);
   }, [text]);
   useEffect(() => {
@@ -54,12 +57,14 @@ export default function Search({ query }) {
   const [res, setRes] = useState({ data: [], loading: false, error: null });
   const [again, setAgain] = useState(0);
   useEffect(() => {
-    if (!q) return;
+    if (q.length < 2) { setRes({ data: [], loading: false, error: null }); return; }
     let live = true;
+    const controller = new AbortController();
+    searching.current = controller;
     setRes(r => ({ ...r, loading: true, error: null }));
-    search(q, 'all', part => live && setRes({ data: part, loading: true, error: null }))
-      .then(data => live && setRes({ data, loading: false, error: null }), error => live && setRes({ data: [], loading: false, error }));
-    return () => { live = false; };
+    search(q, 'all', part => live && setRes({ data: part, loading: true, error: null }), { signal: controller.signal })
+      .then(data => live && !controller.signal.aborted && setRes({ data, loading: false, error: null }), error => live && !controller.signal.aborted && setRes({ data: [], loading: false, error }));
+    return () => { live = false; controller.abort(); };
   }, [q, again]);
   res.reload = () => setAgain(k => k + 1);
   const trending = useAsync(() => Promise.all([catalog('movie', 'top'), catalog('series', 'top')]).then(([m, s]) => ({ m: m.slice(0, 12), s: s.slice(0, 12) })), []);

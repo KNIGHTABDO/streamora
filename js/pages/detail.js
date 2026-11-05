@@ -4,7 +4,7 @@ import { Page, Hero, Row, Btn, IconBtn, Chip, Tabs, Stars, Spinner, ErrorNote, E
 import { hash, tiltOf } from '../ui/sketch.js';
 import { useStore, progress, watchlist, follows, diary, settings } from '../core/store.js';
 import { meta as getMeta, castPhotos, catalog, seasonsOf, isReleased } from '../core/meta.js';
-import { streams, rankStreams, fmtSize, isPhone, webPrefs } from '../core/sources.js';
+import { streams, rankStreams, fmtSize, isPhone, webPrefs, speculateWhenIdle } from '../core/sources.js';
 import { webStreamingRefused } from '../core/tb.js';
 import { epState, markWatched, markUnwatched, markSeasonWatched, markSeasonUnwatched, resumeAt } from '../core/progress.js';
 import { addHistory, removeHistory } from '../core/trakt.js';
@@ -194,6 +194,7 @@ export default function Detail({ params }) {
   const [modal, setModal] = useState(null); // {kind:'src', video} | {kind:'rate'} | {kind:'trailer', id}
 
   const m = q.data;
+  useEffect(() => speculateWhenIdle(m, m && nextUp(m)), [m]);
   const g0 = m && (m.genres || [])[0];
   const similar = useAsync(() => getMoreLikeThis(m), [m && m.id]);
   const photos = useAsync(() => castPhotos((m && m.cast || []).slice(0, 16)), [m && m.id]);

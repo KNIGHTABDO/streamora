@@ -16,40 +16,58 @@ const TTL = 6 * 3600e3;
 // and is refreshed in the background once older than ttl. Only a first-ever request waits on the network.
 const CACHE = 'streamora-json-v1';
 const CACHE_MAX = 300;
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const net = async (url, retry = true) => {
-  const r = await fetchT(url, {}, 10000, 'The catalog');
-  if (r.status === 429 && retry) { await sleep(Math.min(10, +r.headers.get('Retry-After') || 2) * 1000); return net(url, false); }
+const abort = signal => { if (signal?.aborted) throw new DOMException('Aborted', 'AbortError'); };
+const sleep = (ms, signal) => new Promise((resolve, reject) => {
+  abort(signal);
+  const done = () => { signal?.removeEventListener('abort', stop); resolve(); };
+  const t = setTimeout(done, ms);
+  const stop = () => { clearTimeout(t); reject(new DOMException('Aborted', 'AbortError')); };
+  signal?.addEventListener('abort', stop, { once: true });
+});
+const net = async (url, signal, retry = true) => {
+  abort(signal);
+  const r = await fetchT(url, { signal }, 10000, 'The catalog', async r => ({ status: r.status, ok: r.ok, headers: r.headers, data: r.ok ? await r.json() : null }));
+  if (r.status === 429 && retry) { await sleep(Math.min(10, +r.headers.get('Retry-After') || 2) * 1000, signal); return net(url, signal, false); }
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r;
+  return r.data;
 };
 let puts = 0;
 async function prune(c) {
-  // Cache Storage keys() come back in insertion order and put() re-inserts, so the front is the oldest
   const keys = await c.keys();
   await Promise.all(keys.slice(0, Math.max(0, keys.length - CACHE_MAX)).map(k => c.delete(k)));
 }
-function getJSON(url, { ttl = TTL } = {}) {
-  const now = Date.now();
-  const m = mem.get(url);
-  if (m && now - m.at < ttl) return m.p;
-  const fresh = () => {
-    const p = net(url).then(async r => {
-      try { const c = await caches.open(CACHE); await c.put(url, new Response(r.clone().body, { headers: { 'x-at': String(Date.now()) } })); if (++puts % 25 === 0) prune(c).catch(() => {}); } catch {}
-      return r.json();
-    });
-    mem.set(url, { at: now, p }); p.catch(() => mem.delete(url));
-    return p;
+async function getJSON(url, { ttl = TTL, signal } = {}) {
+  abort(signal);
+  const now = Date.now(), m = mem.get(url);
+  // A cancellable caller owns its fetch, rather than inheriting another page's signal.
+  if (m && now - m.at < ttl && (!signal || m.ready)) return m.p;
+  const fresh = async () => {
+    const data = await net(url, signal);
+    abort(signal);
+    mem.set(url, { at: Date.now(), p: Promise.resolve(data), ready: true });
+    try {
+      const c = await caches.open(CACHE);
+      abort(signal);
+      await c.put(url, new Response(JSON.stringify(data), { headers: { 'x-at': String(Date.now()) } }));
+      if (++puts % 25 === 0) prune(c).catch(() => {});
+    } catch (e) { abort(signal); }
+    return data;
   };
-  // stored before the first await, so parallel callers share one request
   const p = (async () => {
     let hit;
     try { hit = typeof caches !== 'undefined' && await (await caches.open(CACHE)).match(url); } catch {}
+    abort(signal);
     if (!hit) return fresh();
-    if (now - +(hit.headers.get('x-at') || 0) > ttl) fresh().catch(() => {}); // refresh quietly
-    return hit.json();
+    const data = await hit.json();
+    abort(signal);
+    mem.set(url, { at: now, p: Promise.resolve(data), ready: true });
+    if (now - +(hit.headers.get('x-at') || 0) > ttl) fresh().catch(() => {});
+    return data;
   })();
-  mem.set(url, { at: now, p }); p.catch(() => mem.get(url)?.p === p && mem.delete(url));
+  if (!signal) {
+    mem.set(url, { at: now, p });
+    p.catch(() => mem.get(url)?.p === p && mem.delete(url));
+  }
   return p;
 }
 
@@ -82,10 +100,15 @@ export const ANIME_GENRES = ['Action', 'Adventure', 'Comedy', 'Drama', 'Sci-Fi',
  * Kitsu anime catalogs: 'kitsu-anime-trending' | 'kitsu-anime-airing' | 'kitsu-anime-popular' | 'kitsu-anime-rating'
  * catalog('anime','kitsu-anime-airing',{genre:'Action'})
  */
-export async function catalog(type, id, opts = {}) {
+export async function catalog(type, id, opts = {}, { signal } = {}) {
   const anime = type === 'anime';
-  const base = anime ? KITSU : CINEMETA;
-  const j = await getJSON(`${base}/catalog/${type}/${id}${extra(opts)}.json`);
+  const path = `${type}/${id}${extra(opts)}.json`;
+  const urls = anime ? [`${KITSU}/catalog/${path}`] : [`/api/catalog/${path}`, `https://cinemeta-catalogs.strem.io/catalog/${path}`, `${CINEMETA}/catalog/${path}`];
+  let j;
+  for (const url of urls) {
+    try { j = await getJSON(url, { signal }); break; }
+    catch (e) { abort(signal); if (url === urls[urls.length - 1]) throw e; }
+  }
   return forProfile((j.metas || []).map(m => norm(m, anime)));
 }
 
@@ -97,14 +120,14 @@ export function imdbItems(j, type = 'all') {
     id: x.id, type: IMDB_TYPES[x.qid], name: x.l, year: x.y, poster: x.i && x.i.imageUrl, cast: x.s ? x.s.split(', ') : undefined, sparse: true,
   }));
 }
-const imdbSearch = async (q, type) => imdbItems(await getJSON(`/api/imdb?q=${encodeURIComponent(q)}`), type);
+const imdbSearch = async (q, type, signal) => imdbItems(await getJSON(`/api/imdb?q=${encodeURIComponent(q)}`, { signal }), type);
 
-export async function meta(type, id) {
+export async function meta(type, id, { signal } = {}) {
   const anime = String(id).startsWith('kitsu:');
   let j = {};
-  try { j = await getJSON(`${anime ? KITSU : CINEMETA}/meta/${type}/${encodeURIComponent(id)}.json`); }
-  catch (e) { if (!/^tt\d+$/.test(id)) throw e; }
-  if (!(j.meta && j.meta.name) && /^tt\d+$/.test(id)) return (await imdbSearch(id, type)).find(x => x.id === id) || null;
+  try { j = await getJSON(`${anime ? KITSU : CINEMETA}/meta/${type}/${encodeURIComponent(id)}.json`, { signal }); }
+  catch (e) { abort(signal); if (!/^tt\d+$/.test(id)) throw e; }
+  if (!(j.meta && j.meta.name) && /^tt\d+$/.test(id)) return (await imdbSearch(id, type, signal)).find(x => x.id === id) || null;
   const m = norm(j.meta, anime);
   if (m && m.videos) m.videos = m.videos.slice().sort((a, b) => (a.season - b.season) || (a.episode - b.episode));
   return m;
@@ -127,18 +150,20 @@ function rankSearch(list, q) {
 
 /** search('dune', 'movie' | 'series' | 'anime' | 'all') */
 /** onPart(results so far) fires as each source lands, so the fastest one shows right away. */
-export async function search(q, type = 'all', onPart) {
-  if (!q || !q.trim()) return [];
+export async function search(q, type = 'all', onPart, { signal } = {}) {
+  abort(signal);
+  if (!q || q.trim().length < 2) return [];
   const jobs = [];
-  if (type === 'all' || type === 'movie') jobs.push(catalog('movie', 'top', { search: q }));
-  if (type === 'all' || type === 'series') jobs.push(catalog('series', 'top', { search: q }));
-  if (type === 'all' || type === 'anime') jobs.push(getJSON(`${KITSU}/catalog/anime/kitsu-anime-list/search=${encodeURIComponent(q)}.json`).then(j => (j.metas || []).map(m => norm(m, true))));
+  if (type === 'all' || type === 'movie') jobs.push(catalog('movie', 'top', { search: q }, { signal }));
+  if (type === 'all' || type === 'series') jobs.push(catalog('series', 'top', { search: q }, { signal }));
+  if (type === 'all' || type === 'anime') jobs.push(getJSON(`${KITSU}/catalog/anime/kitsu-anime-list/search=${encodeURIComponent(q)}.json`, { signal }).then(j => (j.metas || []).map(m => norm(m, true))));
   // last, so a title in both sources keeps Cinemeta's fuller entry
-  if (type !== 'anime') jobs.push(imdbSearch(q, type));
+  if (type !== 'anime') jobs.push(imdbSearch(q, type, signal));
   const once = list => { const seen = new Set(); return list.filter(m => !seen.has(m.id) && seen.add(m.id)); };
   const got = jobs.map(() => []);
-  jobs.forEach((j, i) => j.then(v => { got[i] = v; onPart && onPart(rankSearch(forProfile(once(got.flat())), q)); }, () => {}));
+  jobs.forEach((j, i) => j.then(v => { got[i] = v; !signal?.aborted && onPart && onPart(rankSearch(forProfile(once(got.flat())), q)); }, () => {}));
   const res = await Promise.allSettled(jobs);
+  abort(signal);
   return rankSearch(forProfile(once(res.flatMap(r => (r.status === 'fulfilled' ? r.value : [])))), q);
 }
 

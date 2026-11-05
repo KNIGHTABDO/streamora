@@ -41,14 +41,15 @@ export function AppPlayer(props) {
   return html`<${Player} key=${mode} ...${props} start=${from != null ? from : props.start} engine=${mode} onFatal=${onFatal} />`;
 }
 
-export function NativePlayer({ meta, video, stream, start = 0, source, noProgress, onFatal, onBack }) {
+export function NativePlayer({ meta, video, stream, start = 0, source, noProgress, onFatal, onBack, onUpNext }) {
   const s = useStore(settings);
   const last = useRef({ position: start, duration: 0 });
   const next = meta && video ? nextVideo(meta, video.id) : null;
 
   useEffect(() => {
     const p = plugin();
-    let done = false;
+    let done = false, prefetched = false;
+    const ac = new AbortController();
     const handles = [];
     const pct = () => (last.current.duration ? (last.current.position / last.current.duration) * 100 : 0);
     const emit = state => {
@@ -67,6 +68,7 @@ export function NativePlayer({ meta, video, stream, start = 0, source, noProgres
     on('progress', d => {
       const was = last.current.paused;
       last.current = d;
+      if (!prefetched && next && d.duration > 0 && d.duration - d.position < 22) { prefetched = true; onUpNext?.(); }
       save();
       if (was !== d.paused) emit(d.paused ? 'pause' : 'start');
     });
@@ -87,7 +89,7 @@ export function NativePlayer({ meta, video, stream, start = 0, source, noProgres
       .then(() => {
         emit('start');
         if (!meta || noProgress || !p.extras) return;
-        Promise.all([openSubs(meta.type, video ? video.id : meta.id, (source && source.filename) || stream.filename || ''), skipTimes(meta, video)]).then(([subs, skip]) => {
+        Promise.all([openSubs(meta.type, video ? video.id : meta.id, (source && source.filename) || stream.filename || '', [], { signal: ac.signal }), skipTimes(meta, video, { signal: ac.signal })]).then(([subs, skip]) => {
           if (done) return;
           const label = x => (x.release ? `${x.label} · ${x.release}` : x.label).slice(0, 70);
           p.extras({ subs: subs.map(x => ({ label: label(x), lang: x.lang, url: x.url })), intro: (skip && skip.op) || null, outro: (skip && skip.ed) || null }).catch(() => {});
@@ -95,7 +97,7 @@ export function NativePlayer({ meta, video, stream, start = 0, source, noProgres
       })
       .catch(e => { done = true; onFatal ? onFatal(e, start) : onBack(); });
 
-    return () => { const was = done; done = true; handles.forEach(h => h.remove()); if (!was) p.close().catch(() => {}); };
+    return () => { ac.abort(); const was = done; done = true; handles.forEach(h => h.remove()); if (!was) p.close().catch(() => {}); };
   }, [stream && stream.direct]);
 
   return html`<div class="watch-native" style="position:fixed;inset:0;display:grid;place-items:center;background:#000"><${Reel} size=${80} /></div>`;

@@ -1,6 +1,7 @@
 // Extra Stremio addons (stream and subtitles resources), built in and user-added. We only read their JSON; addon code never runs here.
 // Direct fetch first (most addons send CORS headers), then the /api/addon relay.
-import { store } from './store.js';
+import { store, ls } from './store.js';
+import { fetchT } from './net.js';
 
 export const addons = store('addons', []); // [{ url, id, name, types, idPrefixes }]
 
@@ -12,14 +13,18 @@ export function manifestUrl(input) {
 }
 const baseOf = u => u.replace(/\/manifest\.json$/, '');
 
-async function getJson(u) {
+async function getJson(u, { signal } = {}) {
   try {
-    const r = await fetch(u, { signal: AbortSignal.timeout(10000) });
-    if (r.ok) return await r.json();
-  } catch {}
-  const r = await fetch(`/api/addon?url=${encodeURIComponent(u)}`);
-  if (!r.ok) throw new Error(`Addon didn't answer (${r.status})`);
-  return r.json();
+    return await fetchT(u, { signal }, 10000, 'The addon', r => {
+      if (!r.ok) throw new Error(`Addon didn't answer (${r.status})`);
+      return r.json();
+    });
+  } catch (e) { if (signal?.aborted) throw e; }
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  return fetchT(`/api/addon?url=${encodeURIComponent(u)}`, { signal }, 10000, 'The addon', r => {
+    if (!r.ok) throw new Error(`Addon didn't answer (${r.status})`);
+    return r.json();
+  });
 }
 
 const resourceOf = (m, name) => (Array.isArray(m.resources) ? m.resources : []).find(r => r === name || (r && r.name === name));
@@ -101,22 +106,54 @@ const cometCfg = key => btoa(JSON.stringify({
   languages: { required: [], exclude: [], preferred: [] }, resolutions: {},
   options: { remove_ranks_under: -10000000000, allow_english_in_languages: false, remove_unknown_languages: false },
 }));
-// MediaFusion wants its config encrypted by the server first; one request per key per session
-let mfCfg = null;
-const mediafusionCfg = key => {
-  if (!mfCfg || mfCfg.key !== key) {
-    const p = fetch(`${MEDIAFUSION}/encrypt-user-data`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(8000),
+// Store only the encrypted config, indexed by a digest of the key (never the raw key).
+const mfPending = new Map();
+export const mediafusionCfg = async (key, signal) => {
+  // Older TV browsers and HTTP LAN previews may not offer SubtleCrypto. They still work without persistence.
+  const digest = globalThis.crypto?.subtle && await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+  const name = digest ? 'mf-config:' + Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('') : null;
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  const saved = name && ls.get(name, null);
+  if (typeof saved === 'string' && saved) return saved;
+  let job = mfPending.get(key);
+  if (!job) {
+    const controller = new AbortController();
+    job = { controller, users: new Set() };
+    job.p = fetchT(`${MEDIAFUSION}/encrypt-user-data`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
       body: JSON.stringify({ streaming_providers: [{ service: 'torbox', token: key }] }),
-    }).then(r => r.json()).then(j => { if (!j || typeof j.encrypted_str !== 'string') throw new Error('MediaFusion config'); return j.encrypted_str; });
-    p.catch(() => { if (mfCfg && mfCfg.p === p) mfCfg = null; });
-    mfCfg = { key, p };
+    }, 8000, 'MediaFusion', r => {
+      if (!r.ok) throw new Error('MediaFusion config');
+      return r.json();
+    }).then(j => {
+      if (!j || typeof j.encrypted_str !== 'string' || !j.encrypted_str) throw new Error('MediaFusion config');
+      if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (name) ls.set(name, j.encrypted_str);
+      return j.encrypted_str;
+    }).finally(() => { if (mfPending.get(key) === job) mfPending.delete(key); });
+    mfPending.set(key, job);
   }
-  return mfCfg.p;
+  const user = {};
+  job.users.add(user);
+  let stop;
+  try {
+    return await new Promise((resolve, reject) => {
+      stop = () => reject(new DOMException('Aborted', 'AbortError'));
+      signal?.addEventListener('abort', stop, { once: true });
+      job.p.then(resolve, reject);
+    });
+  } finally {
+    signal?.removeEventListener('abort', stop);
+    job.users.delete(user);
+    if (!job.users.size) {
+      if (mfPending.get(key) === job) mfPending.delete(key);
+      job.controller.abort();
+    }
+  }
 };
 export const BUILTIN = [
   { name: 'Comet', base: async key => `${COMET}/${cometCfg(key)}` },
-  { name: 'MediaFusion', base: async key => `${MEDIAFUSION}/${await mediafusionCfg(key)}` },
+  { name: 'MediaFusion', base: async (key, signal) => `${MEDIAFUSION}/${await mediafusionCfg(key, signal)}` },
   { name: 'Meteor', base: async () => METEOR },
 ];
 
@@ -125,17 +162,26 @@ async function fromAddon(name, base, type, id, get) {
   return (Array.isArray(j && j.streams) ? j.streams : []).map(s => normalizeStream(s, name));
 }
 // built-ins send CORS headers; the 9 s cap keeps a slow first search (Comet scrapes on a miss) from holding up the list
-const getDirect = async u => { const r = await fetch(u, { signal: AbortSignal.timeout(9000) }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); };
+const getDirect = (u, { signal } = {}) => fetchT(u, { signal }, 9000, 'The addon', r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); });
 
 /** Streams from the built-ins (with a TorBox key) and every added addon that handles this type/id, deduped by infoHash. Never throws. */
-export async function addonStreams(type, id, tbKey) {
+export async function addonStreams(type, id, tbKey, { signal, onPartial } = {}) {
   const list = addons.get().filter(a => (a.types || []).includes(type) && (!a.idPrefixes || a.idPrefixes.some(p => id.startsWith(p))));
-  const all = await Promise.allSettled([
-    ...(tbKey && /^tt\d+/.test(id) ? BUILTIN.map(async b => fromAddon(b.name, await b.base(tbKey), type, id, getDirect)) : []),
-    ...list.map(a => fromAddon(a.name, baseOf(a.url), type, id, getJson)),
+  const seen = new Map();
+  const receive = rows => {
+    if (signal?.aborted) return;
+    for (const s of rows) if (s) { const had = seen.get(s.infoHash); if (!had) seen.set(s.infoHash, s); else if (/TB\+|⚡/.test(s.name)) had.name = s.name; }
+    onPartial?.([...seen.values()]);
+  };
+  await Promise.allSettled([
+    ...(tbKey && /^tt\d+/.test(id) ? BUILTIN.map(async b => {
+      const base = await b.base(tbKey, signal);
+      if (signal?.aborted) return;
+      receive(await fromAddon(b.name, base, type, id, u => getDirect(u, { signal })));
+    }) : []),
+    ...list.map(async a => receive(await fromAddon(a.name, baseOf(a.url), type, id, u => getJson(u, { signal })))),
   ]);
-  const seen = new Set();
-  return all.flatMap(r => (r.status === 'fulfilled' ? r.value : [])).filter(s => s && !seen.has(s.infoHash) && seen.add(s.infoHash));
+  return [...seen.values()];
 }
 
 // ------------------------------------------------------------ subtitles
@@ -158,7 +204,6 @@ export const subsenseBase = (want = []) => {
   const languages = [...new Set(['ar', 'en', ...want.map(l => ISO1[l] || (/^[a-z]{2}$/.test(l) ? l : null)).filter(Boolean)])];
   return `${SUBSENSE}/streamra-${encodeURIComponent(JSON.stringify({ languages }))}`;
 };
-const withTimeout = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
 
 /** One addon subtitle -> { id, lang, url, release, source }, or null. */
 export function normalizeSub(s, addonName) {
@@ -171,11 +216,12 @@ export function normalizeSub(s, addonName) {
 }
 
 /** Subtitles from SubSense and every added addon with the subtitles resource, deduped by url. Never throws. */
-export async function addonSubtitles(type, id, filename, want = []) {
+export async function addonSubtitles(type, id, filename, want = [], { signal } = {}) {
+  if (signal?.aborted) return [];
   const extra = filename ? `/filename=${encodeURIComponent(filename)}` : '';
   const path = `/subtitles/${type}/${encodeURIComponent(id)}${extra}.json`;
   const list = addons.get().filter(a => a.subs && a.subs.types.includes(type) && (!a.subs.idPrefixes || a.subs.idPrefixes.some(p => id.startsWith(p))));
-  const from = (name, base, get) => withTimeout(get(base + path), 12000)
+  const from = (name, base, get) => get(base + path, { signal })
     .then(j => (Array.isArray(j && j.subtitles) ? j.subtitles : []).map(s => normalizeSub(s, name)));
   const all = await Promise.allSettled([
     ...(/^(tt|kitsu)/.test(id) ? [from('SubSense', subsenseBase(want), getDirect)] : []),
