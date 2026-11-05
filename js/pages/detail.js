@@ -95,6 +95,14 @@ function Episodes({ meta, onSources }) {
   const [season, setSeason] = useState(start);
   useEffect(() => setSeason(start), [meta.id]);
   const eps = (seasons.find(s => s[0] === season) || [, []])[1];
+  // long seasons: the first 8 episodes go up with the page, the rest right after it has painted
+  const [shown, setShown] = useState(8);
+  useEffect(() => {
+    if (eps.length <= 8) return;
+    setShown(8);
+    let t = 0; const raf = requestAnimationFrame(() => { t = setTimeout(() => setShown(Infinity), 60); });
+    return () => { cancelAnimationFrame(raf); clearTimeout(t); };
+  }, [meta.id, season]);
   if (!seasons.length) return null;
   const rel = eps.filter(isReleased);
   const allWatched = rel.length > 0 && rel.every(v => epState(meta.id, v.id)?.done);
@@ -152,7 +160,7 @@ function Episodes({ meta, onSources }) {
     <${Tabs} class="det-seasons" value=${season} onChange=${setSeason}
       tabs=${seasons.map(([s, list]) => ({ id: s, label: s === 0 ? 'Specials' : `Season ${s}`, count: list.length }))} />
     <ol class="det-ep-list">
-      ${eps.map(v => {
+      ${eps.slice(0, shown).map(v => {
         const st = epState(meta.id, v.id);
         const out = isReleased(v);
         const t = st && !st.done ? st.t : 0;

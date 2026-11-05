@@ -83,6 +83,9 @@ export function PosterCard({ item, pct, label, href, onClick, size = 'md', wide,
   const src = wide ? (item.background || item.poster) : posterOf(item);
   const t = hash(String(item.id));
   const link = href || (onClick ? null : hrefTitle(item));
+  // the hover scribble is drawn the first time the card is pointed at or focused, not for every card on the page
+  const [armed, setArmed] = useState(false);
+  const arm = armed ? undefined : () => setArmed(true);
   const body = html`
     <div class="pc-photo ${wide ? 'wide' : ''}">
       <${Img} src=${src} eager=${eager} alt="" fallback=${html`<${DoodlePoster} title=${item.name} />`} />
@@ -96,14 +99,14 @@ export function PosterCard({ item, pct, label, href, onClick, size = 'md', wide,
       ${pct != null && html`<${Underline} seed=${t} pct=${pct} class="pc-progress" />`}
     </div>
     <span class=${cx('tape', t % 3 === 0 ? 'tl' : t % 3 === 1 ? 'top' : 'tr', t % 2 && 'alt')}></span>
-    <svg class="scribble" viewBox="0 0 200 120" preserveAspectRatio="none" aria-hidden="true">
+    ${armed && html`<svg class="scribble" viewBox="0 0 200 120" preserveAspectRatio="none" aria-hidden="true">
       <path d=${scribbleStroke(200, 120, t)} fill="none" stroke="var(--a1)" stroke-width="3" stroke-linecap="round" pathLength="1"/>
-    </svg>`;
+    </svg>`}`;
   const c = cx('poster-card', `pc-${size}`, wide && 'pc-wide');
   const style = `--tilt:${tilt.toFixed(2)}deg`;
   return html`<div class="pc-wrap">
-    ${link ? html`<a class=${c} style=${style} href=${link} aria-label=${item.name}>${body}</a>`
-      : html`<button type="button" class=${c} style=${style} onClick=${onClick} aria-label=${item.name}>${body}</button>`}
+    ${link ? html`<a class=${c} style=${style} href=${link} aria-label=${item.name} onPointerEnter=${arm} onFocus=${arm}>${body}</a>`
+      : html`<button type="button" class=${c} style=${style} onClick=${onClick} aria-label=${item.name} onPointerEnter=${arm} onFocus=${arm}>${body}</button>`}
     ${onRemove && html`<button type="button" class="pc-remove" aria-label="Remove" title="Remove" onClick=${e => { e.preventDefault(); onRemove(item); }}><${Icon} name="close" size=${14} /></button>`}
   </div>`;
 }
@@ -116,6 +119,7 @@ export function SkeletonCard({ wide, size = 'md' }) {
 }
 
 // ------------------------------------------------------------------ rows & grids
+const ROW_FIRST = 12; // cards a shelf renders before it is scrolled, focused or the browser goes idle
 /**
  * Horizontal shelf.
  * <Row title="Trending" kicker="this week" icon="sparkle" items=${list} loading? error? retry? href="#/movies" wide? render=${item => ...} />
@@ -124,16 +128,28 @@ export function SkeletonCard({ wide, size = 'md' }) {
 export function Row({ title, kicker, icon, items, loading, error, retry, href, wide, size, render, empty, numbered, eager }) {
   const ref = useRef();
   const scroll = dir => ref.current && ref.current.scrollBy({ left: dir * ref.current.clientWidth * .85, behavior: 'smooth' });
+  // Long shelves start with what fits on a wide screen; the rest is added once the shelf is scrolled or focused,
+  // or when the browser is idle.
+  const long = !!items && items.length > ROW_FIRST;
+  const [all, setAll] = useState(false);
+  const more = useCallback(() => setAll(true), []);
+  useEffect(() => {
+    if (all || !long) return;
+    const idle = window.requestIdleCallback;
+    const id = idle ? idle(more, { timeout: 4000 }) : setTimeout(more, 1500);
+    return () => (idle ? cancelIdleCallback(id) : clearTimeout(id));
+  }, [all, long]);
   if (!loading && !error && items && !items.length && !empty) return null;
+  const list = items && !all && long ? items.slice(0, ROW_FIRST) : items;
   return html`<section class="row">
     <${SectionTitle} kicker=${kicker} icon=${icon} action=${href && html`<a class="row-more" href=${href}>see all <${Icon} name="next" size=${16} /></a>`}>${title}<//>
     <div class="row-wrap">
       <button type="button" class="row-arrow left" aria-label="Scroll left" tabindex="-1" onClick=${() => scroll(-1)}><${Icon} name="back" /></button>
-      <div class="row-track" ref=${ref}>
+      <div class="row-track" ref=${ref} onScroll=${all || !long ? null : more} onfocusin=${all || !long ? null : more}>
         ${loading ? Array.from({ length: 8 }, (_, i) => html`<${SkeletonCard} key=${'sk' + i} wide=${wide} size=${size} />`)
           : error ? html`<${ErrorNote} error=${error} retry=${retry} compact />`
           : !items.length ? empty
-          : items.map((it, i) => render ? render(it, i) : html`<${PosterCard} key=${it.id} item=${it} wide=${wide} size=${size} rank=${numbered ? i + 1 : null} eager=${eager && i < 6} />`)}
+          : list.map((it, i) => render ? render(it, i) : html`<${PosterCard} key=${it.id} item=${it} wide=${wide} size=${size} rank=${numbered ? i + 1 : null} eager=${eager && i < 6} />`)}
       </div>
       <button type="button" class="row-arrow right" aria-label="Scroll right" tabindex="-1" onClick=${() => scroll(1)}><${Icon} name="next" /></button>
     </div>

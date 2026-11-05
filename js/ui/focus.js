@@ -15,14 +15,23 @@ function scope() {
   return document.querySelector('.modal-scrim .modal, .drawer-scrim.open .drawer, [data-focus-scope]') || document.body;
 }
 
-export function moveFocus(key) {
-  const [dx, dy] = DIRS[key];
-  const cur = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
-  const cands = [...scope().querySelectorAll(FOCUSABLE)].filter(el => el !== cur && visible(el));
-  if (!cur) { cands[0] && cands[0].focus(); return true; }
-  const a = cur.getBoundingClientRect();
+// Arrow keys on a shelf page only look at the shelf the focus is on and the one above or below it (plus anything
+// between them), so a press doesn't measure every card on the page. Nothing found there: look at everything.
+const FOLLOWS = 4, PRECEDES = 2;
+function nearby(all, cur, dx, dy) {
+  const row = cur.closest && cur.closest('section.row');
+  if (!row) return null;
+  const rows = [...(cur.closest('.page-enter') || scope()).querySelectorAll('section.row')];
+  const i = rows.indexOf(row);
+  const from = dy < 0 ? rows[i - 1] || null : row;
+  const to = dy > 0 ? rows[i + 1] || null : row;
+  return all.filter(el => (!from || from === el || from.compareDocumentPosition(el) & FOLLOWS)
+    && (!to || to.contains(el) || to.compareDocumentPosition(el) & PRECEDES));
+}
+
+function pick(cands, a, dx, dy) {
   const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
-  let best = null, bestScore = Infinity;
+  let best = null, bestScore = Infinity, bestRect = null;
   for (const el of cands) {
     const b = el.getBoundingClientRect();
     const bx = b.left + b.width / 2, by = b.top + b.height / 2;
@@ -32,16 +41,29 @@ export function moveFocus(key) {
     // overlap on the cross axis is strongly preferred (same row / same column)
     const overlap = dx ? (b.bottom > a.top && b.top < a.bottom) : (b.right > a.left && b.left < a.right);
     const score = along + across * (overlap ? .5 : 3);
-    if (score < bestScore) { bestScore = score; best = el; }
+    if (score < bestScore) { bestScore = score; best = el; bestRect = b; }
   }
-  if (best) {
-    best.focus({ preventScroll: true });
-    best.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
-    // keep rows readable: centre vertically when moving between rows
-    if (dy) best.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
-    return true;
-  }
-  return false;
+  return best && { el: best, rect: bestRect };
+}
+
+export function moveFocus(key) {
+  const [dx, dy] = DIRS[key];
+  const cur = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+  const all = [...scope().querySelectorAll(FOCUSABLE)];
+  const usable = list => list.filter(el => el !== cur && visible(el));
+  if (!cur) { const first = usable(all)[0]; first && first.focus(); return true; }
+  const a = cur.getBoundingClientRect();
+  const near = nearby(all, cur, dx, dy);
+  const found = (near && pick(usable(near), a, dx, dy)) || pick(usable(all), a, dx, dy);
+  if (!found) return false;
+  const best = found.el;
+  best.focus({ preventScroll: true });
+  // a long jump scrolls straight there: a smooth scroll across screens keeps the page busy for half a second
+  const behavior = Math.abs(found.rect.top - a.top) > innerHeight ? 'instant' : 'smooth';
+  best.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior });
+  // keep rows readable: centre vertically when moving between rows
+  if (dy) best.scrollIntoView({ block: 'center', inline: 'nearest', behavior });
+  return true;
 }
 
 export function initFocus() {

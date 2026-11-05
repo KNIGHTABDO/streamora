@@ -46,7 +46,7 @@ test('Retry after a failed page import invokes the loader again and renders the 
   const Comp = () => {};
   const route = { pattern: '/test', path: '/test', query: {}, load: async () => { if (++loads === 1) throw Error('offline'); return { default: Comp }; } };
   const PageHost = evaluate(component('js/main.js', 'PageHost'), {
-    ...host.scope, pageCache: new Map(), URLSearchParams, ErrorNote, Spinner: () => {}, Btn: () => {},
+    ...host.scope, pageCache: new Map(), URLSearchParams, ErrorNote, Spinner: () => {}, Btn: () => {}, KEEP_HOME_FOR: [], KeptHome: () => {},
     document: { getElementById: () => null, querySelector: () => null },
   }, 'PageHost');
   host.mount(PageHost, { route });

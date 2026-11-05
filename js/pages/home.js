@@ -41,8 +41,10 @@ function HeroCarousel({ items }) {
   useEffect(() => {
     // no auto-advance for reduced motion; pause while hovered or focused
     if (paused || n < 2 || matchMedia('(prefers-reduced-motion: reduce)').matches || document.documentElement.dataset.motion === 'reduce') return;
-    const t = setTimeout(() => setI(x => (x + 1) % n), 8000);
-    return () => clearTimeout(t);
+    // kept behind a title or the player (main.js KeptHome): don't turn pages nobody sees
+    const away = () => document.hidden || !!document.querySelector('[data-kept][hidden]');
+    const t = setInterval(() => { if (!away()) setI(x => (x + 1) % n); }, 8000);
+    return () => clearInterval(t);
   }, [i, paused, n]);
   const item = items[i % n];
   if (!item) return html`<${Hero} />`;

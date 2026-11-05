@@ -81,7 +81,6 @@
   box-shadow: var(--shadow);
   transform: rotate(var(--tilt, 0deg));
   transition: transform .28s var(--ease-pop), box-shadow .28s;
-  will-change: transform;
 }
 .pc-sm { --w: 120px; } .pc-lg { --w: 200px; }
 .pc-wide { --w: 290px; }
@@ -144,6 +143,10 @@
 
 /* ---------------------------------------------------------- rows */
 .row { margin: 8px 0 26px; }
+/* Off-screen shelves skip layout and paint until they come near the viewport. Paint containment clips at the
+   padding box, so the shelf gets a gutter of padding (cancelled by a negative margin) to keep the full-bleed
+   track, the side arrows and the hover lift visible. */
+.row { content-visibility: auto; contain-intrinsic-size: auto 330px; padding-inline: var(--gutter); margin-inline: calc(var(--gutter) * -1); }
 .row-wrap { position: relative; }
 .row-track {
   display: flex; gap: var(--gap); overflow-x: auto; overflow-y: visible;

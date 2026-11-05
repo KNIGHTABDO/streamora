@@ -49,6 +49,9 @@
 .det-seasons { margin-bottom: 18px; }
 .det-ep-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 16px 22px; }
 .det-ep { position: relative; }
+/* long seasons: episodes off screen skip layout and paint. The 10px padding (cancelled by the margin) keeps the
+   tilted card and the 8px focus ring inside the paint containment box. */
+.det-ep { content-visibility: auto; contain-intrinsic-size: auto 150px; padding: 10px; margin: -10px; }
 .det-ep-link {
   display: grid; grid-template-columns: 200px 1fr; gap: 16px; align-items: start;
   padding: 10px; border-radius: 8px; transition: background .2s;

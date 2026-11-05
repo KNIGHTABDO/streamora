@@ -116,7 +116,14 @@ export function underlinePath(w, seed = 1, { sw = 4, h = 10 } = {}) {
 }
 
 /** zig-zag scribble fill (hatch) inside w×h, used for skeletons and "coloured-in" marks */
+const hatchMemo = new Map();
 export function hatch(w, h, seed = 1, { gap = 7, angle = -35 } = {}) {
+  const k = `${w}|${h}|${seed}|${gap}|${angle}`;
+  let d = hatchMemo.get(k);
+  if (d == null) { if (hatchMemo.size > 500) hatchMemo.clear(); hatchMemo.set(k, d = drawHatch(w, h, seed, gap, angle)); }
+  return d;
+}
+function drawHatch(w, h, seed, gap, angle) {
   const r = rng(seed);
   const rad = angle * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
   const diag = Math.hypot(w, h);

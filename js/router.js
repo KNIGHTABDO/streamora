@@ -96,13 +96,16 @@ const scrolls = new Map();
 if (!history.state || history.state.idx !== idx) history.replaceState({ idx }, '');
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 addEventListener('hashchange', () => {
+  // The page being left is still on screen here (pages re-render after this listener), so this is where it was.
+  // Remembering it once, on the way out, replaces a write on every scroll event.
+  scrolls.set(idx, scrollY);
   if (replacing) { replacing = false; lastNav = 'replace'; return; }
   const s = history.state;
   if (s && Number.isInteger(s.idx)) { idx = s.idx; lastNav = 'pop'; restoreY = scrolls.get(idx) || 0; return; }
   idx += 1; lastNav = 'push'; history.replaceState({ idx }, '');
 });
-addEventListener('scroll', () => scrolls.set(idx, scrollY), { passive: true });
 
+const INPUT = ['touchstart', 'wheel', 'keydown', 'pointerdown'];
 /** After a route change: a new page starts at the top; Back returns to where you were, waiting for the content to load. */
 export function settleScroll() {
   if (stopRestore) stopRestore();
@@ -111,14 +114,23 @@ export function settleScroll() {
   go();
   if (!y) return;
   const start = Date.now();
-  const timer = setInterval(() => {
-    const t = Date.now() - start;
+  // Scroll again whenever the page grows (rows and images arriving) until it is tall enough to hold the spot.
+  const check = () => {
+    if (!stopRestore) return;
     if (Math.abs(scrollY - y) > 1) go();
+    const t = Date.now() - start;
     if (t > 4000 || (t > 1200 && Math.abs(scrollY - y) <= 1)) stopRestore();
-  }, 80);
-  stopRestore = () => { clearInterval(timer); removeEventListener('touchstart', stopRestore); removeEventListener('wheel', stopRestore); stopRestore = null; };
-  addEventListener('touchstart', stopRestore, { passive: true }); // the user took over
-  addEventListener('wheel', stopRestore, { passive: true });
+  };
+  const el = document.getElementById('app') || document.documentElement;
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(check) : null;
+  const timer = ro ? setTimeout(() => stopRestore && stopRestore(), 4000) : setInterval(check, 80); // old TV browsers
+  if (ro) ro.observe(el);
+  stopRestore = () => {
+    if (ro) { ro.disconnect(); clearTimeout(timer); } else clearInterval(timer);
+    for (const e of INPUT) removeEventListener(e, stopRestore);
+    stopRestore = null;
+  };
+  for (const e of INPUT) addEventListener(e, stopRestore, { passive: true }); // the user took over
 }
 
 // The main tabs are places you go to, not places you come back from
