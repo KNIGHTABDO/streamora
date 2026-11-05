@@ -1,4 +1,5 @@
 // TorBox client. All calls go through our same-origin relay (/api/tb/*).
+import { mark } from '../lib/perf-mark.js';
 import { getTbKey, ls } from './store.js';
 import { fetchT } from './net.js';
 import { canRemuxMkv } from '../player/mkv-plan.js';
@@ -55,6 +56,8 @@ export async function tb(path, { method = 'GET', json, form, data, key, retry = 
   let r;
   try { r = await fetchT(`/api/tb/${path}`, init, 20000, 'TorBox', async r => ({ status: r.status, ok: r.ok, headers: r.headers, text: await r.text() })); }
   catch (e) { abort(signal); throw e.code === 'timeout' ? new TBError(e.message, 'timeout', 0) : new TBError('Could not reach the relay. Are you offline?', 'network', 0); }
+  mark('play:tb:' + path.split('?')[0].split('/').pop());
+  if (path.split('?')[0].endsWith('/checkcached')) mark('play:checkcached');
   if (r.status === 429 && retry) {
     await sleep(Math.min(10, +r.headers.get('Retry-After') || 2) * 1000, signal);
     return tb(path, { method, json, form, data, key, signal, retry: false });

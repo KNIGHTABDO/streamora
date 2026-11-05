@@ -1,5 +1,6 @@
 // Streamora app shell: theme, gates (Google → key → profile), navigation chrome, lazy pages.
 import './lib/diag.js'; // first, so its error hooks see the modules below too
+import { mark } from './lib/perf-mark.js';
 import { html, render, Component, useState, useEffect, useRef, useErrorBoundary } from '../vendor/preact-htm.js';
 import { installSketch } from './ui/sketch.js';
 import { Icon, Spinner, Toasts, ErrorNote, Btn, cx, toast } from './ui/components.js';
@@ -257,6 +258,7 @@ function PageHost({ route }) {
   const first = useRef(true);
   const shown = useRef(null);
   const ready = entry && entry.status;
+  useEffect(() => { if (ready === 'ok') mark('page:' + route.path); }, [full, ready]);
   useEffect(() => {
     if (ready !== 'ok') return;
     if (first.current) { first.current = false; return; }
@@ -374,7 +376,7 @@ function AppBanner() {
 // index.html loads the app CSS in parallel with the modules; render once it's in, so nothing paints unstyled.
 Promise.resolve(window.__streamoraCss).then(() => {
   render(html`<${App} />`, document.getElementById('app'));
-  requestAnimationFrame(() => requestAnimationFrame(() => window.__streamora && window.__streamora.markMounted()));
+  requestAnimationFrame(() => requestAnimationFrame(() => { mark('shell'); window.__streamora && window.__streamora.markMounted(); }));
 });
 
 if ('serviceWorker' in navigator && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {

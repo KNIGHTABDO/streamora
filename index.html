@@ -114,8 +114,8 @@
           h.rel = 'preload'; h.as = 'image'; h.href = heroImg; h.setAttribute('fetchpriority', 'high');
           document.head.appendChild(h);
         }
-        window.__streamoraCss = Promise.all(['css/paper.css', 'css/components.css', 'css/app.css'].map(css));
-        return Promise.all([window.__streamoraCss, import('./js/main.js')]);
+        window.__streamoraCss = Promise.all(['css/paper.css', 'css/components.css', 'css/app.css'].map(css)).then(function () { try { performance.mark('boot:css'); } catch (e) {} });
+        return Promise.all([window.__streamoraCss, import('./js/main.js').then(function (m) { try { performance.mark('boot:main'); } catch (e) {} return m; })]);
       });
       var loadLanding = once(function () {
         var scroll = !intro && 'scrollRestoration' in history;
@@ -179,8 +179,19 @@
       // a plain link, Forward or a typed address into sign-in works even if landing.js never loaded
       addEventListener('hashchange', function () { if (root.dataset.surface === 'landing' && path() === '/welcome') enterApp(); });
 
+      // One URL string check; the overlay module stays out of the normal boot graph.
+      var perfFlags = (location.search + '&' + location.hash.slice(location.hash.indexOf('?'))).match(/[?&]perf=[01](?=&|$)/g) || [];
+      var perfOff = perfFlags.some(function (s) { return s.slice(-1) === '0'; });
+      var perfOn = !perfOff && perfFlags.length > 0;
+      if (!perfFlags.length) { try { perfOn = localStorage.getItem('streamora:perf') === '1'; } catch (e) {} }
+      if (perfOff) { try { localStorage.removeItem('streamora:perf'); } catch (e) {} }
+      try { performance.mark('boot:gate'); } catch (e) {}
+      if (perfOn) mounted.then(function () {
+        if (window.__streamora.perf) import('./js/lib/perf.js').then(function (m) { if (window.__streamora.perf) m.start(); }).catch(function () {});
+      });
+
       window.__streamora = {
-        surface: surface, intro: intro, force: force,
+        surface: surface, intro: intro, force: force, perf: perfOn,
         who: function () { var p = (read('profiles') || []).filter(function (x) { return x.id === read('activeProfile'); })[0], g = read('google'); return (p && p.name) || (g && g.name && g.name.split(' ')[0]) || ''; },
         signedIn: function () { return !!read('google'); },
         wasSeen: !!seen,

@@ -1,5 +1,6 @@
 // #/watch/{type}/{id}?v=&t=&hash=&file=&fn=   and   #/watch/tb/{ref}?name=
 // Finds a source, resolves it on TorBox (auto-retrying the next source), asks to resume, then hands off to <Player>.
+import { mark } from '../lib/perf-mark.js';
 import { html, useState, useEffect, useRef } from '../../vendor/preact-htm.js';
 import { Btn, Icon, Reel, Img, Modal, Chip, cx, fmtTime, loadCSS, toast } from '../ui/components.js';
 import { meta as getMeta, backdropOf, nextVideo, isReleased } from '../core/meta.js';
@@ -71,9 +72,11 @@ function Session({ params, query }) {
 
   // 1. meta + resume question
   useEffect(() => {
+    mark('play:tap');
     getMeta(params.type, params.id, { signal: controller.current.signal }).then(m => {
       if (controller.current.signal?.aborted) return;
       if (!m) throw new Error('Title not found');
+      mark('play:meta');
       setMeta(m);
       const v = query.v ? (m.videos || []).find(x => x.id === query.v) || { id: query.v, season: +query.v.split(':').slice(-2)[0] || 1, episode: +query.v.split(':').pop() } : null;
       setVideo(v);
@@ -147,9 +150,11 @@ function Session({ params, query }) {
       setAttempt(++n);   // skipped (already tried) sources don't count toward MAX_AUTO
       try {
         const app = isNative();
+        mark('play:resolve:start');
         const stream = await resolveStream({ infoHash: c.infoHash, fileIdx: c.fileIdx, filename: c.filename, season: video && video.season, episode: video && video.episode, direct: app, known: known.current, signal: controller.current.signal },
           t => me === gen.current && setStep(t));
         if (me !== gen.current) return;
+        mark('play:link');
         if (typeof warmMp4Tail === 'function') warmMp4Tail(stream, { native: app, signal: controller.current.signal });
         setReady({ stream, info: null, source: c });
         return;
@@ -286,8 +291,10 @@ function SourcePicker({ open, onClose, list, current, onPick }) {
 function LibraryWatch({ link, name }) {
   const [st, setSt] = useState({ ready: null, err: null });
   useEffect(() => {
+    mark('play:tap');
     const ac = new AbortController();
-    resolveLink(link, { direct: isNative(), signal: ac.signal }).then(stream => { if (!ac.signal.aborted) { warmMp4Tail(stream, { native: isNative(), signal: ac.signal }); setSt({ ready: { stream, info: null } }); } }).catch(err => { if (!ac.signal.aborted) setSt({ err }); });
+    mark('play:resolve:start');
+    resolveLink(link, { direct: isNative(), signal: ac.signal }).then(stream => { if (!ac.signal.aborted) { mark('play:link'); warmMp4Tail(stream, { native: isNative(), signal: ac.signal }); setSt({ ready: { stream, info: null } }); } }).catch(err => { if (!ac.signal.aborted) setSt({ err }); });
     return () => ac.abort();
   }, []);
   const onBack = () => back();

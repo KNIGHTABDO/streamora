@@ -338,9 +338,21 @@ function Diagnostics() {
 }
 
 function About() {
+  const [perf, setPerf] = useState(() => !!window.__streamora?.perf);
+  const speed = async enabled => {
+    setPerf(enabled);
+    if (window.__streamora) window.__streamora.perf = enabled;
+    try { enabled ? localStorage.setItem('streamora:perf', '1') : localStorage.removeItem('streamora:perf'); } catch {}
+    // Disabling before the first import finishes must not start a stale overlay.
+    try {
+      const m = await import('../lib/perf.js');
+      if (window.__streamora?.perf) m.start(); else m.stop();
+    } catch { toast('Could not load the speed overlay', { kind: 'error' }); }
+  };
   return html`<div class="panel stack st-about">
     <div class="cluster"><${Reel} mood="popcorn" size=${110} /><div><h2>Streamora</h2><div class="type faint">version ${VERSION}</div></div></div>
     <p>A sketchbook that plays movies. Bring your own TorBox key; everything else is kept in your own Google Drive.</p>
+    <${Toggle} checked=${perf} onChange=${speed} label="Show speed overlay" />
     <${Diagnostics} />
     <h3>Thanks to</h3>
     <ul>

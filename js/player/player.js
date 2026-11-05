@@ -6,6 +6,7 @@
 //   onFatal(err, pos) (stream died or stalled; pos = real seconds to resume at: parent tries another source), onPickSource(), onBack()
 //   engine: 'web' (a <video>) | 'vlc' (iPhone/iPad app: VLC draws behind the transparent page, see vlc.js; same controls)
 // Emits window 'streamora:playback' events (see emit()).
+import { mark } from '../lib/perf-mark.js';
 import { html, useState, useEffect, useRef, useMemo, useCallback } from '../../vendor/preact-htm.js';
 import { Icon, Reel, cx, fmtTime, toast, Img } from '../ui/components.js';
 import { registerIcons } from '../ui/icons.js';
@@ -212,20 +213,28 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       }, 25000);
     };
     const unstall = () => clearTimeout(stallT);
+    // Observe presentation once without changing attachment or autoplay ordering.
+    let frame, framed = false, seeking = false;
+    const firstFrame = () => { if (!framed) { framed = true; mark('play:firstframe'); } };
+    const seekPlaying = () => { if (seeking) { seeking = false; mark('seek:playing'); } };
+    try { if (v.requestVideoFrameCallback) frame = v.requestVideoFrameCallback(firstFrame); } catch {}
     const ev = {
+      loadedmetadata: () => mark('play:loadedmetadata'),
+      loadeddata: () => { if (frame == null) firstFrame(); },
+      seeking: () => { seeking = true; mark('seek:start'); },
       timeupdate: () => { up(); position(); }, durationchange: up, progress: up,
       play: () => { setBlocked(false); setSt(x => ({ ...x, playing: true, ended: false })); poke(); ms && (ms.playbackState = 'playing'); emit('start'); },
       pause: () => { setSt(x => ({ ...x, playing: false })); setUi(true); save(); unstall(); ms && (ms.playbackState = 'paused'); if (!v.ended) emit('pause'); },
       waiting: () => { setSt(x => ({ ...x, waiting: true })); stall(); },
-      playing: () => { setStarted(true); setSt(x => ({ ...x, waiting: false })); unstall(); },
+      playing: () => { seekPlaying(); setStarted(true); setSt(x => ({ ...x, waiting: false })); unstall(); },
       canplay: () => { setSt(x => ({ ...x, waiting: false })); unstall(); },
-      seeked: up,
+      seeked: () => { up(); if (!v.paused && v.readyState >= 3) seekPlaying(); },
       volumechange: () => setSt(x => ({ ...x, vol: v.volume, muted: v.muted })),
       ratechange: () => { rateRef.current = v.playbackRate; setSt(x => ({ ...x, rate: v.playbackRate })); },
       ended: () => { setSt(x => ({ ...x, ended: true, playing: false })); save(true); pctRef.current = 100; emit('stop'); },
     };
     for (const [k, f] of Object.entries(ev)) v.addEventListener(k, f);
-    return () => { unstall(); if (!v.ended) emit('stop'); for (const [k, f] of Object.entries(ev)) v.removeEventListener(k, f); };
+    return () => { if (frame != null) { try { v.cancelVideoFrameCallback(frame); } catch {} } unstall(); if (!v.ended) emit('stop'); for (const [k, f] of Object.entries(ev)) v.removeEventListener(k, f); };
   }, []);
 
   // ------------------------------------------------ progress
@@ -321,14 +330,14 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     if (mem.subLang === 'off') { autoSubbed.current = true; return; }
     // the track this show remembered, by name (its language may be unknown)
     const kept = mem.subName && vt.subs.find(t => t.id >= 0 && t.name === mem.subName);
-    if (kept) { autoSubbed.current = true; vlc.setSub(kept.id); return; }
+    if (kept) { autoSubbed.current = true; mark('play:subs:picked'); vlc.setSub(kept.id); return; }
     if (!want || want === 'off') { autoSubbed.current = true; return; }
     const name = langName(want).toLowerCase();
     const isWant = t => t.name.toLowerCase().includes(name) || new RegExp(`\\b${want}\\b`, 'i').test(t.name);
     const aud = vt.audio.find(t => t.id === vt.audioId);
     if (!mem.subLang && aud && isWant(aud)) { autoSubbed.current = true; return; }
     const inFile = vt.subs.find(t => t.id >= 0 && isWant(t));
-    if (inFile) { autoSubbed.current = true; vlc.setSub(inFile.id); return; }
+    if (inFile) { autoSubbed.current = true; mark('play:subs:picked'); vlc.setSub(inFile.id); return; }
     if (!extDone) return;
     autoSubbed.current = true;
     const before = subtitleLoader.version;
@@ -366,7 +375,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
           bestOf(list, want).then(hit => {
             if (gone || !subtitleLoader.isCurrent(before)) return;
             if (hit) chooseExt(hit.sub, false, hit.shift);
-            else if (mem.subLang) { const em = trackLabels((info && info.details && info.details.subtitles) || {}).find(([, x]) => x.lang_iso === want); if (em) setBurn(em[0]); }
+            else if (mem.subLang) { const em = trackLabels((info && info.details && info.details.subtitles) || {}).find(([, x]) => x.lang_iso === want); if (em) { mark('play:subs:picked'); setBurn(em[0]); } }
           });
         }
       }).catch(() => {});
@@ -378,6 +387,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   const auto = useRef(null), onSub = useRef(null);   // auto-picked subtitle | { sub, secs, fixed, done } now showing
   const teach = (sub, kind, d) => { if (sub && sub.id && !String(sub.id).startsWith('file:')) subTaste.set(learn(subTaste.get(), sub, kind, d)); };
   const chooseExt = async (it, user, shift) => {
+    mark('play:subs:picked');
     if (user && it && auto.current && auto.current.id !== it.id && auto.current.lang === it.lang) teach(auto.current, 'bad');
     if (user) auto.current = null; else if (it) auto.current = it;
     onSub.current = it ? { sub: it, secs: 0, fixed: false, done: false } : null;
@@ -411,6 +421,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     if (!f) return;
     setBurn('none');
     autoSubbed.current = true;
+    mark('play:subs:picked');
     auto.current = onSub.current = null;
     setDelay(0);
     await subtitleLoader.choose({ id: 'file:' + f.name, label: f.name, lang: s.subsLang, file: f });

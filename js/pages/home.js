@@ -1,5 +1,6 @@
 // Home: rotating riso hero, greeting, Continue Watching, and the shelves.
-import { html, useState, useEffect, useMemo, useRef } from '../../vendor/preact-htm.js';
+import { mark } from '../lib/perf-mark.js';
+import { html, useState, useEffect, useLayoutEffect, useMemo, useRef } from '../../vendor/preact-htm.js';
 import { Page, Hero, Row, PosterCard, Btn, IconBtn, Icon, Reel, toast, useAsync, loadCSS, cx, hrefTitle, shuffle } from '../ui/components.js';
 import { useStore, progress, hidden, history, diary, watchlist, profiles, activeProfileId, keyStore, ls } from '../core/store.js';
 import { continueWatching, hideFromContinue } from '../core/progress.js';
@@ -11,6 +12,11 @@ import { newEps } from '../lib/newEpisodes.js';
 import { loadGenres, genreTaste } from '../lib/stats.js';
 
 loadCSS('css/pages/home.css');
+
+// Launch milestones are recorded once, even while Home stays mounted behind another page.
+const homeMarks = new Set();
+function homeMark(name) { if (!homeMarks.has(name)) { homeMarks.add(name); mark(name); } }
+function rowMark(items) { if (items?.length) homeMark('home:row1'); }
 
 const YEAR = new Date().getFullYear();
 
@@ -81,6 +87,7 @@ function HeroCarousel({ items }) {
 // ---------------------------------------------------------------- continue watching
 function ContinueRow({ items }) {
   if (!items.length) return null;
+  rowMark(items);
   const remove = it => {
     hideFromContinue(it.id);
     toast(html`Removed “${it.name}”. <button type="button" class="home-undo" onClick=${() => hidden.update(h => h.filter(x => x !== it.id))}>Undo</button>`, { icon: 'close', ms: 5000 });
@@ -117,6 +124,7 @@ function BecauseRow({ kids }) {
     return { name: seed.name, genre: g, items: list.filter(x => !seen.has(x.id)).slice(0, 20) };
   }, [seed && seed.id]);
   if (!q.data || !q.data.items.length) return null;
+  rowMark(q.data.items);
   return html`<${Row} title=${`Because you watched ${q.data.name}`} kicker=${`more ${q.data.genre.toLowerCase()}`} icon="sparkle" items=${q.data.items} />`;
 }
 
@@ -158,6 +166,7 @@ function TasteRows({ kids }) {
   }, [h.length, (dia || []).length, kids]);
 
   if (!h || !h.length || !q.data || !q.data.length) return null;
+  rowMark(q.data[0]?.items);
   return html`${q.data.map(r => html`<${Row} key=${r.genre} title=${`Because you like ${r.genre}`} kicker=${`more ${r.genre.toLowerCase()}`} icon="sparkle" items=${r.items} href=${`#/genre/movie/${encodeURIComponent(r.genre)}`} />`)}`;
 }
 
@@ -184,6 +193,7 @@ function PremiumNotice() {
 function WatchlistRow() {
   const wl = useStore(watchlist);
   if (!wl.length) return null;
+  rowMark(wl);
   return html`<${Row} title="From your watchlist" kicker="pinned for later" icon="heart" items=${wl.slice(0, 20)} href="#/watchlist" />`;
 }
 
@@ -191,6 +201,7 @@ function WatchlistRow() {
 function NewEpisodesRow() {
   const { items = [] } = useStore(newEps);
   if (!items.length) return null;
+  rowMark(items);
   return html`<${Row} title="New episodes" kicker="fresh off the press" icon="calendar" wide items=${items.slice(0, 20)} href="#/calendar"
     render=${e => html`<${PosterCard} key=${e.id} wide item=${{ id: e.showId, type: 'series', name: e.name, poster: e.poster, background: e.background }}
       href=${`#/watch/series/${encodeURIComponent(e.showId)}?v=${encodeURIComponent(e.id)}`} label=${`S${e.season} · E${e.episode}${e.title ? ' · ' + e.title : ''}`} badge="new" />`} />`;
@@ -202,6 +213,7 @@ function CatRow({ title, kicker, icon, type, id, opts, href, numbered, limit = 2
   let items = q.data;
   if (items && filter) items = items.filter(filter);
   if (items) items = items.slice(0, numbered ? 10 : limit);
+  if (!q.loading && !q.error) rowMark(items);
   return html`<${Row} title=${title} kicker=${kicker} icon=${icon} items=${items} loading=${q.loading} error=${q.error} retry=${q.reload} href=${href} numbered=${numbered} eager=${eager} />`;
 }
 
@@ -223,6 +235,19 @@ function saveHero(kids, list) {
 
 // ---------------------------------------------------------------- page
 export default function Home() {
+  useLayoutEffect(() => {
+    const el = document.querySelector('main.home');
+    if (!el) return;
+    const loaded = e => {
+      const img = e.target;
+      if (!img.naturalWidth) return;
+      if (img.matches('.hero-color img')) homeMark('home:hero');
+      if (img.matches('.pc-photo img')) homeMark('home:poster1');
+    };
+    el.addEventListener('load', loaded, true);
+    el.querySelectorAll('.hero-color img, .pc-photo img').forEach(img => { if (img.complete) loaded({ target: img }); });
+    return () => el.removeEventListener('load', loaded, true);
+  }, []);
   const list = useStore(profiles);
   const pid = useStore(activeProfileId);
   const profile = list.find(p => p.id === pid);

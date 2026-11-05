@@ -1,5 +1,6 @@
 // Finding sources for a title via Torrentio and the built-in debrid addons. TorBox's own cache check decides what's
 // cached; the addons' flags ([TB+], ⚡) only count when that check can't answer.
+import { mark } from '../lib/perf-mark.js';
 import { getTbKey, keyStore } from './store.js';
 import { fetchT } from './net.js';
 import { addonStreams } from './addons.js';
@@ -115,6 +116,7 @@ export async function streams(type, id, { signal, onPartial } = {}) {
         if (!r.ok) throw new Error(`Source search failed (${r.status})`);
         return r.json();
       });
+      mark('play:torrentio');
       return r;
     };
     let j;
@@ -125,7 +127,7 @@ export async function streams(type, id, { signal, onPartial } = {}) {
   // Each addon publishes independently. Waiting for one never holds up another's cache check.
   torrentio().catch(() => { if (!signal?.aborted) failed.push('Torrentio'); }).finally(() => { tio = true; finished++; publish(); });
   addonStreams(type, id, key, { signal, onPartial: rows => { receive(rows).catch(() => {}); } })
-    .then(rows => receive(rows))
+    .then(rows => { mark('play:addons'); return receive(rows); })
     .catch(() => { if (!signal?.aborted) failed.push('Addons'); }).finally(() => { finished++; publish(); });
   return first;
 }
