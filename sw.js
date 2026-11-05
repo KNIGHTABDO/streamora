@@ -4,7 +4,7 @@
 // API, video and addon traffic never touches the cache. In dev (unbuilt) the SW isn't registered at all.
 const BUILD = '__BUILD__';
 const VERSION = 'streamora-shell-' + BUILD;
-const SHELL = ['./', './index.html', './css/paper.css', './css/components.css', './css/app.css', './js/main.js', './vendor/preact-htm.js', './art/icon.svg', './manifest.webmanifest']; // __SHELL__
+const SHELL = ['./', './css/paper.css', './css/components.css', './css/app.css', './js/main.js', './vendor/preact-htm.js', './art/icon.svg', './manifest.webmanifest']; // __SHELL__
 const RUNTIME = 'streamora-rt'; // other same-origin files (art, media), fonts
 const KEEP = k => k === VERSION || k === RUNTIME || k.startsWith('streamora-json');
 const shellPaths = new Set(SHELL.map(u => new URL(u, self.location).pathname));
@@ -41,10 +41,14 @@ async function navigation(req) {
       return new Response('', { headers: { Refresh: '0', 'Content-Type': 'text/html' } });
     }
   }
-  const hit = await caches.match('./index.html', { cacheName: VERSION });
-  if (hit) return hit;
-  try { return await fetch(req); } catch { return (await caches.match('./index.html')) || offline(); }
+  // The page is cached as './' only: Pages answers /index.html with a 308 to /, and a redirected response handed to a
+  // navigation fails the load (ERR_FAILED). plain() also covers a redirect cached by an older worker.
+  const hit = await caches.match('./', { cacheName: VERSION });
+  if (hit) return plain(hit);
+  try { return await fetch(req); } catch { const old = await caches.match('./'); return old ? plain(old) : offline(); }
 }
+
+const plain = r => (r.redirected ? new Response(r.body, { status: r.status, statusText: r.statusText, headers: r.headers }) : r);
 
 async function shellFile(req) {
   const hit = await caches.match(req, { cacheName: VERSION, ignoreSearch: true });
