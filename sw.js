@@ -29,6 +29,8 @@ const fonts = url => /^(fonts\.googleapis\.com|fonts\.gstatic\.com)$/.test(url.h
 const isAppPage = url => url.origin === location.origin && (url.pathname === '/' || url.pathname === '/index.html');
 
 let skipAsked = 0;
+const SWAP_PAGE = '<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark"><meta http-equiv="refresh" content="2">'
+  + '<script>navigator.serviceWorker.addEventListener("controllerchange",function(){location.reload()});setTimeout(function(){location.reload()},1500)</script>';
 async function navigation(req) {
   // A reload with only this one window open and a newer deploy waiting: switch to it and load again, so the page and
   // every module come from the same deploy. Guarded so a stuck worker can't cause a reload loop.
@@ -38,7 +40,9 @@ async function navigation(req) {
     if (wins.length <= 1) {
       skipAsked = Date.now();
       waiting.postMessage('skipWaiting');
-      return new Response('', { headers: { Refresh: '0', 'Content-Type': 'text/html' } });
+      // Chrome ignores a Refresh header on a worker-made response, so the page reloads itself: as soon as the new
+      // worker takes control, or after 1.5 s at the latest (meta refresh covers disabled scripts).
+      return new Response(SWAP_PAGE, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
     }
   }
   // The page is cached as './' only: Pages answers /index.html with a 308 to /, and a redirected response handed to a
