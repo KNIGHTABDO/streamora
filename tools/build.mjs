@@ -25,11 +25,13 @@ function graph(entry) {
   return [...seen].map(f => relative(dist, f).split(sep).join('/'));
 }
 const boot = graph('js/main.js'), home = graph('js/pages/home.js').filter(f => !boot.includes(f));
+// A cold deep link to a watch page (app resume, next episode) fetches the player graph in parallel instead of as a waterfall.
+const watch = graph('js/pages/watch.js').filter(f => !boot.includes(f));
 // The boot gate preloads these when it opens the app (not on the landing, which doesn't need them).
 const html = `${dist}/index.html`;
 const page = readFileSync(html, 'utf8');
 if (!page.includes('// __PRELOAD__')) throw new Error('index.html: __PRELOAD__ marker missing');
-writeFileSync(html, page.replace(/^.*\/\/ __PRELOAD__$/m, `      var PRELOAD = ${JSON.stringify({ boot: boot.filter(f => f !== 'js/main.js'), home })}; // __PRELOAD__`));
+writeFileSync(html, page.replace(/^.*\/\/ __PRELOAD__$/m, `      var PRELOAD = ${JSON.stringify({ boot: boot.filter(f => f !== 'js/main.js'), home, watch })}; // __PRELOAD__`));
 
 const hash = createHash('sha256');
 for (const f of readdirSync(dist, { recursive: true, withFileTypes: true }).filter(d => d.isFile()).map(d => `${d.parentPath || d.path}/${d.name}`).sort()) {

@@ -88,7 +88,7 @@
       var markMounted;
       var mounted = new Promise(function (done) { markMounted = done; });
       // tools/build.mjs fills this with the app's static module graph; in dev it stays empty.
-      var PRELOAD = { boot: [], home: [] }; // __PRELOAD__
+      var PRELOAD = { boot: [], home: [], watch: [] }; // __PRELOAD__
       function preload(list) {
         list.forEach(function (href) {
           var l = document.createElement('link');
@@ -99,8 +99,8 @@
       // CSS and the modules download together; main.js waits for window.__streamoraCss before it renders,
       // so the app never paints unstyled.
       var loadApp = once(function () {
-        var home = path() === '/';
-        preload(PRELOAD.boot.concat(home ? PRELOAD.home : []));
+        var home = path() === '/', watch = path().indexOf('/watch/') === 0;
+        preload(PRELOAD.boot.concat(home ? PRELOAD.home : [], watch ? PRELOAD.watch || [] : []));
         // Home's hero image is known from the last visit: start it now instead of after the modules and catalogs.
         var hero = home && read('hero-next');
         var heroImg = hero && hero.items && hero.items[0] && (hero.items[0].background || hero.items[0].poster);
