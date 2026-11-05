@@ -7,7 +7,7 @@ import { useStore, saveTbKey, keyStore, ls } from '../core/store.js';
 import { user } from '../core/tb.js';
 import { account, returning, signInWithRedirect, startDeviceSignIn, finishDeviceSignIn } from '../core/google.js';
 import { syncNow } from '../core/sync.js';
-import { isNative } from '../player/native.js';
+import { isNative } from '../core/platform.js';
 import { navigate } from '../router.js';
 
 loadCSS('css/pages/welcome.css');

@@ -11,8 +11,7 @@ import { initSync } from './core/sync.js';
 import { initFocus } from './ui/focus.js';
 import { newEps, badgeCount, checkNewEpisodes, notifyNewEpisodes } from './lib/newEpisodes.js';
 import { checkForUpdate } from './lib/update.js';
-import { isIOS } from './player/engine.js';
-import { isNative } from './player/native.js';
+import { isIOS, isNative } from './core/platform.js';
 
 // WKWebView loads the live site: keep quick taps from zooming or selecting the app UI.
 // Browser visitors keep pinch zoom for accessibility.
@@ -48,6 +47,28 @@ function Offline() {
     return () => { removeEventListener('online', on); removeEventListener('offline', down); };
   }, []);
   return off ? html`<div class="shell-offline" role="status"><${Icon} name="warn" size=${18} /><span>You're offline: showing what's saved</span></div>` : null;
+}
+
+// "New version ready" strip: a deploy installs in the background and normally takes over on the next launch.
+// Tapping Reload switches now; the page reloads once the new worker is in control.
+let swWaiting = null;
+const swSubs = new Set();
+function setWaiting(w) { swWaiting = w; swSubs.forEach(f => f(w)); }
+function SwUpdate() {
+  const [w, set] = useState(swWaiting);
+  const [gone, setGone] = useState(false);
+  useEffect(() => { swSubs.add(set); return () => swSubs.delete(set); }, []);
+  if (!w || gone) return null;
+  const reload = e => {
+    e.preventDefault();
+    navigator.serviceWorker.addEventListener('controllerchange', () => location.reload(), { once: true });
+    w.postMessage('skipWaiting');
+    setTimeout(() => location.reload(), 3000); // the worker didn't take over: a plain reload still helps
+  };
+  return html`<div class="shell-update" role="status"><div class="toast ink-edge wide"><${Icon} name="sparkle" size=${20} />
+    <span>New version ready. <a href="#" onClick=${reload}>Reload</a></span>
+    <button type="button" aria-label="Later" onClick=${() => setGone(true)}><${Icon} name="close" size=${16} /></button>
+  </div></div>`;
 }
 
 // ------------------------------------------------------------ theme
@@ -283,6 +304,7 @@ function App() {
   if (toLanding) return html`<${Toasts} />`;
   return html`
     <${Offline} />
+    <${SwUpdate} />
     ${!chromeless && html`<${TopNav} route=${route} profile=${profile} onMore=${() => setMore(true)} moreOpen=${more} badge=${badge} />`}
     ${!chromeless && html`<${AppBanner} />`}
     <${PageHost} route=${route} />
@@ -304,11 +326,22 @@ function AppBanner() {
   </div>`;
 }
 
-render(html`<${App} />`, document.getElementById('app'));
-requestAnimationFrame(() => requestAnimationFrame(() => window.__streamora && window.__streamora.markMounted()));
+// index.html loads the app CSS in parallel with the modules; render once it's in, so nothing paints unstyled.
+Promise.resolve(window.__streamoraCss).then(() => {
+  render(html`<${App} />`, document.getElementById('app'));
+  requestAnimationFrame(() => requestAnimationFrame(() => window.__streamora && window.__streamora.markMounted()));
+});
 
 if ('serviceWorker' in navigator && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  navigator.serviceWorker.register('./sw.js').then(reg => {
+    const had = !!navigator.serviceWorker.controller; // first install: nothing to announce
+    const watch = w => w && w.addEventListener('statechange', () => w.state === 'installed' && had && setWaiting(w));
+    if (reg.waiting && had) setWaiting(reg.waiting);
+    watch(reg.installing);
+    reg.addEventListener('updatefound', () => watch(reg.installing));
+    // a long-open app (TV, the iOS app in the background) still finds new deploys
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && reg.update().catch(() => {}));
+  }).catch(() => {});
 }
 
 // Trakt and the daily new-episode check start after first paint

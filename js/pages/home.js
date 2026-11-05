@@ -203,6 +203,22 @@ function CatRow({ title, kicker, icon, type, id, opts, href, numbered, limit = 2
   return html`<${Row} title=${title} kicker=${kicker} icon=${icon} items=${items} loading=${q.loading} error=${q.error} retry=${q.reload} href=${href} numbered=${numbered} eager=${eager} />`;
 }
 
+// ---------------------------------------------------------------- saved hero
+// 'hero-next' holds the slides for the next launch (kids and grown-up lists apart). index.html reads the first
+// background to preload it before any module loads, so keep the shape { kids, items: [{ background, ... }] }.
+const HERO_FIELDS = ['id', 'type', 'name', 'background', 'poster', 'logo', 'description', 'genres', 'imdbRating', 'releaseInfo', 'runtime', 'year', 'anime'];
+const shownHero = {}; // per session: coming back to Home keeps the same slides
+function savedHero(kids) {
+  if (shownHero[kids]) return shownHero[kids];
+  const s = ls.get('hero-next', null);
+  return (shownHero[kids] = s && !!s.kids === kids && Array.isArray(s.items) && s.items.length ? s.items : null);
+}
+function saveHero(kids, list) {
+  if (!list || !list.length) return;
+  const items = shuffle(list).slice(0, 6).map(m => Object.fromEntries(HERO_FIELDS.filter(k => m[k] != null).map(k => [k, m[k]])));
+  ls.set('hero-next', { kids, items, at: Date.now() });
+}
+
 // ---------------------------------------------------------------- page
 export default function Home() {
   const list = useStore(profiles);
@@ -215,18 +231,27 @@ export default function Home() {
   const cw = useMemo(() => continueWatching(p, hid), [p, hid]);
   const eagerFirst = !cw.length;   // the first shelf gets high-priority posters
 
+  // The hero shows the slides picked at the end of the last visit right away (index.html preloads the first image),
+  // then fetches fresh ones in the background for next time. With nothing saved, it shows the fresh list as soon as it's in.
+  const saved = useMemo(() => savedHero(kids), [kids]);
   const heroQ = useAsync(async () => {
+    let list;
     if (kids) {
       const [a, b] = await Promise.allSettled([catalog('movie', 'top', { genre: 'Animation' }), catalog('movie', 'top', { genre: 'Family' })]);
-      return shuffle([...(a.value || []).slice(0, 5), ...(b.value || []).slice(0, 3)]).filter(m => m.background).slice(0, 6);
+      list = shuffle([...(a.value || []).slice(0, 5), ...(b.value || []).slice(0, 3)]).filter(m => m.background).slice(0, 6);
+    } else {
+      const [m, s, a] = await Promise.allSettled([catalog('movie', 'top'), catalog('series', 'top'), catalog('anime', 'kitsu-anime-trending')]);
+      const pick = (r, n) => (r.value || []).filter(x => x.background && x.description).slice(0, n);
+      list = shuffle([...pick(m, 3), ...pick(s, 2), ...pick(a, 1)]);
     }
-    const [m, s, a] = await Promise.allSettled([catalog('movie', 'top'), catalog('series', 'top'), catalog('anime', 'kitsu-anime-trending')]);
-    const pick = (r, n) => (r.value || []).filter(x => x.background && x.description).slice(0, n);
-    return shuffle([...pick(m, 3), ...pick(s, 2), ...pick(a, 1)]);
+    saveHero(kids, list);
+    return list;
   }, [kids]);
+  const heroItems = saved || heroQ.data || [];
+  if (!saved && heroQ.data && heroQ.data.length) shownHero[kids] = heroQ.data;
 
   return html`<${Page} bleed class="home">
-    <${HeroCarousel} items=${heroQ.data || []} />
+    <${HeroCarousel} items=${heroItems} />
     <div class="home-body">
       <section class="home-greet">
         <${Reel} mood=${g.mood} size=${92} />

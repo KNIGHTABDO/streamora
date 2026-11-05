@@ -1,17 +1,66 @@
-// Streamora service worker: network-first app shell (cache only as offline fallback), never caches API/video/addon data.
-// tools/build.mjs stamps __BUILD__ with a content hash; in dev it stays as-is and the network always wins anyway.
-const VERSION = 'streamora-__BUILD__';
-const SHELL = ['./', './index.html', './css/paper.css', './css/components.css', './css/app.css', './js/main.js', './vendor/preact-htm.js', './art/icon.svg', './manifest.webmanifest'];
+// Streamora service worker: cache-first app shell, one complete cache per deploy, so a launch needs no network round trip.
+// tools/build.mjs stamps __BUILD__ with a content hash and fills SHELL with every app file of that deploy. A new deploy
+// installs in the background and takes over on the next launch (or right away when the "Reload" strip is tapped).
+// API, video and addon traffic never touches the cache. In dev (unbuilt) the SW isn't registered at all.
+const BUILD = '__BUILD__';
+const VERSION = 'streamora-shell-' + BUILD;
+const SHELL = ['./', './index.html', './css/paper.css', './css/components.css', './css/app.css', './js/main.js', './vendor/preact-htm.js', './art/icon.svg', './manifest.webmanifest']; // __SHELL__
+const RUNTIME = 'streamora-rt'; // other same-origin files (art, media), fonts
+const KEEP = k => k === VERSION || k === RUNTIME || k.startsWith('streamora-json');
+const shellPaths = new Set(SHELL.map(u => new URL(u, self.location).pathname));
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).catch(() => {}).then(() => self.skipWaiting()));
+  e.waitUntil((async () => {
+    const legacy = !(await caches.keys()).some(k => k.startsWith('streamora-shell-')); // the old network-first worker is active
+    const c = await caches.open(VERSION);
+    await c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' }))); // all or nothing: a half-cached deploy never goes live
+    // Coming from the old network-first worker, pages were loaded from the network anyway, so take over now (old behaviour).
+    if (legacy) await self.skipWaiting();
+  })());
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('streamora-') && k !== VERSION && !k.startsWith('streamora-json')).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('streamora-') && !KEEP(k)).map(k => caches.delete(k))))
+    .then(() => self.clients.claim()));
 });
+self.addEventListener('message', e => { if (e.data === 'skipWaiting') self.skipWaiting(); });
 
-const sameOriginShell = url => url.origin === location.origin && !url.pathname.startsWith('/api/') && /\.(html|css|js|mjs|svg|png|webmanifest|woff2?)$|\/$/.test(url.pathname);
+const sameOriginShell = url => url.origin === location.origin && !url.pathname.startsWith('/api/') && /\.(html|css|js|mjs|svg|png|webp|webmanifest|woff2?)$|\/$/.test(url.pathname);
 const fonts = url => /^(fonts\.googleapis\.com|fonts\.gstatic\.com)$/.test(url.hostname);
+const isAppPage = url => url.origin === location.origin && (url.pathname === '/' || url.pathname === '/index.html');
+
+let skipAsked = 0;
+async function navigation(req) {
+  // A reload with only this one window open and a newer deploy waiting: switch to it and load again, so the page and
+  // every module come from the same deploy. Guarded so a stuck worker can't cause a reload loop.
+  const waiting = self.registration.waiting;
+  if (waiting && Date.now() - skipAsked > 10000) {
+    const wins = await self.clients.matchAll({ type: 'window' });
+    if (wins.length <= 1) {
+      skipAsked = Date.now();
+      waiting.postMessage('skipWaiting');
+      return new Response('', { headers: { Refresh: '0', 'Content-Type': 'text/html' } });
+    }
+  }
+  const hit = await caches.match('./index.html', { cacheName: VERSION });
+  if (hit) return hit;
+  try { return await fetch(req); } catch { return (await caches.match('./index.html')) || offline(); }
+}
+
+async function shellFile(req) {
+  const hit = await caches.match(req, { cacheName: VERSION, ignoreSearch: true });
+  if (hit) return hit;
+  return fetch(req);
+}
+
+async function networkFirst(req) {
+  try {
+    const r = await fetch(req);
+    if (r.ok) { const copy = r.clone(); caches.open(RUNTIME).then(c => c.put(req, copy)); }
+    return r;
+  } catch {
+    return (await caches.match(req)) || Response.error();
+  }
+}
 
 self.addEventListener('fetch', e => {
   const req = e.request;
@@ -19,18 +68,14 @@ self.addEventListener('fetch', e => {
   const url = new URL(req.url);
   if (url.origin === location.origin && url.pathname.startsWith('/api/')) return;
   if (req.mode === 'navigate') {
-    e.respondWith(fetch(req).then(r => { if (r.ok) { const copy = r.clone(); caches.open(VERSION).then(c => c.put('./index.html', copy)); } return r; })
-      .catch(async () => (await caches.match('./index.html')) || offline()));
+    if (isAppPage(url)) e.respondWith(navigation(req));
+    else e.respondWith(networkFirst(req)); // privacy.html and friends
     return;
   }
-  if (sameOriginShell(url)) {
-    // network-first so a deploy shows up on the next load; cache is only the offline fallback
-    e.respondWith(fetch(req).then(r => { if (r.ok) { const copy = r.clone(); caches.open(VERSION).then(c => c.put(req, copy)); } return r; })
-      .catch(async () => (await caches.match(req)) || Response.error()));
-    return;
-  }
+  if (url.origin === location.origin && shellPaths.has(url.pathname)) { e.respondWith(shellFile(req)); return; }
+  if (sameOriginShell(url)) { e.respondWith(networkFirst(req)); return; }
   if (!fonts(url)) return; // video, m3u8, addon JSON: straight to network
-  e.respondWith(caches.open(VERSION).then(async c => {
+  e.respondWith(caches.open(RUNTIME).then(async c => {
     const hit = await c.match(req);
     const net = fetch(req).then(r => { if (r.ok || r.type === 'opaque') c.put(req, r.clone()); return r; }).catch(() => hit);
     return hit || net;
