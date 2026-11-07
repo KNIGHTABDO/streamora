@@ -28,7 +28,8 @@ function fixture(httpStatus = 0) {
       }
       return Response.json({ id: 'file', version: opts.method ? '2' : '1' });
     },
-  }, '({ syncNow, initSync, syncPending })');
+  // Hidden flushes have no public promise; tests await the real round rather than count microtasks.
+  }, '({ syncNow, initSync, syncPending, settle: () => running || Promise.resolve() })');
   return {
     ...sync, document, navigator, ls, uploads,
     async start() { await sync.initSync(); signedIn = true; },
@@ -117,7 +118,7 @@ test('a pending edit flushes exactly one upload on hide while online and signed 
   const f = fixture(); await f.start(); f.succeed();
   f.event('streamora:changed', 'p:test:progress');
   assert.equal(f.delay, 1500);
-  f.visibility('hidden'); await flush();
+  f.visibility('hidden'); await flush(); await f.settle();
   assert.equal(f.uploads.length, 1);
   assert.equal(f.uploads[0].visibility, 'hidden');
   assert.equal(f.ls.get('gd-clean'), f.ls.get('sync-changed'));
@@ -130,7 +131,7 @@ test('a pending edit hidden during backoff uploads only after visibility and the
   const f = fixture(); await f.start(); await f.syncNow();
   f.succeed(); f.event('streamora:changed', 'p:test:progress');
   assert.equal(f.delay, 5000);
-  f.visibility('hidden'); await flush();
+  f.visibility('hidden'); await flush(); await f.settle();
   assert.equal(f.uploads.length, 0); assert.equal(f.calls, 1);
   await f.tick(1000); f.visibility('visible'); await flush();
   assert.equal(f.delay, 4000);
@@ -143,7 +144,7 @@ test('a pending edit hidden during backoff uploads only after visibility and the
 test('a failed hide flush records backoff without attempting retries while hidden', async () => {
   const f = fixture(); await f.start(); f.failUpload();
   f.event('streamora:changed', 'p:test:progress');
-  f.visibility('hidden'); await flush();
+  f.visibility('hidden'); await flush(); await f.settle();
   assert.equal(f.uploads.length, 1);
   assert.equal(f.uploads[0].visibility, 'hidden');
   assert.equal(f.ls.get('gd-clean'), 0); assert.equal(f.syncPending(), true);

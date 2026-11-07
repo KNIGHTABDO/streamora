@@ -57,8 +57,18 @@ The baseline argument expects a server running the previous checkout. It is opti
 
 The JavaScript checks cover the installed VLC engine and classic progress events. A six-line Swift change emits classic-player duration metadata at its first available timer tick, rather than waiting for the next progress report. That earlier classic callback requires a rebuilt IPA. Existing IPAs retain the progress-event fallback.
 
-Native behavior was exercised through a fake Capacitor bridge in Chrome and unit tests. Swift/UIKit/MobileVLCKit were not compiled on this Linux machine, and real iPhone/iPad playback still needs device testing.
+Native behavior was exercised through a fake Capacitor bridge in Chrome and unit tests. The native change also compiled and packaged successfully on the GitHub Actions macOS runner. The v2.0.3 IPA is attached to the release; real iPhone/iPad playback still needs device testing.
 
 Runtime is compared with a 20% tolerance and a small absolute allowance for rounding, credits and speed changes. Explicit extended/director's/unrated cuts permit larger increases, while an 86-minute file against 173 minutes still fails. Series-wide average runtime is deliberately not used as an exact episode duration; per-episode runtime is used when supplied. Missing metadata remains unknown, rather than positive proof of identity.
 
 These checks prevent detected contradictions and unsafe substitutions. They are not content fingerprinting: a mislabeled film with the same name, year and plausible runtime can still evade metadata checks. This work does not verify that any live 173-minute source is the genuine Nolan film.
+
+## Production deployment
+
+- Source fix committed to `main` as `501d151`, tagged `v2.0.3`.
+- Website: https://streamora-5w5.pages.dev, version 2.0.3, shell build `646c61458ead`.
+- Deployment: https://86859493.streamora-5w5.pages.dev.
+- All seven mocked playback scenarios passed against production-served app assets with no page errors. Live version and both validation modules were checked after deployment.
+- Native build and release: https://github.com/KNIGHTABDO/streamora/actions/runs/42378165198. All build/package/release steps passed.
+- iPhone release: https://github.com/KNIGHTABDO/streamora/releases/tag/v2.0.3. The unsigned IPA still needs installation/signing through SideStore, AltStore or Sideloadly.
+- A follow-up test-fixture change awaits the actual hidden-sync promise rather than a fixed number of microtasks, resolving the Node 20 CI timing failure without changing application runtime code.
