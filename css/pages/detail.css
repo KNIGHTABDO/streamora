@@ -116,6 +116,7 @@
   transition: transform .2s var(--ease-pop), box-shadow .2s;
 }
 .det-src:hover, .det-src:focus-visible { transform: translateX(4px) rotate(-.4deg); box-shadow: var(--shadow-lift); }
+.det-src:disabled { cursor: default; opacity: .7; transform: none; box-shadow: var(--shadow); }
 .det-q { flex: none; width: 58px; height: 58px; display: grid; place-items: center; font-size: 24px; border: 2.5px solid var(--line); border-radius: 50% 46% 52% 44%; background: var(--paper-2); }
 .det-q.uhd { background: var(--a3); color: var(--on-accent); }
 .det-src-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }

@@ -7,6 +7,8 @@
 //   engine: 'web' (a <video>) | 'vlc' (iPhone/iPad app: VLC draws behind the transparent page, see vlc.js; same controls)
 // Emits window 'streamora:playback' events (see emit()).
 import { mark } from '../lib/perf-mark.js';
+import { watchIdentity } from '../lib/source-validation.js';
+import { contentError } from '../lib/source-identity.js';
 import { html, useState, useEffect, useRef, useMemo, useCallback } from '../../vendor/preact-htm.js';
 import { Icon, Reel, cx, fmtTime, toast, Img } from '../ui/components.js';
 import { registerIcons } from '../ui/icons.js';
@@ -99,6 +101,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   // per-show memory (audio language, subtitle language or 'off', speed): read once, written on save when the viewer changes one
   const mem = useMemo(() => (noProgress || !meta ? {} : showPrefs(meta.id)), []);
   const picked = useRef({});
+  const validation = useRef(null);
   // started from 0 on a finished episode/movie = a rewatch, so it may become unwatched again
   const rewatch = useMemo(() => !start && !!meta && !!(epState(meta.id, video && video.id) || {}).done, []);
   const rateRef = useRef(mem.rate || 1);
@@ -154,10 +157,23 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
 
   // Playback events for scrobblers (Trakt): window 'streamora:playback' { state: 'start'|'pause'|'stop', meta, video, progress 0-100 }
   const pctRef = useRef(0);
+  const emitted = useRef(null);
   const emit = state => {
-    if (!meta || noProgress) return;
+    if (!meta || noProgress || validation.current?.allowed() === false || emitted.current === state) return;
+    emitted.current = state;
     try { window.dispatchEvent(new CustomEvent('streamora:playback', { detail: { state, meta, video, progress: +pctRef.current.toFixed(2) } })); } catch {}
   };
+
+  // Use the metadata already loaded by the engine. Install before attachment, including fast VLC opens.
+  useEffect(() => {
+    const media = vRef.current;
+    const guard = watchIdentity(media, { meta, video, source, noProgress, onMismatch: message => {
+      vlc?.close();
+      fatal(contentError(message), 0);
+    } });
+    validation.current = guard;
+    return () => guard.stop();
+  }, [stream.direct]);
 
   // attach / re-attach when the url changes (keep position)
   useEffect(() => {
@@ -173,7 +189,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     if (vlc) vlc.setMeta({ title, subtitle: sub, poster: meta && meta.poster });   // lock screen / Now Playing
     (vlc ? vlc.open(src, { start: posRef.current, audioLang: mem.audioLang || s.audioLang, onFatal: (e, p) => !dead && fatal(e, p) })
       : attach(v, src, { remux: stream.remux, audioLang: mem.audioLang || s.audioLang, signal: controller.signal, start: isTc ? 0 : posRef.current, onFatal: (e, p) => !dead && (src === stream.direct && info && info.modelUrl ? (posRef.current = p || posRef.current, setDirect(false)) : fatal(e, offRef.current + (p || 0))) })).then(d => {
-      if (dead) return d();
+      if (dead || validation.current?.failed()) return d();
       detach = d;
       v.playbackRate = rateRef.current;
       const p = v.play();
@@ -186,6 +202,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
     const v = vRef.current;
     if (live) live.current = start;
     const up = () => {
+      if (validation.current?.allowed() === false) return;
       const dur = realDur(v);
       if (live) live.current = realNow(v);
       if (dur && v.currentTime > 0) pctRef.current = Math.min(100, realNow(v) / dur * 100);
@@ -226,7 +243,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
       play: () => { setBlocked(false); setSt(x => ({ ...x, playing: true, ended: false })); poke(); ms && (ms.playbackState = 'playing'); emit('start'); },
       pause: () => { setSt(x => ({ ...x, playing: false })); setUi(true); save(); unstall(); ms && (ms.playbackState = 'paused'); if (!v.ended) emit('pause'); },
       waiting: () => { setSt(x => ({ ...x, waiting: true })); stall(); },
-      playing: () => { seekPlaying(); setStarted(true); setSt(x => ({ ...x, waiting: false })); unstall(); },
+      playing: () => { if (validation.current?.allowed() === false) return; emit('start'); seekPlaying(); setStarted(true); setSt(x => ({ ...x, waiting: false })); unstall(); },
       canplay: () => { setSt(x => ({ ...x, waiting: false })); unstall(); },
       seeked: () => { up(); if (!v.paused && v.readyState >= 3) seekPlaying(); },
       volumechange: () => setSt(x => ({ ...x, vol: v.volume, muted: v.muted })),
@@ -240,7 +257,7 @@ export function Player({ meta, video, stream, info, start = 0, source, noProgres
   // ------------------------------------------------ progress
   const save = useCallback((final) => {
     const v = vRef.current;
-    if (noProgress || !v || !meta) return;
+    if (noProgress || !v || !meta || validation.current?.allowed() === false) return;
     const dur = realDur(v);
     const t = final ? dur : realNow(v);
     const prefs = Object.keys(picked.current).length ? picked.current : null;

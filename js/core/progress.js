@@ -48,7 +48,7 @@ export function saveProgress(meta, video, t, dur, source, opts = {}) {
 /** Seconds to resume at, or 0. */
 export function resumeAt(metaId, videoId) {
   const e = (progress.get()[metaId] || { eps: {} }).eps[videoId || '_'];
-  return e && !e.done && e.t > 30 ? e.t : 0;
+  return e && !e.sourceMismatch && !e.done && e.t > 30 ? e.t : 0;
 }
 
 /** Per-show player choices ({ audioLang, subLang, rate }) or {}. */
@@ -65,7 +65,7 @@ export function continueWatching(p = progress.get(), hid = hidden.get()) {
   for (const e of Object.values(p)) {
     if (hid.includes(e.id)) continue;
     const cur = e.eps[e.last || '_'];
-    if (!cur) continue;
+    if (!cur || cur.sourceMismatch) continue;
     if (!cur.done) {
       out.push({ ...e, pct: cur.t / cur.dur, label: e.last ? `S${cur.season} · E${cur.episode}` : '', play: { videoId: e.last, t: cur.t } });
     } else if (e.next && (!e.next.released || new Date(e.next.released) <= new Date())) {

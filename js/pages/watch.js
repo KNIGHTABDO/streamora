@@ -1,7 +1,9 @@
 // #/watch/{type}/{id}?v=&t=&hash=&file=&fn=   and   #/watch/tb/{ref}?name=
 // Finds a source, resolves it on TorBox (auto-retrying the next source), asks to resume, then hands off to <Player>.
 import { mark } from '../lib/perf-mark.js';
-import { html, useState, useEffect, useRef } from '../../vendor/preact-htm.js';
+import { expectedIdentity, sourceIssue, sourceFileKey, contentError, baseName } from '../lib/source-identity.js';
+import { assessSources, rejectedSource, rejectSource, invalidateRememberedSource } from '../lib/source-validation.js';
+import { html, useState, useEffect, useRef, useMemo } from '../../vendor/preact-htm.js';
 import { Btn, Icon, Reel, Img, Modal, Chip, cx, fmtTime, loadCSS, toast } from '../ui/components.js';
 import { meta as getMeta, backdropOf, nextVideo, isReleased } from '../core/meta.js';
 import { streams, rankStreams, fmtSize, isPhone, webPrefs, peekStreams, prefetchStreams } from '../core/sources.js';
@@ -42,6 +44,7 @@ function friendly(e) {
   const code = e && e.code;
   if (code === 'nokey' || code === 'badkey') return { mood: 'sad', title: 'Your TorBox key stopped working', text: 'It may have expired or been reset. Paste a fresh one in Settings.', key: true };
   if (netFail(e)) return { mood: 'sad', title: 'Can\'t reach TorBox', text: 'Looks like you\'re offline, or the relay is down. Try again in a moment.' };
+  if (code === 'content_mismatch') return { mood: 'binoculars', title: 'No matching copy found', text: e.message + ' Choose another source, or try again later.' };
   if (code === 'sources') return { mood: 'binoculars', title: 'The sources didn\'t answer', text: 'They are slow or down right now. Try again in a moment.' };
   if (code === 'notcached') return { mood: 'sleep', title: 'Not cached yet', text: e.message };
   if (code === 'webplan') return { mood: 'confused', title: 'This copy can\'t play in a browser', text: e.message };
@@ -66,6 +69,7 @@ function Session({ params, query }) {
   const controller = useRef(null);
   if (!controller.current) controller.current = typeof AbortController === 'function' ? new AbortController() : { abort() {}, signal: undefined };
   const known = useRef([]);
+  const automatic = useRef([]);
   const prefetching = useRef(false);
   const live = useRef(null);      // the player's position (s), kept current by <Player>: a source switch resumes there
   const s = settings.get();
@@ -78,9 +82,19 @@ function Session({ params, query }) {
       if (!m) throw new Error('Title not found');
       mark('play:meta');
       setMeta(m);
-      const v = query.v ? (m.videos || []).find(x => x.id === query.v) || { id: query.v, season: +query.v.split(':').slice(-2)[0] || 1, episode: +query.v.split(':').pop() } : null;
+      const v = query.v ? (m.videos || []).find(x => x.id === query.v) || { id: query.v, season: query.v.startsWith('kitsu:') ? undefined : +query.v.split(':').slice(-2)[0] || 1, episode: +query.v.split(':').pop() } : null;
       setVideo(v);
-      if (startAt == null) {
+      const target = expectedIdentity(m, v), previous = progress.get()[m.id];
+      const oldDuration = previous?.eps?.[v?.id || '_']?.dur;
+      // Manual 'mark watched' entries use a synthetic duration of 100 seconds.
+      const issue = oldDuration > 300 && previous?.source && sourceIssue(previous.source, target, oldDuration);
+      if (previous?.eps?.[v?.id || '_']?.sourceMismatch) {
+        setStartAt(0); setAsk(0);
+      } else if (issue && previous?.source && (previous.last || '') === (v?.id || '')) {
+        rejectSource(target, previous.source, issue);
+        invalidateRememberedSource(target, previous.source);
+        setStartAt(0); setAsk(0);
+      } else if (startAt == null) {
         const r = resumeAt(m.id, v && v.id);
         if (r > 0) setAsk(r); else setStartAt(0);
       }
@@ -100,7 +114,14 @@ function Session({ params, query }) {
       const have = new Set(known.current.filter(t => t.status === 'downloaded').map(t => t.hash.toLowerCase()));
       return list.map(x => have.has(x.infoHash.toLowerCase()) ? { ...x, inAccount: true, cached: true } : x);
     };
-    const partial = list => { latest = list; if (!gone && initial) setAll(rankStreams(markOwned(list), { ...prefs, cachedOnly: false })); };
+    const partial = list => {
+      latest = list;
+      if (!gone && initial) {
+        const owned = markOwned(list);
+        automatic.current = rankStreams(owned, prefs);
+        setAll(rankStreams(owned, { ...prefs, cachedOnly: false }));
+      }
+    };
     const cached = typeof peekStreams === 'function' && peekStreams(params.type, params.id, query.v);
     const sources = cached ? Promise.resolve(cached) : streams(params.type, id, { signal, onPartial: partial });
     if (cached && !cached.complete) streams(params.type, id, { signal, onPartial: partial }).then(partial).catch(() => {});
@@ -119,20 +140,26 @@ function Session({ params, query }) {
       };
       const all = mineFirst(rankStreams(list, { ...prefs, cachedOnly: false }));
       setAll(all);
-      if (latest) partial(latest);
       if (query.hash) {
         const h = query.hash.toLowerCase();
-        const pinned = all.find(x => x.infoHash.toLowerCase() === h) || { infoHash: h, fileIdx: query.file != null ? +query.file : undefined, filename: query.fn || null, release: query.fn || 'Chosen source', quality: '?', cached: true };
+        const exact = all.find(x => x.infoHash.toLowerCase() === h && (!query.fn || baseName(x.filename) === baseName(query.fn)));
+        const sameHash = all.find(x => x.infoHash.toLowerCase() === h);
+        const pinned = exact || (sameHash && { ...sameHash, durations: [], contentIds: [] }) || { infoHash: h, fileIdx: query.file != null ? +query.file : undefined, filename: query.fn || null, release: query.fn || 'Chosen source', quality: '?', cached: true };
         const chosen = { ...pinned, ...(query.file != null ? { fileIdx: +query.file } : {}), ...(query.fn != null ? { filename: query.fn } : {}) };
-        setCands([chosen, ...mineFirst(rankStreams(list, prefs)).filter(x => x.infoHash.toLowerCase() !== h)]);
+        const selected = [chosen, ...mineFirst(rankStreams(list, prefs)).filter(x => sourceFileKey(x) !== sourceFileKey(chosen))];
+        automatic.current = selected; setCands(selected);
       } else {
         const ranked = mineFirst(rankStreams(list, prefs));
-        setCands(ranked);
+        automatic.current = ranked; setCands(ranked);
         if (!ranked.length) setErr(Object.assign(new Error('No cached sources'), { code: !list.length && list.failed && list.failed.length ? 'sources' : 'nosources' }));
       }
+      if (latest) partial(latest);
     }, e => {
       if (gone || signal?.aborted) return;
-      if (query.hash) setCands([{ infoHash: query.hash, fileIdx: query.file != null ? +query.file : undefined, filename: query.fn || null, release: query.fn || 'Chosen source', quality: '?' }]);
+      if (query.hash) {
+        const pinned = [{ infoHash: query.hash, fileIdx: query.file != null ? +query.file : undefined, filename: query.fn || null, release: query.fn || 'Chosen source', quality: '?' }];
+        automatic.current = pinned; setCands(pinned);
+      }
       else setErr(Object.assign(new Error('Couldn\'t search for sources: ' + e.message), { code: navigator.onLine === false ? 'network' : 'sources' }));
     });
     return () => { gone = true; };
@@ -143,29 +170,41 @@ function Session({ params, query }) {
     const me = ++gen.current;
     setErr(null); setReady(null);
     let last = null;
+    const identity = expectedIdentity(meta, video);
     for (let n = 0; i < list.length && (manual || n < MAX_AUTO); i++) {
       const c = list[i];
-      if (!manual && tried.current.has(c.infoHash)) continue;
-      tried.current.add(c.infoHash);
+      const choice = sourceFileKey(c);
+      if (!manual && tried.current.has(choice)) continue;
+      tried.current.add(choice);
+      const mismatch = sourceIssue(c, identity) || rejectedSource(identity, c);
+      if (mismatch) {
+        last = contentError(mismatch);
+        invalidateRememberedSource(identity, c);
+        continue;
+      }
       setAttempt(++n);   // skipped (already tried) sources don't count toward MAX_AUTO
       try {
         const app = isNative();
         mark('play:resolve:start');
-        const stream = await resolveStream({ infoHash: c.infoHash, fileIdx: c.fileIdx, filename: c.filename, season: video && video.season, episode: video && video.episode, direct: app, known: known.current, signal: controller.current.signal },
+        const stream = await resolveStream({ infoHash: c.infoHash, fileIdx: c.fileIdx, filename: c.filename, season: video && video.season, episode: video && video.episode, anime: meta.anime, identity, direct: app, known: known.current, signal: controller.current.signal },
           t => me === gen.current && setStep(t));
         if (me !== gen.current) return;
         mark('play:link');
         if (typeof warmMp4Tail === 'function') warmMp4Tail(stream, { native: app, signal: controller.current.signal });
-        setReady({ stream, info: null, source: c });
+        setReady({ stream, info: null, source: { ...c, candidateFilename: c.filename || null, filename: stream.filename || c.filename } });
         return;
       } catch (e) {
         if (me !== gen.current) return;
         last = e;
+        if (e.code === 'content_mismatch') {
+          rejectSource(identity, c, e.message);
+          invalidateRememberedSource(identity, c);
+        }
         if (e.code === 'nokey' || e.code === 'badkey' || netFail(e) || manual) { setErr(e); return; }
         if (e.code !== 'webplan') setStep(`That one didn't work (${e.message.split('.')[0].toLowerCase()}). Trying another…`);
       }
     }
-    if (me === gen.current) setErr(last && last.code === 'webplan' ? last : Object.assign(new Error('None of the best sources would start.'), { code: 'nosources' }));
+    if (me === gen.current) setErr(last && ['webplan', 'content_mismatch'].includes(last.code) ? last : Object.assign(new Error('None of the best sources would start.'), { code: 'nosources' }));
   };
   useEffect(() => { if (meta && cands && cands.length) tryFrom(cands, 0); }, [cands, meta, video]);
 
@@ -173,14 +212,22 @@ function Session({ params, query }) {
   const pick = c => {
     setPicker(false);
     if (live.current != null) setStartAt(Math.floor(live.current));
-    tried.current.delete(c.infoHash); tryFrom([c], 0, true);
+    tried.current.delete(sourceFileKey(c)); tryFrom([c], 0, true);
   };
   const onFatal = (e, pos) => {
     // the resolved stream died while playing → move to the next untried source, resuming where it stopped
-    if (pos > 0) setStartAt(Math.floor(pos));
+    if (e.code === 'content_mismatch') {
+      const target = expectedIdentity(meta, video);
+      if (ready?.source) {
+        rejectSource(target, ready.source, e.message);
+        invalidateRememberedSource(target, ready.source);
+      }
+      live.current = null; setStartAt(0); setAsk(0);
+    } else if (pos > 0) setStartAt(Math.floor(pos));
     if (!cands) return setErr(e);
-    const i = cands.findIndex(c => !tried.current.has(c.infoHash));
-    if (i < 0) { setReady(null); setErr(e); } else { setStep('That stream hiccuped. Trying another source…'); tryFrom(cands, i); }
+    const fallback = automatic.current;
+    const i = fallback.findIndex(c => !tried.current.has(sourceFileKey(c)));
+    if (i < 0) { setReady(null); setErr(e); } else { setStep(e.code === 'content_mismatch' ? 'That copy did not match. Checking another source…' : 'That stream hiccuped. Trying another source…'); tryFrom(fallback, i); }
   };
 
   const prefetchNext = async () => {
@@ -192,13 +239,20 @@ function Session({ params, query }) {
       await prefetchStreams(meta.type, meta.id, next.id, { signal });
       const list = peekStreams(meta.type, meta.id, next.id) || [];
       if (signal?.aborted) return;
-      const args = c => ({ ...c, season: next.season, episode: next.episode, known: known.current, direct: isNative(), signal });
-      const available = rankStreams(list, { cachedOnly: false, ...webPrefs(webStreamingRefused()) }).filter(c => known.current.some(t => ownedFile(t, args(c))));
+      const args = c => ({ ...c, season: next.season, episode: next.episode, anime: meta.anime, identity: expectedIdentity(meta, next), known: known.current, direct: isNative(), signal });
+      const available = rankStreams(assessSources(list, expectedIdentity(meta, next)).filter(c => !c.mismatch), { cachedOnly: false, ...webPrefs(webStreamingRefused()) }).filter(c => known.current.some(t => ownedFile(t, args(c))));
       const owned = available.find(c => c.infoHash.toLowerCase() === ready?.source?.infoHash?.toLowerCase()) || available[0];
       if (owned) await prefetchOwned(args(owned));
     } catch { /* optional read-only warmup */ }
   };
 
+  const assessed = useMemo(() => allCands && meta ? assessSources(allCands, expectedIdentity(meta, video)) : allCands, [allCands, meta, video, ready, err]);
+  // Late evidence may rescue a rejected search, but never interrupts a healthy playing copy.
+  useEffect(() => {
+    if (!meta || ready || !['content_mismatch', 'nosources'].includes(err?.code)) return;
+    const next = automatic.current.filter(c => !tried.current.has(sourceFileKey(c)));
+    if (next.some(c => !sourceIssue(c, expectedIdentity(meta, video)) && !rejectedSource(expectedIdentity(meta, video), c))) tryFrom(next, 0);
+  }, [allCands]);
   const onBack = backTo(params.type, params.id);
   const bg = meta && backdropOf(meta);
   const showPlayer = ready && startAt != null;
@@ -209,7 +263,7 @@ function Session({ params, query }) {
           live=${live} onUpNext=${prefetchNext} onFatal=${onFatal} onPickSource=${() => setPicker(true)} onBack=${onBack} />`
       : html`<${Loading} bg=${bg} meta=${meta} video=${video} step=${step} attempt=${attempt} err=${err}
           onBack=${onBack} onPick=${allCands ? () => setPicker(true) : null}
-          onRetry=${() => { tried.current.clear(); cands && cands.length ? tryFrom(cands, 0) : location.reload(); }} />`}
+          onRetry=${() => { tried.current.clear(); automatic.current.length ? tryFrom(automatic.current, 0) : location.reload(); }} />`}
 
     ${ask > 0 && startAt == null && html`<div class="watch-resume">
       <div class="watch-resume-card panel">
@@ -224,7 +278,7 @@ function Session({ params, query }) {
       </div>
     </div>`}
 
-    <${SourcePicker} open=${picker} onClose=${() => setPicker(false)} list=${allCands} current=${ready && ready.source} onPick=${pick} />
+    <${SourcePicker} open=${picker} onClose=${() => setPicker(false)} list=${assessed} current=${ready && ready.source} onPick=${pick} />
   </div>`;
 }
 
@@ -268,11 +322,13 @@ function SourcePicker({ open, onClose, list, current, onPick }) {
     </div>
     ${!list ? html`<p class="muted">Still looking…</p>` : !shown.length ? html`<p class="muted">No sources match. ${cachedOnly && 'Try turning off "Cached only".'}</p>` : html`
     <ul class="watch-sources">
-      ${shown.slice(0, 80).map(x => html`<li><button type="button" class=${cx('watch-src', current && current.infoHash === x.infoHash && 'now')} onClick=${() => onPick(x)}>
+      ${shown.slice(0, 80).map(x => html`<li><button type="button" class=${cx('watch-src', current && current.infoHash === x.infoHash && 'now')} disabled=${!!x.mismatch} onClick=${() => onPick(x)}>
         <span class="watch-src-q display">${x.quality === '2160p' ? '4K' : x.quality === '?' ? '—' : x.quality.replace('p', '')}<small>${x.quality !== '?' && x.quality !== '2160p' ? 'p' : ''}</small></span>
         <span class="watch-src-body">
           <span class="watch-src-name">${x.release}</span>
           <span class="watch-src-tags">
+            ${x.mismatch && html`<span class="watch-tag warn">${x.mismatch}</span>`}
+            ${x.durations?.length === 1 && html`<span class="watch-tag">${Math.round(x.durations[0] / 60)} min</span>`}
             ${x.cached ? html`<span class="watch-tag rd">cached</span>` : html`<span class="watch-tag slow">not cached</span>`}
             ${x.hdr && html`<span class="watch-tag">${x.dv ? 'Dolby Vision' : 'HDR'}</span>`}
             ${x.remux && html`<span class="watch-tag">remux</span>`}

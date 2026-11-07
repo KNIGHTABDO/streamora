@@ -104,3 +104,22 @@ test('an already aborted resolve cannot call TorBox', async () => {
   await assert.rejects(f.api.resolveStream({ ...args, signal: ac.signal }), { name: 'AbortError' });
   assert.equal(f.calls.length, 0);
 });
+
+test('a missing episode cannot mint a link for a different episode or use an unrelated file ID', async () => {
+  const f = fixture();
+  await assert.rejects(f.api.resolveStream({ ...args, episode: 3, filename: undefined, fileIdx: 0 }), { code: 'content_mismatch' });
+  assert.equal(f.calls.length, 0);
+});
+
+test('resolved filename identity is checked for owned, remembered and prefetched choices without extra calls', async () => {
+  const f = fixture();
+  const wrong = { ...args, identity: { id: 'tt2', name: 'Show', series: true, season: 1, episode: 3 } };
+  await assert.rejects(f.api.resolveStream(wrong), { code: 'content_mismatch' });
+  assert.equal(f.calls.length, 0);
+  await f.api.resolveStream(args); f.calls.length = 0;
+  await assert.rejects(f.api.resolveStream({ ...wrong, known: [] }), { code: 'content_mismatch' });
+  assert.equal(f.calls.length, 0, 'remembered choices still validate without listing the account');
+  await f.api.prefetchOwned(args); f.calls.length = 0;
+  await assert.rejects(f.api.resolveStream(wrong), { code: 'content_mismatch' });
+  assert.equal(f.calls.length, 0, 'a prefetched link cannot bypass identity validation');
+});

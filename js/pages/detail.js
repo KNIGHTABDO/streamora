@@ -1,6 +1,8 @@
 // Title detail: riso hero, actions, seasons & episodes, sources, cast, more like this.
 import { html, useState, useMemo, useEffect } from '../../vendor/preact-htm.js';
 import { Page, Hero, Row, Btn, IconBtn, Chip, Tabs, Stars, Spinner, ErrorNote, Empty, Modal, Img, Icon, Underline, toast, useAsync, loadCSS, cx, fmtTime, plural } from '../ui/components.js';
+import { expectedIdentity } from '../lib/source-identity.js';
+import { assessSources } from '../lib/source-validation.js';
 import { hash, tiltOf } from '../ui/sketch.js';
 import { useStore, progress, watchlist, follows, diary, settings } from '../core/store.js';
 import { meta as getMeta, castPhotos, catalog, seasonsOf, isReleased } from '../core/meta.js';
@@ -26,7 +28,7 @@ function SourcesModal({ meta, video, onClose }) {
   const res = useAsync(() => streams(type, id), [type, id]);
   const list = useMemo(() => {
     if (!res.data) return [];
-    return rankStreams(res.data, { cachedOnly, preferSmall: isPhone(), ...webPrefs(webStreamingRefused()), audioLang: s.audioLang }).filter(x => q === 'all' || x.quality === q);
+    return assessSources(rankStreams(res.data, { cachedOnly, preferSmall: isPhone(), ...webPrefs(webStreamingRefused()), audioLang: s.audioLang }), expectedIdentity(meta, video)).filter(x => q === 'all' || x.quality === q);
   }, [res.data, cachedOnly, q]);
   const qualities = useMemo(() => ['all', ...new Set((res.data || []).map(x => x.quality).filter(x => x !== '?'))].slice(0, 6), [res.data]);
   const pick = src => navigate(watchHref(meta, video, resumeAt(meta.id, video && video.id), src));
@@ -41,11 +43,13 @@ function SourcesModal({ meta, video, onClose }) {
           action=${cachedOnly && html`<${Btn} icon="eye" onClick=${() => setCachedOnly(false)}>Show uncached<//>`} />`
       : html`<ul class="det-src-list">
         ${list.slice(0, 60).map((x, i) => html`<li key=${x.infoHash + i}>
-          <button type="button" class="det-src" onClick=${() => pick(x)}>
+          <button type="button" class="det-src" disabled=${!!x.mismatch} onClick=${() => pick(x)}>
             <span class=${cx('det-q display', x.rank >= 4 && 'uhd')}>${x.quality === '2160p' ? '4K' : x.quality === '?' ? 'SD' : x.quality.replace('p', '')}</span>
             <span class="det-src-main">
               <span class="det-src-name">${x.release}</span>
               <span class="det-src-tags type">
+                ${x.mismatch && html`<b class="det-tag bad">${x.mismatch}</b>`}
+                ${x.durations?.length === 1 && html`<span>${Math.round(x.durations[0] / 60)} min</span>`}
                 ${x.cached ? html`<b class="det-tag ok">cached</b>` : html`<b class="det-tag">not cached</b>`}
                 ${x.hdr && html`<b class="det-tag">${x.dv ? 'DV' : 'HDR'}</b>`}${x.hevc && html`<b class="det-tag">HEVC</b>`}${x.remux && html`<b class="det-tag">REMUX</b>`}${x.dual && html`<b class="det-tag">multi-audio</b>`}${x.cam && html`<b class="det-tag bad">CAM</b>`}
                 <span>${fmtSize(x.size)}</span>${x.seeders ? html`<span>👤 ${x.seeders}</span>` : ''}${x.site && html`<span>${x.site}</span>`}${x.langs.join(' ')}

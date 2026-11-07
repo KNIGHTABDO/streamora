@@ -2,6 +2,7 @@
 // Direct fetch first (most addons send CORS headers), then the /api/addon relay.
 import { store, ls } from './store.js';
 import { fetchT } from './net.js';
+import { identityEvidence, sourceFileKey, mergeSourceEvidence } from '../lib/source-identity.js';
 
 export const addons = store('addons', []); // [{ url, id, name, types, idPrefixes }]
 
@@ -86,6 +87,7 @@ export function normalizeStream(s, addonName) {
   // English alone isn't flagged (Torrentio's convention); next to other languages it marks the release as having it
   const flags = [...new Set([...(text.match(/[\u{1F1E6}-\u{1F1FF}]{2}/gu) || []), ...(words.length > 1 || words[0] !== 'english' ? words.map(w => LANG_FLAGS[w]) : [])])];
   return {
+    ...identityEvidence(s, addonName),
     name: `[${addonName}] ${str(s.name)}`.trim(),
     title: [release, [seeds && `👤 ${seeds}`, size && `💾 ${size}`, `⚙️ ${site}`].filter(Boolean).join(' '), flags.join(' / ')].filter(Boolean).join('\n'),
     infoHash: hash,
@@ -170,7 +172,10 @@ export async function addonStreams(type, id, tbKey, { signal, onPartial } = {}) 
   const seen = new Map();
   const receive = rows => {
     if (signal?.aborted) return;
-    for (const s of rows) if (s) { const had = seen.get(s.infoHash); if (!had) seen.set(s.infoHash, s); else if (/TB\+|⚡/.test(s.name)) had.name = s.name; }
+    for (const s of rows) if (s) {
+      const k = sourceFileKey(s), had = seen.get(k);
+      seen.set(k, had ? { ...mergeSourceEvidence(had, s), name: /TB\+|⚡/.test(s.name) ? s.name : had.name } : s);
+    }
     onPartial?.([...seen.values()]);
   };
   await Promise.allSettled([

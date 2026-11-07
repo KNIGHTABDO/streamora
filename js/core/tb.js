@@ -1,5 +1,6 @@
 // TorBox client. All calls go through our same-origin relay (/api/tb/*).
 import { mark } from '../lib/perf-mark.js';
+import { selectVideoFile, sourceIssue, contentError } from '../lib/source-identity.js';
 import { getTbKey, ls } from './store.js';
 import { fetchT } from './net.js';
 import { canRemuxMkv } from '../player/mkv-plan.js';
@@ -147,23 +148,8 @@ const SAMPLE_RE = /(^|[\W_])(sample|trailer|featurette|extras?)([\W_]|$)/i;
 export const VIDEO_RE = /\.(mkv|mp4|m4v|avi|mov|webm|ts|m2ts|wmv|flv|mpg|mpeg)$/i;
 export const videoFiles = t => t.files.filter(f => VIDEO_RE.test(f.path) && !SAMPLE_RE.test(f.path));
 
-export function pickFile(files, { fileIdx, filename, season, episode }) {
-  const vids = files.filter(f => VIDEO_RE.test(f.path) && !SAMPLE_RE.test(f.path));
-  const pool = vids.length ? vids : files;
-  const base = p => p.split('/').pop().toLowerCase();
-  if (filename) { const m = pool.find(f => base(f.path) === filename.toLowerCase()); if (m) return m; }
-  if (season != null && episode != null) {
-    const re = new RegExp(`s0*${season}[ ._-]?e0*${episode}(?!\\d)|\\b${season}x0*${episode}(?!\\d)`, 'i');
-    const m = pool.find(f => re.test(base(f.path)));
-    if (m) return m;
-  } else if (episode != null) {
-    // anime absolute numbering: "- 05", "E05", " 05 "
-    const re = new RegExp(`(?:e|ep|episode|[ _-])0*${episode}(?:v\\d)?(?=[ ._\\-\\[\\(]|$)`, 'i');
-    const m = pool.find(f => re.test(base(f.path).replace(VIDEO_RE, '')));
-    if (m) return m;
-  }
-  if (fileIdx != null) { const m = pool.find(f => f.id === fileIdx); if (m) return m; }
-  return pool.slice().sort((a, b) => b.bytes - a.bytes)[0];
+export function pickFile(files, args) {
+  return selectVideoFile(files, args);
 }
 
 // ---- web playback: direct browser files, TorBox HLS, or client-side MKV remuxing
@@ -230,21 +216,27 @@ async function findInAccount(h, signal) {
  * at once when cached). onStep(text) reports progress. direct=true (the app's VLC player) plays any file as it is.
  * Returns { downloadId, filename, filesize, direct, hls, remux, torrentId, mime }.
  */
-export async function resolveStream({ infoHash, fileIdx, filename, season, episode, direct = false, known = [], signal, retryMissing = true }, onStep = () => {}) {
+export async function resolveStream({ infoHash, fileIdx, filename, season, episode, anime = false, identity, direct = false, known = [], signal, retryMissing = true }, onStep = () => {}) {
   const scope = await accountScope();
   abort(signal);
   infoHash = infoHash.toLowerCase();
   // Do not add a known unsupported format when this plan has already refused streaming.
   if (!direct && webStreamingRefused() && filename && !browserFile(filename) && !(mkvFile(filename) && canRemuxMkv())) throw webPlanError();
   const cacheKey = choiceKey({ infoHash, fileIdx, filename, season, episode });
+  const validate = file => {
+    const issue = sourceIssue({ filename: file.path }, identity);
+    if (issue) throw contentError(issue);
+  };
   const prefetched = takePrefetched(scope, cacheKey, direct);
   if (prefetched) {
+    validate(prefetched.file);
     const out = await finish(prefetched.t, prefetched.file, direct, signal, prefetched.stream.direct);
     remember(scope, cacheKey, { torrentId: out.torrentId, fileId: prefetched.file.id, filename: out.filename, filesize: out.filesize, mime: out.mime });
     return out;
   }
   const hit = resolveCache(scope)[cacheKey];
   if (hit) {
+    validate({ path: hit.filename });
     // links are minted fresh each time; only the file choice is remembered
     try { return await finish({ id: hit.torrentId, kind: 'torrent' }, { id: hit.fileId, path: hit.filename, bytes: hit.filesize, mime: hit.mime }, direct, signal); }
     catch (e) {
@@ -271,22 +263,23 @@ export async function resolveStream({ infoHash, fileIdx, filename, season, episo
   }
   if (t.status !== 'downloaded') throw new TBError('This source is not cached yet. TorBox keeps downloading it in the background, so try another source or come back later.', 'notcached', 0);
 
-  const file = pickFile(t.files, { fileIdx, filename, season, episode });
-  if (!file) throw new TBError('TorBox has no file for this episode in that source. Pick another one.', 'nolink', 0);
+  const file = pickFile(t.files, { fileIdx, filename, season, episode, anime, identity });
+  if (!file) throw contentError('This source has no matching video for the selected title or episode.');
+  validate(file);
   onStep('Unlocking the stream…');
   let out;
   try { out = await finish(t, file, direct, signal); }
   catch (e) {
     abort(signal);
     if (!retryMissing || !missing(e)) throw e;
-    return resolveStream({ infoHash, fileIdx, filename, season, episode, direct, signal, known: [], retryMissing: false }, onStep);
+    return resolveStream({ infoHash, fileIdx, filename, season, episode, anime, identity, direct, signal, known: [], retryMissing: false }, onStep);
   }
   remember(scope, cacheKey, { torrentId: t.id, fileId: file.id, filename: out.filename, filesize: out.filesize, mime: out.mime });
   return out;
 }
 
 const missing = e => e.status === 404 || e.code === 'nolink' || /not[ _-]?found|does not exist|invalid.*(torrent|file|id)/i.test(`${e.code} ${e.message}`);
-const choiceKey = ({ infoHash, fileIdx, filename, season, episode }) => ['tb1', infoHash.toLowerCase(), fileIdx ?? '', filename || '', season ?? '', episode ?? ''].join('|');
+const choiceKey = ({ infoHash, fileIdx, filename, season, episode }) => ['tb2', infoHash.toLowerCase(), fileIdx ?? '', filename || '', season ?? '', episode ?? ''].join('|');
 const prefetchedLinks = new Map();
 const takePrefetched = (scope, key, direct) => {
   const k = `${scope}|${direct}|${key}`, hit = prefetchedLinks.get(k);
@@ -297,8 +290,8 @@ const takePrefetched = (scope, key, direct) => {
 export function ownedFile(t, args) {
   if (!t || t.status !== 'downloaded' || t.hash?.toLowerCase() !== args.infoHash?.toLowerCase()) return null;
   const file = pickFile(t.files || [], args);
-  if (!file) return null;
-  if (args.filename && file.path.split('/').pop().toLowerCase() === args.filename.toLowerCase()) return file;
+  if (!file || sourceIssue({ filename: file.path }, args.identity)) return null;
+  if (args.filename && file.path.split('/').pop().toLowerCase() === args.filename.split('/').pop().toLowerCase()) return file;
   if (args.episode != null) {
     const re = args.season != null
       ? new RegExp(`s0*${args.season}[ ._-]?e0*${args.episode}(?!\\d)|\\b${args.season}x0*${args.episode}(?!\\d)`, 'i')

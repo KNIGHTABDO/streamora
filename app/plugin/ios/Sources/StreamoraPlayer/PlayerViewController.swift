@@ -53,6 +53,7 @@ final class PlayerViewController: UIViewController, UIGestureRecognizerDelegate 
     private var sameTicks = 0
     private var lastReport = Date.distantPast
     private var knownDuration: Double = 0
+    private var reportedDuration: Double = 0
     private var onlineSubs: [OnlineSub] = []
     private var addedSubs: [URL: Bool] = [:]
     private var autoSubDone = false
@@ -158,6 +159,11 @@ final class PlayerViewController: UIViewController, UIGestureRecognizerDelegate 
         if stuck || !everPlayed { spinner.startAnimating() } else { spinner.stopAnimating() }
 
         let d = duration
+        // The web app checks identity before recording progress. Older builds still fall back to progress events.
+        if d > 0 && d != reportedDuration {
+            reportedDuration = d
+            send("metadata", ["duration": d])
+        }
         if !scrubbing && d > 0 { slider.value = Float(position / d) }
         if !scrubbing { curLabel.text = fmt(position) }
         durLabel.text = d > 0 ? fmt(d) : "--:--"

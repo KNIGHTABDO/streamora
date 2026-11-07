@@ -1,6 +1,7 @@
 // Finding sources for a title via Torrentio and the built-in debrid addons. TorBox's own cache check decides what's
 // cached; the addons' flags ([TB+], ⚡) only count when that check can't answer.
 import { mark } from '../lib/perf-mark.js';
+import { identityEvidence, sourceFileKey, mergeSourceEvidence } from '../lib/source-identity.js';
 import { getTbKey, keyStore } from './store.js';
 import { fetchT } from './net.js';
 import { addonStreams } from './addons.js';
@@ -26,6 +27,7 @@ export function parseStream(s) {
   const quality = !q ? '?' : /4k/i.test(q) ? '2160p' : q.toLowerCase();
   const fileLine = rest.find(l => /\.(mkv|mp4|avi|mov|m4v|webm|ts)$/i.test(l.trim()));
   return {
+    ...identityEvidence(s, (s.name || '').split('\n')[0]),
     raw: s,
     cached: /\[TB\+\]|\bTB ?⚡|\bTRB ?⚡/.test(name),
     quality,
@@ -94,8 +96,8 @@ export async function streams(type, id, { signal, onPartial } = {}) {
     const hashes = [];
     for (const s of rows.map(parseStream)) {
       if (!s.infoHash) continue;
-      const h = s.infoHash.toLowerCase(), had = byHash.get(h);
-      if (!had) byHash.set(h, s); else if (s.cached) had.cached = true;
+      const h = s.infoHash.toLowerCase(), k = sourceFileKey(s), had = byHash.get(k);
+      byHash.set(k, had ? mergeSourceEvidence(had, s) : s);
       if (!key) readyHashes.add(h);
       if (key && !checking.has(h)) { checking.add(h); hashes.push(h); }
     }

@@ -35,6 +35,7 @@
 .watch-sources { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .watch-src { width: 100%; display: flex; align-items: center; gap: 14px; text-align: left; padding: 10px 14px; background: var(--paper-3); border-radius: 8px 12px 9px 11px; box-shadow: var(--shadow); transition: transform .18s var(--ease-pop); }
 .watch-src:hover, .watch-src:focus-visible { transform: rotate(-.5deg) translateY(-2px); box-shadow: var(--shadow-lift); }
+.watch-src:disabled { cursor: default; opacity: .7; transform: none; box-shadow: var(--shadow); }
 .watch-src.now { outline: 3px solid var(--a3); }
 .watch-src-q { flex: none; width: 58px; height: 58px; display: flex; align-items: baseline; justify-content: center; padding-top: 16px; font-size: 26px; line-height: 1; background: var(--a3); color: var(--on-accent); border-radius: 50% 46% 52% 44%; transform: rotate(-6deg); }
 .watch-src-q small { font-size: 14px; }

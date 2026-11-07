@@ -13,6 +13,8 @@ import { navigate } from '../router.js';
 import { openSubs } from './subs.js';
 import { skipTimes } from './skip.js';
 import { Player } from './player.js';
+import { expectedIdentity, sourceIssue, contentError } from '../lib/source-identity.js';
+import { rejectSource } from '../lib/source-validation.js';
 import { vlcEngineAvailable } from './vlc.js';
 
 const plugin = () => (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.StreamoraPlayer) || null;
@@ -37,7 +39,7 @@ export function AppPlayer(props) {
   }, [props.stream && props.stream.direct]);
   if (!mode) return html`<div class="watch-native" style="position:fixed;inset:0;display:grid;place-items:center;background:#000"><${Reel} size=${80} /></div>`;
   if (mode === 'classic') return html`<${NativePlayer} ...${props} />`;
-  const onFatal = mode === 'web' ? (e, pos) => { setFrom(pos || props.start || 0); setMode('vlc'); } : props.onFatal;
+  const onFatal = mode === 'web' ? (e, pos) => { if (e.code === 'content_mismatch') return props.onFatal?.(e, 0); setFrom(pos || props.start || 0); setMode('vlc'); } : props.onFatal;
   return html`<${Player} key=${mode} ...${props} start=${from != null ? from : props.start} engine=${mode} onFatal=${onFatal} />`;
 }
 
@@ -51,42 +53,64 @@ export function NativePlayer({ meta, video, stream, start = 0, source, noProgres
     let done = false, prefetched = false;
     const ac = new AbortController();
     const handles = [];
+    const identity = noProgress ? null : expectedIdentity(meta, video);
+    let checkedDuration = 0, invalid = false;
+    const valid = d => {
+      if (invalid) return false;
+      if (d.duration > 0 && d.duration !== checkedDuration) {
+        checkedDuration = d.duration;
+        const issue = sourceIssue(source || { filename: stream.filename }, identity, d.duration);
+        if (issue) {
+          invalid = true; done = true;
+          rejectSource(identity, source, issue);
+          p.close().catch(() => {});
+          onFatal?.(contentError(issue), 0);
+          return false;
+        }
+      }
+      return !identity?.duration || checkedDuration > 0;
+    };
     const pct = () => (last.current.duration ? (last.current.position / last.current.duration) * 100 : 0);
     const emit = state => {
-      if (!meta || noProgress) return;
+      if (!meta || noProgress || invalid || (identity?.duration && !checkedDuration)) return;
       try { window.dispatchEvent(new CustomEvent('streamora:playback', { detail: { state, meta, video, progress: +pct().toFixed(2) } })); } catch {}
     };
     const save = final => {
       const { position, duration } = last.current;
-      if (noProgress || !meta || !duration) return;
+      if (noProgress || !meta || !duration || !valid(last.current)) return;
       saveProgress(meta, video, final ? duration : position, duration,
         source && { infoHash: source.infoHash, fileIdx: source.fileIdx, binge: source.binge, filename: source.filename || null });
     };
     const goNext = () => navigate(watchHref(meta, next, 0, source && source.infoHash ? { infoHash: source.infoHash } : null), { replace: true });
     const on = (name, f) => Promise.resolve(p.addListener(name, f)).then(h => (done ? h.remove() : handles.push(h)));
 
-    on('progress', d => {
+    const metadata = on('metadata', d => { if (!done) valid(d); });
+    const reporting = on('progress', d => {
+      if (done || !valid(d)) return;
       const was = last.current.paused;
       last.current = d;
       if (!prefetched && next && d.duration > 0 && d.duration - d.position < 22) { prefetched = true; onUpNext?.(); }
       save();
       if (was !== d.paused) emit(d.paused ? 'pause' : 'start');
     });
-    on('next', () => { save(); emit('stop'); done = true; next ? goNext() : onBack(); });
-    on('closed', d => {
+    const advancing = on('next', () => { if (done || !valid(last.current)) return; save(); emit('stop'); done = true; next ? goNext() : onBack(); });
+    const closing = on('closed', d => {
       if (done) return;
+      valid({ ...last.current, ...d });
+      if (invalid) return;
       done = true;
       last.current = { ...last.current, ...d };
       save(d.ended);
       emit('stop');
-      if (d.error) return onFatal && onFatal(new Error(d.error), d.position || 0);
+      if (d.error) return onFatal && onFatal(Object.assign(new Error(d.error), { code: d.code }), d.position || 0);
       if (d.ended && next && s.autoNext !== false) goNext(); else onBack();
     });
 
     const sub = video ? `S${video.season} · E${video.episode}${video.name || video.title ? ' · ' + (video.name || video.title) : ''}` : '';
-    p.play({ url: stream.direct, title: meta ? meta.name : stream.filename || '', subtitle: sub, start: Math.max(0, Math.floor(start || 0)), hasNext: !!next,
-      audioLang: s.audioLang || '', subsLang: s.subsLang || '' })
+    Promise.all([metadata, reporting, advancing, closing]).then(() => { if (done) return; return p.play({ url: stream.direct, title: meta ? meta.name : stream.filename || '', subtitle: sub, start: Math.max(0, Math.floor(start || 0)), hasNext: !!next,
+      audioLang: s.audioLang || '', subsLang: s.subsLang || '' }); })
       .then(() => {
+        if (done) return;
         emit('start');
         if (!meta || noProgress || !p.extras) return;
         Promise.all([openSubs(meta.type, video ? video.id : meta.id, (source && source.filename) || stream.filename || '', [], { signal: ac.signal }), skipTimes(meta, video, { signal: ac.signal })]).then(([subs, skip]) => {

@@ -106,6 +106,35 @@ test('detail speculation is read-only, keyed by episode, expires at ten minutes,
   const saved = sourcesFixture(c, { navigator: { connection: { saveData: true } } });
   assert.equal(saved.speculateWhenIdle({ type: 'movie', id: 'tt2' }), undefined);
 });
+
+test('late duplicate providers enrich evidence without delaying the first result or mutating its snapshot', async () => {
+  const c = clock(), partials = [];
+  const api = sourcesFixture(c, {
+    addonStreams: (_, __, ___, { onPartial }) => new Promise(resolve => c.scope.setTimeout(() => {
+      const row = { ...raw('a'), durations: [5163], providers: ['Meteor'] };
+      onPartial([row]); resolve([row]);
+    }, 6000)),
+  });
+  const first = api.streams('movie', 'tt1', { onPartial: list => partials.push(list) });
+  await flush(); await c.tick(1500);
+  const initial = await first;
+  assert.deepEqual(Array.from(initial[0].durations), []);
+  await c.tick(4500);
+  assert.deepEqual(Array.from(partials.at(-1)[0].durations), [5163]);
+  assert.deepEqual(Array.from(initial[0].durations), [], 'a published snapshot stays immutable');
+});
+
+test('different files in the same torrent keep their own durations during deduplication', async () => {
+  const c = clock();
+  const api = sourcesFixture(c, {
+    addonStreams: async () => [{ ...raw('a'), behaviorHints: { filename: 'other.mp4' }, durations: [10356] }],
+  });
+  const first = api.streams('movie', 'tt1'); await flush(); await c.tick(1500);
+  const rows = await first;
+  assert.equal(rows.length, 2);
+  assert.deepEqual(Array.from(rows.find(x => x.filename === 'other.mp4').durations), [10356]);
+  assert.deepEqual(Array.from(rows.find(x => x.filename === 'a.mp4').durations), []);
+});
 test('MediaFusion reuses the encrypted config across module reloads, indexed by key digest', async () => {
   const cache = new Map(); let posts = 0;
   const load = () => evaluate(source('js/core/addons.js'), {

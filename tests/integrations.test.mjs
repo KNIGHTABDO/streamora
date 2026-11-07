@@ -103,7 +103,7 @@ assert.deepEqual(scrobbleBody({ id: 'tt5', type: 'series' }, { season: 2, episod
 // ---- addons
 const hash = 'a'.repeat(40);
 assert.deepEqual(normalizeStream({ name: '4k', title: 'x\n💾 1 GB', infoHash: hash.toUpperCase(), fileIdx: 2, behaviorHints: { bingeGroup: 'g', evil: 1 } }, 'Ad'),
-  { name: '[Ad] 4k', title: 'x\n💾 1 GB ⚙️ Ad', infoHash: hash, fileIdx: 2, url: undefined, behaviorHints: { filename: undefined, bingeGroup: 'g' } });
+  { durations: [], contentIds: [], providers: ['Ad'], name: '[Ad] 4k', title: 'x\n💾 1 GB ⚙️ Ad', infoHash: hash, fileIdx: 2, url: undefined, behaviorHints: { filename: undefined, bingeGroup: 'g' } });
 assert.equal(normalizeStream({ url: 'https://x/y.mp4' }, 'Ad'), null);
 // Comet: hash in bingeGroup, playback url kept, cached ⚡, size from videoSize when the text has none
 const comet = parseStream(normalizeStream({ name: '[TB⚡] Comet 1080p', description: '📄 A.2020.1080p.mkv\n💾 None 🔎 DMM\n🇹🇷', url: 'https://c.io/playback/x',
@@ -139,7 +139,7 @@ console.log('integrations: all passed');
   const fs = [{ id: 1, path: 'R/sample.mkv', bytes: 5 }, { id: 2, path: 'R/S01E02.mkv', bytes: 2 }, { id: 3, path: 'R/S01E03.mkv', bytes: 3 }];
   assert.equal(pickFile(fs, { season: 1, episode: 2 }).id, 2, 'episode wins');
   assert.equal(pickFile(fs, { filename: 's01e03.MKV' }).id, 3, 'filename wins');
-  assert.equal(pickFile(fs, {}).id, 3, 'largest non-sample');
+  assert.equal(pickFile(fs, {}), null, 'ambiguous pack is not silently resolved to its largest file');
   assert.equal(parseStream({ name: '[TB download] Torrentio', title: 'x', infoHash: hash }).cached, false);
   assert.equal(parseStream({ name: '[TB+] Torrentio', title: 'x', infoHash: hash }).cached, true);
   const { imdbItems } = await import('../js/core/meta.js');

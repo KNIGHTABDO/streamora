@@ -25,7 +25,7 @@ export function nextUp(meta) {
   if (p && p.last) {
     const cur = p.eps[p.last];
     const i = vids.findIndex(v => v.id === p.last);
-    if (cur && !cur.done && i >= 0) return vids[i];
+    if (cur && (!cur.done || cur.sourceMismatch) && i >= 0) return vids[i];
     if (i >= 0 && vids[i + 1] && isReleased(vids[i + 1])) return vids[i + 1];
     if (i >= 0) return vids[i];
   }

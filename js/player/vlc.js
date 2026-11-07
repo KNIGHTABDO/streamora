@@ -119,6 +119,7 @@ export class VlcVideo extends EventTarget {
       this._dur = d.duration;
       if (first) { this.readyState = 1; this.fire('loadedmetadata'); }
       this.fire('durationchange');
+      if (this.closed) return; // identity validation can reject and close during loadedmetadata
     }
     if (d.width && d.width !== this.videoWidth) { this.videoWidth = d.width; this.videoHeight = d.height; }
     if (d.error) { this.fire('error'); onFatal(new Error(d.error), this.currentTime); return; }
